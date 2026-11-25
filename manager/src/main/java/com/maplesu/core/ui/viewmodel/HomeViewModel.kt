@@ -574,7 +574,10 @@ class HomeViewModel(
         val ultraSafeMode = UltraEnvironmentProbe.isSafeMode(ksuApp)
         val ultraKernelVerified = UltraEnvironmentProbe.isKernelRootVerified(ksuApp)
         val environmentMode = if (ultraEnvironmentRunning || ultraSafeMode || ultraKernelVerified) WorkMode.LITE
-            else ModeRuntime.active ?: projection.cachedMode
+            // 本 boot 已被判定"未安装"时，历史选中的工作模式（ModeRuntime）不能继续驱动首页
+            // 品牌与工作模式行，否则会先渲染出 Ultra 皮肤、等下一次判定回来才消失（#22）。
+            // 未被本次探测确认为 Ultra 时，历史选择/缓存里的 LITE 不得驱动首页品牌（#22）。
+            else (ModeRuntime.active ?: projection.cachedMode)?.takeIf { it != WorkMode.LITE }
         val confirmedNotInstalled = projection.confirmedNotInstalled && !ultraEnvironmentRunning && !ultraSafeMode && !ultraKernelVerified
         // ⚠️ 2026-09-19 修:下面每一个 runCatching 都是"防闪退" ——
         //    Natives 是 JNI(可能 UnsatisfiedLinkError),读设置走磁盘,Os.uname 也可能抛。
@@ -705,6 +708,7 @@ class HomeViewModel(
             ),
             liteInstalled = liteStatus.liteInstalled,
             environmentMode = environmentMode,
+            ultraVerified = ultraEnvironmentRunning || ultraSafeMode || ultraKernelVerified,
             liteRootFailure = liteStatus.liteRootFailure,
             // P0：判定中且无任何证据 → 界面画 loading 占位（绝不先渲染「未安装」）。
             litePending = if (!probeRoot && !liteStatus.liteInstalled) true else liteStatus.litePending,

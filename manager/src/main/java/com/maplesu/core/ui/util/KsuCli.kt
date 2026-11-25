@@ -1144,15 +1144,34 @@ private fun installStockTarget(
     var preparedRestoreOriginal = restoreOriginal
     var nativePrepareSubmitted: Boolean? = null
     var preparedBridgeArtifact: dev.maplesu.image.UltraInitBootProducer.Artifact? = null
+    /**
+     * 本版本没有随包发布任何 init_boot 组件时，"缺少 $kmi 组件"这句错误会把用户引向
+     * 换 KMI 重试；实际任何 KMI 都不会命中（assets/ultra-init-bridge 不存在）。
+     * 这里区分两种缺失，给出可执行的下一步。
+     */
+    fun initBootComponentMissingMessage(ksuApp: Any, kmi: String): String {
+        val context = (ksuApp as? android.content.Context)
+            ?: (ksuApp as? android.content.ContextWrapper)?.baseContext
+        val available = context?.let {
+            runCatching { dev.maplesu.manager.ultrakernel.UltraKernelFlow.availableInitBootKmis(it) }
+                .getOrDefault(emptyList())
+        }.orEmpty()
+        return if (available.isEmpty()) {
+            "ULTRA_INIT_COMPONENT_UNAVAILABLE: 本版本未随包发布 init_boot 组件，" +
+                "任何 KMI 都无法直接安装；请改用『选择文件并修补』并同时提供当前固件的 boot 与 init_boot"
+        } else {
+            "ULTRA_INIT_KMI_COMPONENT_MISSING:$kmi"
+        }
+    }
+
     val componentArtifact by lazy {
         if (target == InstallTargetMode.ULTRA && partition == "init_boot" && pairedBootUri == null &&
             initBootArtifact?.isKmiComponent != false) {
             val kmi = initBootKmi ?: initBootArtifact?.componentKmi?.takeIf(String::isNotBlank)
                 ?: dev.maplesu.manager.installer.KmiRule.parse(deviceKernelRelease().orEmpty())
                 ?: error("ULTRA_INIT_TARGET_KMI_REQUIRED")
-            (initBootArtifact ?: requireNotNull(dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(ksuApp, kmi)) {
-                "ULTRA_INIT_KMI_COMPONENT_MISSING:$kmi"
-            }).also {
+            (initBootArtifact ?: dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(ksuApp, kmi)
+                ?: error(initBootComponentMissingMessage(ksuApp, kmi))).also {
                 check(it.isKmiComponent && it.componentKmi == kmi) { "ULTRA_INIT_TARGET_COMPONENT_KMI:$kmi:${it.componentKmi}" }
             }
         } else null

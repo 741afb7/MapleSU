@@ -93,7 +93,8 @@ fun HomePager(
     val brandFacts = homeUltraBrandFacts(workModeSwitch, liteHiddenMasking, hiddenConfirming,
         displayState.environmentMode)
     val aboutShowsModes = !suppressEntries && !hidesModeInfo(brandFacts)
-    val ultraVisible = shouldShowUltraBrand(brandFacts)
+    // 未确认的 Ultra 不允许点亮品牌（#22）：否则冷启动先用历史工作模式画一次皮肤，检查完成后再消失。
+    val ultraVisible = displayState.ultraVerified && shouldShowUltraBrand(brandFacts)
     // 主卡与顶部字样复用同一个结果；不修改原检测，也不把安装事实当成 root 能力。
     val statusState = remember(displayState, ultraVisible) {
         displayState.copy(ultraBrandVisible = ultraVisible)

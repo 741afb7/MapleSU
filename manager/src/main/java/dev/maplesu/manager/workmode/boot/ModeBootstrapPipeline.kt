@@ -149,7 +149,10 @@ class ModeBootstrapPipeline(
             DetectionRules.Rule.R7_A_JAILBREAK -> "hook:ready"
             else -> null
         }
-        if (ultraFingerprint != null) {
+        // 本 boot 已被判定"未安装"时，只有带内核证据的指纹才能翻案；"ultra:fault" 这种纯用户态信号不得把 LITE 写回去（#22）。
+        val thisBoot = environmentStore?.snapshot()?.takeIf { it.bootId == result.bootId }
+        val mayPublish = ultraFingerprint != null && !(ultraFingerprint == "ultra:fault" && thisBoot?.mode == null)
+        if (mayPublish) {
             val suAvailable = when (result.rule) {
                 DetectionRules.Rule.R5_A_HANDSHAKE, DetectionRules.Rule.R7_A_JAILBREAK -> true
                 DetectionRules.Rule.R6_A_ULTRA -> environmentStore?.snapshot()

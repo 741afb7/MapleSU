@@ -79,6 +79,8 @@ data class HomeUiState(
     val environmentFailure: HomeEnvironmentFailure? = null,
     /** 仅供首页渲染：复用顶部 Ultra 字样的当前裁决，不代表 root 命令可用。 */
     val ultraBrandVisible: Boolean = false,
+    /** 只有本次探测确认过的 Ultra（Running / SafeMode / 内核 root）才允许点亮 Ultra 品牌。 */
+    val ultraVerified: Boolean = false,
     /** 上次或本次确定的模式，仅用于展示；不激活后端、不授予 root。未安装不继承。 */
     val environmentMode: WorkMode? = null,
 ) {
