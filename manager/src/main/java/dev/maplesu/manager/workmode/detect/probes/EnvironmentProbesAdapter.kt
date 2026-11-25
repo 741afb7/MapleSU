@@ -151,7 +151,11 @@ class EnvironmentProbesAdapter(private val context: Context) : EnvironmentProbes
     }
 
     private fun ultraJudges(): List<Pair<String, () -> Boolean>> = listOf(
-        "ultra:running" to { UltraEnvironmentProbe.currentSnapshot(context).state == UltraEnvironmentProbe.State.Running },
+        "ultra:running" to {
+            val observation = UltraEnvironmentProbe.currentSnapshot(context)
+            observation.state == UltraEnvironmentProbe.State.Running &&
+                UltraEnvironmentProbe.kernelChannelObserved(observation)
+        },
         "ultra:fault" to { UltraEnvironmentProbe.isSafeMode(context) },
         "ultra:kernel" to { UltraEnvironmentProbe.isKernelRootVerified(context) },
         "hook:ready" to { HookRootExecutor.production(context.applicationContext).available() },
