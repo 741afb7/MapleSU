@@ -274,3 +274,35 @@ boot→init_boot 迁移内部恢复本产品旧 boot 修改，准备 init_boot �
 无 BTF 全范围仍有私有动态字段来源缺口；本设备走已经核对的 BTF 路径。三组 source stage、同 KMI 名称和主机测试分别证明对应入口，仍不代表 5.10–6.18 所有配置、所有 init_boot 或与 KSU 等同稳定性已验收。下一步由主线统一冻结实际选源、构建组件与原签名 5.2.1/50201 R8 Release，再按第 10 节进行镜像及同代设备验收。
 
 本节交付索引：`kmi-implementation-20261124`（开发证据未随公开快照分发：`D:/Maple_Workflow/MapleSU/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124`）。SDK 已构建代的 1330 个输入与当前源逐项比较无变化；组件和 Manager 的新改动继续单独构建、核对来源，不复用旧桥的成功资格。
+
+## 13. 自编译内核的必需配置（2026-11-25）
+
+自编译内核（用于验证 text-owner / credential 烘焙等需要内核内编译单元的路径）必须满足下列配置，否则会出现"刷进去就落回 fastboot"的假象：
+
+| 配置项 | 值 | 不满足时的现象 |
+|---|---|---|
+| `CONFIG_MODVERSIONS` | `y` | 厂商模块 `__versions` 不匹配，vendor 阶段加载失败 |
+| `CONFIG_DEBUG_INFO_BTF` | `y` | Ultra 侧无法按 BTF 解析 `cred`/`task_struct` 布局 |
+| `CONFIG_MODULE_ALLOW_BTF_MISMATCH` | **`y`** | `kernel/bpf/btf.c` 把模块 BTF 校验失败（`-EINVAL`）当致命，`init` panic，设备落回 fastboot |
+
+最后一条尤其容易踩：自编译内核的 vmlinux BTF 由本机 pahole 生成，字符串表编码与官方（pahole 1.25）不同，因此**每个**厂商模块的 BTF 都过不了校验。实测开启前后：
+
+```
+# 未开启：expdb 里取到的控制台
+BPF: [161701] Invalid name_offset:274525858
+failed to validate module [drm_dma_helper] BTF: -2222
+init: Failed to load kernel modules
+Kernel panic - not syncing: Attempted to kill init! exitcode=0x00007f0000
+
+# 开启后：同一镜像一次点亮
+/proc/modules = 622 项，/proc/version 为本机编译串，green / boot_completed=1
+```
+
+构建阶段可直接校验：
+
+```bash
+python3 scripts/check-ultra-kernel-config.py out/.config
+# ULTRA_KERNEL_CONFIG_OK / ULTRA_KERNEL_CONFIG_UNSAFE + 缺失项说明
+```
+
+补充：MTK 平台失败启动的日志在 `expdb` 分区（`/dev/block/by-name/expdb`），`pstore` 通常为空；`adb` 不可用时用 `dd if=/dev/block/by-name/expdb bs=1M` 取出后搜 `Kernel panic`。
