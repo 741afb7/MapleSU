@@ -100,7 +100,11 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Fetch locked extractor dependencies
         run: |
-          cargo +1.99.1-x86_64-pc-windows-gnu fetch --locked --target aarch64-linux-android --manifest-path jailbreak-providers/ghostlock/extractor-native/Cargo.toml
+          # Fetch both the Android target graph and Windows host/build dependencies.
+          # The extractor is built offline on the Windows runner, and Cargo's
+          # Windows-only CLI dependency (for example anstyle-wincon) is not part
+          # of the Android-target graph.
+          cargo +1.99.1-x86_64-pc-windows-gnu fetch --locked --manifest-path jailbreak-providers/ghostlock/extractor-native/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build SDK and consumer
         run: ./gradlew.bat :maplesu-client:assembleRelease :maplesu-consumer:assembleDebug --no-daemon --no-build-cache --no-configuration-cache --max-workers=2
