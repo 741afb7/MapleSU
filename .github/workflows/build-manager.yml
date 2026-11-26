@@ -92,7 +92,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tools/prepare_native_inputs.py --check
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python scripts/sync-ultra-sdk-identity.py --check
+          # Manager builds consume the checked-in SDK archive and identity only;
+          # Source-build delivery receipts are not required for this Manager-only workflow.
+          python scripts/sync-ultra-sdk-identity.py --check --identity-only
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tools/build_module_policy.py --prepare-only --offline
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

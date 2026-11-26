@@ -1118,6 +1118,7 @@ val verifyUltraSdkIdentity by tasks.registering(Exec::class) {
         val python = providers.gradleProperty("maplesuPython")
             .orElse(providers.environmentVariable("MAPLESU_PYTHON")).getOrElse("python")
         commandLine(python, rootProject.file("scripts/sync-ultra-sdk-identity.py"), "--check",
+            "--identity-only",
             "--manifest", ultraSdkDirectory.resolve("SDK-RELEASE.json"),
             "--output", ultraSdkDirectory.resolve("SDK-IDENTITY.cmake"))
     }
