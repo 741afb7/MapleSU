@@ -501,6 +501,8 @@ if __name__ == "__main__":
     parser.add_argument("--ghostlock-adapter", action="store_true")
     parser.add_argument("--dirtyfrag-adapter", action="store_true")
     parser.add_argument("--ko-variant", choices=("minimal", "stock"), default="minimal")
+    parser.add_argument("--skip-l3", action="store_true",
+                        help="skip the optional L3 su-gate build and record suGate=UNAVAILABLE")
     parser.add_argument("--root-contract", default=None,
                         help="contract for the in-kernel root module. Required once more "
                              "than one contract exists, because one build injects exactly "
@@ -689,7 +691,15 @@ if __name__ == "__main__":
         # it; it is recorded in `report["l3"]` for every outcome, never omitted, so a
         # report or an APK can always state which su gate it carries.
         if exit_code == 0:
-            exit_code = build_root_l3_product(output, ndk, report, contract)
+            if args.skip_l3:
+                report["l3"] = {
+                    "state": "SKIPPED",
+                    "suGate": "UNAVAILABLE",
+                    "reason": "L3 source inputs are not part of the Manager-only build",
+                }
+                print("MAPLESU L3: skipped for Manager-only build; suGate=UNAVAILABLE")
+            else:
+                exit_code = build_root_l3_product(output, ndk, report, contract)
     report["exitCode"] = exit_code if exit_code else 0 if report["inputsStable"] else 2
     report["completedAtUtc"] = datetime.now(timezone.utc).isoformat()
     (output / "build.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

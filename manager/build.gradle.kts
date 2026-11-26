@@ -517,6 +517,7 @@ val jailbreakJni = layout.buildDirectory.dir("generated/jailbreakJni")
 val jailbreakAssets = layout.buildDirectory.dir("generated/jailbreakAssets")
 val jailbreakManifest = layout.buildDirectory.file("generated/jailbreakManifest/maplesu-jailbreak-artifacts.json")
 val jailbreakKoVariant = providers.gradleProperty("maplesuKoVariant").getOrElse("minimal")
+val jailbreakSkipL3 = providers.gradleProperty("maplesuSkipL3").map { it.toBoolean() }.getOrElse(false)
 // Step-2 canary packaging (default off). When on, the product in-kernel slot carries
 // a non-ELF stub, the canary slot carries a freshly built maplesu_root.ko, and the
 // canary helper is packaged as an asset the App stages 0700. A default build is
@@ -560,6 +561,7 @@ val buildJailbreakProviders = tasks.register<Exec>("buildJailbreakProviders") {
         exclude("**/__pycache__/**")
     })
     inputs.files(policyHookBundles, policyHookBundles.resolveSibling("${policyHookBundles.nameWithoutExtension}.json"))
+    inputs.property("skipL3", jailbreakSkipL3)
     outputs.dir(jailbreakBuild)
     // Retained upstream bytes are re-verified on every build, so this task must
     // run even when its own inputs look unchanged.
@@ -573,6 +575,7 @@ val buildJailbreakProviders = tasks.register<Exec>("buildJailbreakProviders") {
             "--dirtyfrag-adapter", "--ghostlock-adapter",
             "--ko-variant", jailbreakKoVariant)
         if (jailbreakRootCanary) arguments += "--root-canary"
+        if (jailbreakSkipL3) arguments += "--skip-l3"
         environment("MAPLESU_POLICY_HOOK_BUNDLES", policyHookBundles.absolutePath)
         environment("MAPLESU_MINGW_BIN", providers.gradleProperty("maplesuMingwBin")
             .orElse(providers.environmentVariable("MAPLESU_MINGW_BIN")).getOrElse(""))
