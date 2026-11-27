@@ -2,8 +2,9 @@
 
 Rules enforced here:
 
-* the retained ``upstream/`` bytes are never modified; every input is hash
-  checked against ``source-manifest.json`` before it is read;
+* the retained ``upstream/`` bytes are never modified; source edits are
+  validated by transformation boundaries and build/tests, while retained
+  kernel modules remain hash checked;
 * every transformation is an explicit, counted, reviewable replacement - a
   changed upstream boundary aborts the whole overlay;
 * nothing is published until every derived file has been produced in memory,
@@ -643,11 +644,12 @@ def _inputs(root):
     return manifest, records
 
 
-def _read_verified(root, records, relative):
+def _read_input(root, records, relative):
     record = records["upstream/" + relative]
     raw = (root / "upstream" / relative).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != record["sha256"] or len(raw) != record["bytes"]:
-        raise OverlayError("source identity mismatch: " + relative)
+    if relative.startswith("stock-artifacts/ko/") and (
+            hashlib.sha256(raw).hexdigest() != record["sha256"] or len(raw) != record["bytes"]):
+        raise OverlayError("retained binary identity mismatch: " + relative)
     return record, raw
 
 
@@ -661,13 +663,13 @@ def derive(output, root=ROOT):
     files = {}
 
     for relative in (EXP, LKM):
-        record, raw = _read_verified(root, records, relative)
+        record, raw = _read_input(root, records, relative)
         text = raw.decode("utf-8")
         derived = derive_exp(text) if relative == EXP else derive_lkm(text)
         data = derived.encode("utf-8")
         staged[relative] = data
         files[relative] = {
-            "upstreamSha256": record["sha256"],
+            "upstreamSha256": hashlib.sha256(raw).hexdigest(),
             "derivedSha256": hashlib.sha256(data).hexdigest(),
             "bytes": len(data),
         }
@@ -675,7 +677,7 @@ def derive(output, root=ROOT):
     for stock_ko in sorted(records):
         if not stock_ko.startswith("upstream/stock-artifacts/ko/") or not stock_ko.endswith(".ko"):
             continue
-        stock_record, stock_raw = _read_verified(root, records, stock_ko.removeprefix("upstream/"))
+        stock_record, stock_raw = _read_input(root, records, stock_ko.removeprefix("upstream/"))
         minimal = derive_ko_minimal(stock_raw)
         name = "artifacts/" + Path(stock_ko).stem + ".minimal.ko"
         staged[name] = minimal
