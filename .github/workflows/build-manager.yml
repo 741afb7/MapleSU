@@ -107,12 +107,24 @@ jobs:
           cargo +1.99.1-x86_64-pc-windows-gnu fetch --locked --manifest-path jailbreak-providers/ghostlock/extractor-native/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build SDK and consumer
-        run: ./gradlew.bat :maplesu-client:assembleRelease :maplesu-consumer:assembleDebug --no-daemon --no-build-cache --no-configuration-cache --max-workers=2
+        run: |
+          $logDirectory = Join-Path $PWD 'manager/build/logs'
+          New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+          & ./gradlew.bat :maplesu-client:assembleRelease :maplesu-consumer:assembleDebug --no-daemon --no-build-cache --no-configuration-cache --max-workers=2 --console=plain --stacktrace --info 2>&1 |
+            Tee-Object -FilePath (Join-Path $logDirectory 'gradle-sdk-consumer.log') -Encoding utf8
+          $gradleExitCode = $LASTEXITCODE
+          if ($gradleExitCode -ne 0) { exit $gradleExitCode }
       - name: Build debug Manager
         if: inputs.variant != 'release'
         env:
           MINGW_ROOT: ${{ steps.msys2.outputs.msys2-location }}
-        run: ./gradlew.bat :manager:assembleDebug --no-daemon --no-build-cache --no-configuration-cache --max-workers=2 '-PmaplesuRustToolchain=1.99.1-x86_64-pc-windows-gnu' '-PmaplesuSkipL3=true' "-PmaplesuMingwBin=$env:MINGW_ROOT/ucrt64/bin"
+        run: |
+          $logDirectory = Join-Path $PWD 'manager/build/logs'
+          New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+          & ./gradlew.bat :manager:assembleDebug --no-daemon --no-build-cache --no-configuration-cache --max-workers=2 --console=plain --stacktrace --info '-PmaplesuRustToolchain=1.99.1-x86_64-pc-windows-gnu' '-PmaplesuSkipL3=true' "-PmaplesuMingwBin=$env:MINGW_ROOT/ucrt64/bin" 2>&1 |
+            Tee-Object -FilePath (Join-Path $logDirectory 'gradle-manager-debug.log') -Encoding utf8
+          $gradleExitCode = $LASTEXITCODE
+          if ($gradleExitCode -ne 0) { exit $gradleExitCode }
       - name: Build signed Manager
         if: github.event_name == 'workflow_dispatch' && inputs.variant == 'release'
         env:
@@ -128,8 +140,12 @@ jobs:
           $env:MAPLE_RELEASE_STORE_FILE = Join-Path $env:RUNNER_TEMP 'maplesu-release.jks'
           try {
             [IO.File]::WriteAllBytes($env:MAPLE_RELEASE_STORE_FILE, [Convert]::FromBase64String($env:KEYSTORE))
-            ./gradlew.bat :manager:assembleRelease --no-daemon --no-build-cache --no-configuration-cache --max-workers=2 '-PmaplesuRustToolchain=1.99.1-x86_64-pc-windows-gnu' '-PmaplesuSkipL3=true' "-PmaplesuMingwBin=$env:MINGW_ROOT/ucrt64/bin"
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $logDirectory = Join-Path $PWD 'manager/build/logs'
+            New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+            & ./gradlew.bat :manager:assembleRelease --no-daemon --no-build-cache --no-configuration-cache --max-workers=2 --console=plain --stacktrace --info '-PmaplesuRustToolchain=1.99.1-x86_64-pc-windows-gnu' '-PmaplesuSkipL3=true' "-PmaplesuMingwBin=$env:MINGW_ROOT/ucrt64/bin" 2>&1 |
+              Tee-Object -FilePath (Join-Path $logDirectory 'gradle-manager-release.log') -Encoding utf8
+            $gradleExitCode = $LASTEXITCODE
+            if ($gradleExitCode -ne 0) { exit $gradleExitCode }
           } finally {
             Remove-Item -LiteralPath $env:MAPLE_RELEASE_STORE_FILE -Force -ErrorAction SilentlyContinue
           }
@@ -141,6 +157,17 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           path: |
+            manager/build/logs/**/*.log
+            manager/build/maplesuRuntime/CMakeFiles/CMakeOutput.log
+            manager/build/maplesuRuntime/CMakeFiles/CMakeError.log
+            manager/build/maplesuRuntime/CMakeCache.txt
+            manager/build/maplesuRuntime/build.ninja
+            manager/build/maplesuRuntime/.ninja_log
+            manager/build/maplesuPatch/CMakeFiles/CMakeOutput.log
+            manager/build/maplesuPatch/CMakeFiles/CMakeError.log
+            manager/build/maplesuPatch/CMakeCache.txt
+            manager/build/maplesuPatch/build.ninja
+            manager/build/maplesuPatch/.ninja_log
             manager/build/jailbreakProviders/**/build.json
             manager/build/jailbreakProviders/**/build.log
             manager/build/jailbreakProviders/**/verify-build.txt
