@@ -33,7 +33,6 @@ KModErr set_current_root(bool enable_root);
 }  // namespace module_root
 }  // namespace default_modules
 
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
 
 //     _ZN10file_utilsL11file_existsERKNSt6__ndk14__fs10filesystem4pathE   (t)
 //     _ZN10file_utilsL28set_file_selinux_access_modeEPKcNS_15SelinuxFileFlagE (t)
@@ -626,65 +625,24 @@ static KModErr protect_kernel_idle_exec_range(uint64_t address, uint64_t size) {
 namespace kernel_module {
 
 //       get_idle_mem_base_dir() / path("idle_mem_*.…")
-//       dir = snprintf("/data/%s/", root_key.substr(0,16))  (bionic fortify inline)
 //       if (!dir.empty() && exists(dir) && is_directory(dir)) return dir;
 //       return path("/dev");
 //       read → 必须读出恰好 8 字节，memcpy 到输出。
 namespace detail_idle_mem_history {
 
-static std::string make_idle_mem_base_dir_path() {
-    char path_buf[1024] = {0};
-    // bionic <stdio.h> 的 fortify inline snprintf（static inline，符号名 _ZL8snprintf…）
-    snprintf(path_buf, sizeof(path_buf), "/data/%s/",
-             std::string(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW())
-                 .substr(0, 16)
-                 .c_str());
-    return std::string(path_buf);
-}
-
-static std::filesystem::path get_idle_mem_base_dir() {
-    std::error_code err;
-    const std::filesystem::path dir_path = make_idle_mem_base_dir_path();
-    if (!dir_path.empty() && std::filesystem::exists(dir_path, err) &&
-        std::filesystem::is_directory(dir_path, err)) {
-        return dir_path;
-    }
-    return std::filesystem::path("/dev");
-}
-
-static std::string get_idle_mem_start_path() {
-    return (get_idle_mem_base_dir() /
-            std::filesystem::path("idle_mem_start.576b1fdc5cf2a37f8b0ceb0aaae2994b"))
-        .string();
-}
-
-static std::string get_idle_mem_next_path() {
-    return (get_idle_mem_base_dir() /
-            std::filesystem::path("idle_mem_next.aebac350a93a132dbe921caac01888a5"))
-        .string();
-}
-
-static std::string get_idle_mem_end_path() {
-    return (get_idle_mem_base_dir() /
-            std::filesystem::path("idle_mem_end.12d478816ccc2405ea6a0e394ab2e7cf"))
-        .string();
-}
-
-// Authenticated workers use their held deployment; Legacy retains its old fallback.
 static KModErr get_idle_mem_history_paths(std::string& start, std::string& next,
                                              std::string& end) {
-    if (kernel_module::maplesu_request_owner_mode()) {
-        std::string directory;
-        const KModErr error = maplesu::storage::current_kernel_directory(directory);
-        if (error != KModErr::OK) return error;
-        start = directory + "idle_mem_start.576b1fdc5cf2a37f8b0ceb0aaae2994b";
-        next = directory + "idle_mem_next.aebac350a93a132dbe921caac01888a5";
-        end = directory + "idle_mem_end.12d478816ccc2405ea6a0e394ab2e7cf";
-    } else {
-        start = get_idle_mem_start_path();
-        next = get_idle_mem_next_path();
-        end = get_idle_mem_end_path();
+    std::string directory;
+    const KModErr error = maplesu::storage::current_kernel_directory(directory);
+    if (error != KModErr::OK) return error;
+    if (maplesu_request_auth_legacy(maplesu_request_auth_state())) {
+        std::error_code filesystem_error;
+        if (!std::filesystem::exists(directory, filesystem_error) ||
+            !std::filesystem::is_directory(directory, filesystem_error)) directory = "/dev/";
     }
+    start = directory + "idle_mem_start.576b1fdc5cf2a37f8b0ceb0aaae2994b";
+    next = directory + "idle_mem_next.aebac350a93a132dbe921caac01888a5";
+    end = directory + "idle_mem_end.12d478816ccc2405ea6a0e394ab2e7cf";
     return KModErr::OK;
 }
 

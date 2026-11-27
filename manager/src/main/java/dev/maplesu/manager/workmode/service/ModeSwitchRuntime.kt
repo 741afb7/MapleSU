@@ -19,7 +19,7 @@ import dev.maplesu.manager.runtime.RootExecResult
 import dev.maplesu.manager.workmode.storage.AndroidModeSwitchDataPaths
 import dev.maplesu.manager.workmode.switch.CandidateResult
 import dev.maplesu.manager.workmode.switch.ModeSwitchHashes
-import dev.maplesu.manager.runtime.ultra.UltraInstallCredentials
+import dev.maplesu.manager.runtime.ultra.UltraInstallTransactions
 import dev.maplesu.manager.runtime.RootExec
 import dev.maplesu.manager.workmode.WorkMode
 import dev.maplesu.manager.workmode.control.ControlPaths
@@ -180,9 +180,9 @@ object ModeSwitchRuntime {
                 dataPaths = pathsFor,
                 acquireLease = pinnedRoot::acquire,
                 releaseLease = pinnedRoot::release,
-                ultraCredentialFingerprint = { id -> UltraInstallCredentials.fingerprint(appContext, id) },
+                ultraCredentialFingerprint = { id -> UltraInstallTransactions.fingerprint(appContext, id) },
                 onInstallReceipt = { id, state, sha ->
-                    dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(appContext).observe(id, state, sha)
+                    dev.maplesu.manager.runtime.ultra.UltraInstallTransactions.observe(appContext, id, state, sha)
                 },
                 lifecycle = RootModeSwitchEnvironmentLifecycle(
                     ready = {
@@ -195,11 +195,7 @@ object ModeSwitchRuntime {
                         RootScriptResult(result.ok, result.code, result.output, result.detail)
                     },
                     dynamicPaths = pathsFor,
-                    uninstallUltra = {
-                        val key = UltraRootKeyStore.read(appContext)
-                        if (key.isNullOrBlank()) HookResult.failed("ULTRA_ENV_KEY_MISSING")
-                        else pinnedRoot.uninstallUltra(key)
-                    },
+                    uninstallUltra = { pinnedRoot.uninstallUltra() },
                 ),
                 normalBootUserland = {
                     val result = ensureNormalBootUserland(
@@ -325,13 +321,13 @@ object ModeSwitchRuntime {
                 if (artifact != null) dev.maplesu.manager.installer.UltraInitBootInstallTarget.requireCompatible(
                     artifact, input.kernelRelease, input.targetBootSha256)
                 val prepared = flow.prepareTarget(input.baselineImage,
-                    UltraInstallCredentials.forCandidate(context), null, artifact, input.deploymentNamespace) { Log.i(TAG, it) }
+                    null, artifact, input.deploymentNamespace) { Log.i(TAG, it) }
                 val built = flow.candidateForInstall(input.baselineImage, prepared)
                 check(built.partition == input.partition) { "ULTRA_KERNEL_CANDIDATE_PARTITION_MISMATCH" }
                 val image = fullSizeSwitchCandidate(built.image, File(input.workDir, "ultra-candidate.img"),
                     input.baselineImage.length())
                 val sha256 = ModeSwitchHashes.sha256(image)
-                UltraInstallCredentials.retainCandidate(context, image, sha256, prepared.credential, input.switchId)
+                UltraInstallTransactions.retainCandidate(context, image, sha256, input.switchId)
                 CandidateResult(image, sha256, image.length(),
                     structureEvidence = "ultra-kernel:${built.kernelRelease}")
             }.getOrElse { error ->

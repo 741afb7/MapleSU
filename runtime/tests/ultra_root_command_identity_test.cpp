@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <type_traits>
 #include "cJSON.h"
 #include "urlEncodeUtils.h"
 #include "sdk_call_scope.h"
@@ -17,6 +18,10 @@
 #include "manager_owner_identity.h"
 #include "manager_owner_root_probe.h"
 #include "maplesu_root_command_private.h"
+#include "maplesu_sdk/maplesu_root.h"
+
+static_assert(std::is_same_v<decltype(&maplesu::sdk::get_root), KModErr (*)()>);
+static_assert(std::is_same_v<decltype(&maplesu::sdk::run_root_cmd), KModErr (*)(const char*, std::string&)>);
 
 using jstring = const char*;
 using jclass = void*;
@@ -40,10 +45,10 @@ struct JNIEnv {
 
 namespace fixture {
 int failures, calls, mode_sets, restores, allocation_after = -1;
-bool null_key, throw_sdk, acquired = true;
+bool throw_sdk, acquired = true;
 int process_error;
-std::string key, command;
-kernel_module::RequestAuthMode mode = kernel_module::RequestAuthMode::LegacyKey;
+std::string command;
+uint64_t auth_state = static_cast<uint64_t>(kernel_module::RequestAuthMode::ManagerOwner);
 KModErr sdk_error = KModErr::OK, select_error = KModErr::OK, restore_error = KModErr::OK;
 maplesu::sdk::RootCommandResult diagnostic;
 void* allocate(size_t size) {
@@ -59,14 +64,14 @@ char* print(cJSON* value) {
 int allocation_offset = -1;
 void reset() {
     calls = mode_sets = restores = process_error = 0;
-    null_key = throw_sdk = false; acquired = true;
-    key.clear(); command.clear(); mode = kernel_module::RequestAuthMode::LegacyKey;
+    throw_sdk = false; acquired = true;
+    command.clear(); auth_state = static_cast<uint64_t>(kernel_module::RequestAuthMode::ManagerOwner);
     sdk_error = select_error = restore_error = KModErr::OK;
     allocation_after = allocation_offset = -1;
     diagnostic = {};
-    diagnostic.phase = maplesu::sdk::RootCommandPhase::VendorOplusGuard;
-    diagnostic.error = KModErr::ERR_MODULE_OPEN_FILE;
-    diagnostic.system_error = 13;
+    diagnostic.phase = maplesu::sdk::RootCommandPhase::Complete;
+    diagnostic.error = KModErr::OK;
+    diagnostic.system_error = 0;
     diagnostic.child_status = 0;
     diagnostic.child_status_valid = true;
     diagnostic.receipt_complete = true;
@@ -77,13 +82,13 @@ void check(bool value, const char* message) {
 }
 
 namespace kernel_module {
-uint64_t maplesu_request_auth_state() { return static_cast<uint64_t>(fixture::mode); }
+uint64_t maplesu_request_auth_state() { return fixture::auth_state; }
 KModErr maplesu_request_set_auth_mode(RequestAuthMode requested) {
     ++fixture::mode_sets;
-    const bool restoring = requested == RequestAuthMode::LegacyKey;
+    const bool restoring = requested == RequestAuthMode::EarlyHelper;
     if (restoring) ++fixture::restores;
     const auto result = restoring ? fixture::restore_error : fixture::select_error;
-    if (is_ok(result)) fixture::mode = requested;
+    if (is_ok(result)) fixture::auth_state = static_cast<uint64_t>(requested);
     return result;
 }
 CleanupReceiptScope::CleanupReceiptScope() noexcept {}
@@ -94,10 +99,8 @@ SdkCallScope::SdkCallScope(const char*) { acquired_ = fixture::acquired; context
 SdkCallScope::~SdkCallScope() = default;
 namespace ultra { void retain_authorization_result_on_process_failure(cJSON*) {} }
 namespace sdk {
-KModErr run_root_cmd(const char* key, const char* command, std::string& output) {
+KModErr run_root_cmd(const char* command, std::string& output) {
     ++fixture::calls;
-    fixture::null_key = key == nullptr;
-    fixture::key = key ? key : "";
     fixture::command = command;
     if (fixture::throw_sdk) throw std::runtime_error("SDK fixture exception");
     output = "root fixture\n";
@@ -115,9 +118,9 @@ constexpr int kBridgeException = -1001, kBridgeAlloc = -1003, kBridgeProcess = -
 #undef cJSON_PrintUnformatted
 
 using Tree = std::unique_ptr<cJSON, JsonDeleter>;
-Tree invoke(jstring key = nullptr) {
+Tree invoke() {
     JNIEnv env;
-    const auto raw = Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_runRootCmd(&env, nullptr, key, "id -u");
+    const auto raw = Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_runRootCmd(&env, nullptr, "id -u");
     Tree result(cJSON_Parse(raw));
     assert(result);
     return result;
@@ -130,49 +133,84 @@ int main() {
     cJSON_Hooks hooks{fixture::allocate, std::free};
     cJSON_InitHooks(&hooks);
     using fixture::check;
+    using kernel_module::RequestAuthMode;
     fixture::reset();
     auto owner = invoke();
-    check(fixture::calls == 1 && fixture::null_key, "genuine null reaches SDK once as nullptr");
-    check(fixture::mode_sets == 2 && fixture::restores == 1 && fixture::mode == kernel_module::RequestAuthMode::LegacyKey,
-        "Owner selects and restores the actual RequestAuthModeScope once");
+    check(fixture::calls == 1 && fixture::command == "id -u", "keyless JNI forwards the real command once");
+    check(fixture::mode_sets == 0 && fixture::auth_state == static_cast<uint64_t>(RequestAuthMode::ManagerOwner),
+        "an existing Manager scope stays in its actual mode without a redundant selection");
     check(truth(owner.get(), "ok") && truth(owner.get(), "operationCompleted"), "SDK success retains completion");
     auto* data = field(owner.get(), "data");
     check(number(data, "resultBytes") == 13 && std::string(field(data, "result")->valuestring) == "root+fixture%0A",
         "output bytes and URL encoding survive");
     auto* root = field(data, "rootCommand");
-    check(number(root, "phase") == 5 && number(root, "systemError") == 13 && number(root, "childStatus") == 0 &&
-        truth(root, "childStatusValid") && truth(root, "receiptComplete") && !truth(root, "rootAttempted"),
-        "original root command failure diagnostics are retained");
+    check(number(root, "phase") == static_cast<int>(maplesu::sdk::RootCommandPhase::Complete) &&
+        number(root, "systemError") == 0 && number(root, "childStatus") == 0 &&
+        truth(root, "childStatusValid") && truth(root, "receiptComplete"), "original SDK diagnostics are retained");
 
-    fixture::reset();
-    auto legacy = invoke("valid-key-fixture");
-    check(fixture::calls == 1 && !fixture::null_key && fixture::key == "valid-key-fixture" && fixture::mode_sets == 0,
-        "explicit Key stays explicit and preserves Legacy mode");
-    fixture::reset();
-    auto empty = invoke("");
-    check(fixture::calls == 1 && !fixture::null_key && fixture::key.empty() && fixture::mode_sets == 0,
-        "explicit empty Key stays non-null at JNI; SDK owns rejection");
+    fixture::reset(); fixture::auth_state = static_cast<uint64_t>(RequestAuthMode::EarlyHelper);
+    auto helper = invoke();
+    check(truth(helper.get(), "ok") && fixture::calls == 1 && fixture::mode_sets == 2 && fixture::restores == 1 &&
+        fixture::auth_state == static_cast<uint64_t>(RequestAuthMode::EarlyHelper),
+        "JNI selects Manager and restores the exact EarlyHelper source once");
+    fixture::reset(); fixture::auth_state = static_cast<uint64_t>(RequestAuthMode::EarlyHelper);
+    {
+        maplesu::RequestAuthModeScope manager(RequestAuthMode::ManagerOwner);
+        check(is_ok(manager.error()) && fixture::auth_state == 1, "outer Manager scope selected");
+        {
+            maplesu::RequestAuthModeScope nested_helper(RequestAuthMode::EarlyHelper);
+            check(is_ok(nested_helper.error()) && fixture::auth_state == 3, "nested helper scope selected");
+            {
+                maplesu::RequestAuthModeScope nested_manager(RequestAuthMode::ManagerOwner);
+                check(is_ok(nested_manager.error()) && fixture::auth_state == 1, "nested Manager selected");
+            }
+            check(fixture::auth_state == 3, "nested Manager exit restores helper");
+        }
+        check(fixture::auth_state == 1, "nested helper exit restores Manager");
+        check(is_ok(manager.restore()) && fixture::auth_state == 3, "explicit restore keeps exact original source");
+        const auto sets = fixture::mode_sets;
+        check(is_ok(manager.restore()) && fixture::mode_sets == sets, "scope restore is idempotent");
+    }
+    check(fixture::auth_state == 3 && fixture::mode_sets == 6, "destructor never restores an already-restored scope twice");
+    for (uint64_t invalid : {uint64_t(0), uint64_t(2), UINT64_MAX}) {
+        fixture::reset(); fixture::auth_state = invalid;
+        auto denied = invoke();
+        check(fixture::calls == 0 && fixture::mode_sets == 0 && !truth(denied.get(), "ok") &&
+            number(denied.get(), "sdkErrorCode") == to_num(KModErr::ERR_MODULE_TEST_CHANNEL),
+            "invalid/exhausted execution source never submits a command");
+    }
 
-    fixture::reset(); fixture::sdk_error = KModErr::ERR_MODULE_OPEN_FILE; fixture::restore_error = KModErr::ERR_MODULE_TEST_CHANNEL;
+    fixture::reset(); fixture::auth_state = 3;
+    fixture::sdk_error = KModErr::ERR_MODULE_OPEN_FILE; fixture::restore_error = KModErr::ERR_MODULE_TEST_CHANNEL;
+    fixture::diagnostic.error = fixture::sdk_error; fixture::diagnostic.phase = maplesu::sdk::RootCommandPhase::Root;
+    fixture::diagnostic.system_error = 13;
     auto denied = invoke();
     check(number(denied.get(), "sdkErrorCode") == to_num(KModErr::ERR_MODULE_OPEN_FILE), "SDK first failure survives restore failure");
     check(number(denied.get(), "authModeRestoreErrorCode") == to_num(KModErr::ERR_MODULE_TEST_CHANNEL) &&
         fixture::calls == 1 && fixture::restores == 1 && !truth(denied.get(), "operationCompleted"),
         "failed SDK call is never retried and restore is reported separately");
+    root = field(field(denied.get(), "data"), "rootCommand");
+    check(number(root, "phase") == static_cast<int>(maplesu::sdk::RootCommandPhase::Root) &&
+        number(root, "systemError") == 13, "the primary permission failure keeps its Root diagnostics");
 
-    fixture::reset(); fixture::restore_error = KModErr::ERR_MODULE_TEST_CHANNEL;
+    fixture::reset(); fixture::auth_state = 3; fixture::restore_error = KModErr::ERR_MODULE_TEST_CHANNEL;
     auto restored = invoke();
     check(number(restored.get(), "sdkErrorCode") == to_num(KModErr::ERR_MODULE_TEST_CHANNEL) &&
         !truth(restored.get(), "ok") && truth(restored.get(), "operationCompleted"),
         "successful operation with failed restore keeps its completed fact");
-    fixture::reset(); fixture::select_error = KModErr::ERR_MODULE_TEST_CHANNEL;
+    fixture::reset(); fixture::auth_state = 3; fixture::select_error = KModErr::ERR_MODULE_TEST_CHANNEL;
     auto select = invoke();
-    check(fixture::calls == 0 && number(select.get(), "sdkErrorCode") == to_num(KModErr::ERR_MODULE_TEST_CHANNEL),
-        "auth selection failure prevents submission");
-    fixture::reset(); fixture::throw_sdk = true;
+    check(fixture::calls == 0 && number(select.get(), "sdkErrorCode") == to_num(KModErr::ERR_MODULE_TEST_CHANNEL) &&
+        fixture::auth_state == 3, "scope selection failure prevents submission and retains the old source");
+    fixture::reset(); fixture::auth_state = 3; fixture::throw_sdk = true;
     auto exception = invoke();
-    check(fixture::calls == 1 && fixture::restores == 1 && number(exception.get(), "sdkErrorCode") == kBridgeException,
-        "SDK exception restores identity exactly once without replay");
+    check(fixture::calls == 1 && fixture::restores == 1 && fixture::auth_state == 3 &&
+        number(exception.get(), "sdkErrorCode") == kBridgeException,
+        "SDK exception restores the exact source once without replay");
+    fixture::reset(); fixture::acquired = false;
+    auto busy = invoke();
+    check(fixture::calls == 0 && fixture::mode_sets == 0 && number(busy.get(), "sdkErrorCode") == -1005,
+        "failed SDK admission never executes or changes the source");
     fixture::reset(); fixture::process_error = 5; fixture::sdk_error = KModErr::ERR_MODULE_OPEN_FILE;
     auto process = invoke();
     check(number(process.get(), "sdkErrorCode") == to_num(KModErr::ERR_MODULE_OPEN_FILE) &&
@@ -194,9 +232,10 @@ int main() {
 
     int allocation_failures = 0;
     for (int offset = 0; offset < 160; ++offset) {
-        fixture::reset(); fixture::allocation_offset = offset;
+        fixture::reset(); fixture::auth_state = 3; fixture::allocation_offset = offset;
         auto result = invoke();
-        check(fixture::calls == 1 && fixture::restores == 1, "receipt allocation failure never replays SDK or skips restore");
+        check(fixture::calls == 1 && fixture::restores == 1 && fixture::auth_state == 3,
+            "receipt allocation failure never replays SDK or skips exact source restore");
         check(truth(result.get(), "operationCompleted"), "all post-SDK receipt allocation failures preserve completion");
         if (number(result.get(), "sdkErrorCode") == kBridgeAlloc) ++allocation_failures;
     }

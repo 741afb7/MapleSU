@@ -6,7 +6,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.maplesu.core.BuildConfig
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import dev.maplesu.manager.workmode.ModeActivation
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
@@ -127,7 +126,12 @@ object ModeBootstrap {
             },
         ).also { coordinator = it }
 
-        startDetectionThread("mode-bootstrap-phase-one") {
+        startDetectionThread("mode-bootstrap-phase-one", onStartFailure = { error ->
+            firstPhaseComplete.complete(Unit)
+            recordGate(BootstrapPhase.LOCAL_ONLY, BootstrapOutcome.Failed(
+                "MODE_PHASE_ONE_THREAD_START_FAILED", error.message.orEmpty()))
+            Log.w(TAG, "mode phase-one worker unavailable", error)
+        }) {
             val startedAt = SystemClock.elapsedRealtime()
             startupTrace("stage=phase_one event=begin")
             try {
@@ -182,7 +186,10 @@ object ModeBootstrap {
     fun onManagerFirstFrame(context: Context) {
         if (!started.get() || !firstFrameHandled.compareAndSet(false, true)) return
         val appContext = context.applicationContext
-        startDetectionThread("mode-bootstrap-paired-resume") {
+        startDetectionThread("mode-bootstrap-paired-resume", onStartFailure = { error ->
+            firstFrameHandled.set(false)
+            Log.w(TAG, "mode first-frame worker unavailable", error)
+        }) {
             val expedite = runCatching {
                 PairedStartupPolicy.shouldExpedite(
                     modeResolved = ModeRuntime.active != null,
@@ -195,10 +202,7 @@ object ModeBootstrap {
                     modeResolved = ModeRuntime.active != null,
                     ksuResponded = ModeRuntime.latestDetection?.trace?.firstOrNull { it.id == "S1" }?.ok,
                 ) {
-                    val localKey = dev.maplesu.manager.modules.UltraRootKeyStore.read(appContext)
-                    localKey != null && UltraKernelCredential.isValid(localKey) &&
-                        UltraKernelCredential.of(localKey).sdkMetadataValid &&
-                        dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.refresh(appContext, force = false) ==
+                    dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.refresh(appContext, force = false) ==
                             dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.State.Running
                 }
             }
@@ -211,7 +215,12 @@ object ModeBootstrap {
         val coordinator = coordinator ?: return
         if (secondPhaseRetry.tryStart() == null) return
         if (ModeRuntime.active == null) ModeRuntime.beginDetection()
-        startDetectionThread("mode-bootstrap-phase-two") {
+        startDetectionThread("mode-bootstrap-phase-two", onStartFailure = { error ->
+            recordGate(BootstrapPhase.AFTER_ROOT_GRANTED, BootstrapOutcome.Failed(
+                "MODE_PHASE_TWO_THREAD_START_FAILED", error.message.orEmpty()))
+            secondPhaseRetry.finish(resolved = ModeRuntime.active != null)?.let(::schedulePhaseTwo)
+            Log.w(TAG, "mode phase-two worker unavailable", error)
+        }) {
             try {
                 runBlocking {
                     // Early scheduling must not race a still-running local-only observation.
@@ -232,7 +241,7 @@ object ModeBootstrap {
                                 observed.state == dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.State.Fault ||
                                 dev.maplesu.manager.runtime.HookRootExecutor.production(it).available()
                             if (!currentUltraConfirmed) {
-                                dev.maplesu.manager.runtime.ultra.UltraInstallCredentialRecovery.recover(it)
+                                dev.maplesu.manager.runtime.ultra.UltraIdentityRecovery.recover(it)
                             }
                         }
                     }
@@ -310,8 +319,17 @@ object ModeBootstrap {
         return detection
     }
 
-    private fun startDetectionThread(name: String, block: () -> Unit) {
-        Thread(block, name).apply { isDaemon = true }.start()
+    internal fun startDetectionThread(
+        name: String,
+        onStartFailure: (Throwable) -> Unit,
+        startThread: (Thread) -> Unit = { it.start() },
+        block: () -> Unit,
+    ) {
+        try {
+            startThread(Thread(block, name).apply { isDaemon = true })
+        } catch (error: Throwable) {
+            onStartFailure(error)
+        }
     }
 
     private fun startupTrace(message: String) {

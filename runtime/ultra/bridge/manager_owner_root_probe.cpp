@@ -1,4 +1,5 @@
 #include "manager_owner_root_probe.h"
+#include "manager_owner_identity.h"
 #include "../../maplesu-sdk/sdk/include/maplesu_request_private.h"
 #include "../../maplesu-sdk/sdk/include/maplesu_caps_private.h"
 
@@ -339,7 +340,9 @@ ManagerOwnerRootProbe probe_manager_owner_root() {
     const auto start = Clock::now();
     timespec deadline{};
     uint64_t lease = 0;
-    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) result.watchdog_error = errno;
+    if (const auto admission = manager_worker_admission(); is_failed(admission))
+        result.channel_error = static_cast<int64_t>(admission);
+    else if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) result.watchdog_error = errno;
     else {
         deadline.tv_nsec += 300000000;
         if (deadline.tv_nsec >= 1000000000) { ++deadline.tv_sec; deadline.tv_nsec -= 1000000000; }

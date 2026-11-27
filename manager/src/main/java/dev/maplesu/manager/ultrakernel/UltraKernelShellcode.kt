@@ -967,6 +967,11 @@ internal object UltraKernelStructOffsets {
         return result
     }
     private fun comm(symbols: UltraKernelSymbols, kernel: ByteArray, strict: Boolean = false): Int? {
+        if (listOf("__set_task_comm", "set_task_comm").any { symbols.offsetsOf(it).isNotEmpty() }) {
+            val field = runtimeAccessorField(symbols, kernel, COMM)
+            if (field.widthBytes != 16) error(COMM, "STRUCT_COPY_EXTENT_UNPROVEN")
+            return field.offsetBytes
+        }
         val result = ArrayList<Int>()
         val copiers = COPIERS.mapNotNull(symbols::offsetOf).toSet()
         // These are real signatures, not a displacement relative to another task member.
@@ -1378,6 +1383,38 @@ internal object UltraKernelStructOffsets {
         return result
     }
 
+    internal fun verifyAlternativeNops(symbols: UltraKernelSymbols, kernel: ByteArray,
+        replacement: Int, length: Int) {
+        if (length <= 0 || length % 4 != 0 || replacement !in symbols.offsetsOf("alt_cb_patch_nops"))
+            error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK")
+        var proved = 0
+        val expected = (0 until length step 4).map { Triple(ObjectValue("alternative-output", offset = it),
+            UltraKernelA64.NOP.toLong() and 0xffffffffL, 4) }
+        val generators = symbols.offsetsOf("aarch64_insn_gen_nop").toSet()
+        val verifiedGenerators = mutableSetOf<Int>()
+        val nop = NumberValue(UltraKernelA64.NOP.toLong() and 0xffffffffL, 4)
+        val complete = walk(symbols, kernel, "alt_cb_patch_nops", null, {}, { target, _ ->
+            if (verifiedGenerators.add(target)) {
+                var returns = 0
+                val generated = walk(symbols, kernel, "aarch64_insn_gen_nop", null, { value ->
+                    if (value != nop) error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK_DATA")
+                    returns++
+                }, { _, _ -> null }, startAt = target, strict = true, permittedCalls = emptySet(),
+                    stored = { _, _, _ -> error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK_WRITE") })
+                if (!generated || returns != 1) error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK_DATA")
+            }
+            nop
+        },
+            maximumBytes = 512, startAt = replacement, subject = Subject.ALTERNATIVE,
+            permittedCalls = generators,
+            alternativeInstructions = length / 4, subjectReturned = { _, trace ->
+                if (trace.stackPointer != 0) error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK_STACK")
+                if (trace.alternativeWrites != expected) error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK_WRITE")
+                proved++
+            })
+        if (!complete || proved != 1) error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK")
+    }
+
     /** Keep each alternative block correlated, including entry into its middle and retry loops. */
     private fun instructionVariants(symbols: UltraKernelSymbols, kernel: ByteArray, start: Int, end: Int): Map<Int, Set<InstructionView>> {
         val variants = linkedMapOf<Int, Set<InstructionView>>()
@@ -1409,18 +1446,9 @@ internal object UltraKernelStructOffsets {
                 val originalAt = original.toInt()
                 val originalWords = (0 until length step 4).associate { originalAt + it to word(originalAt + it) }
                 val replacementWords = if (feature and 0x8000 != 0) {
-                    if (replacementLength != 0 || replacement.toInt() !in symbols.offsetsOf("alt_cb_patch_nops"))
+                    if (replacementLength != 0)
                         error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK")
-                    var proved = 0
-                    val expected = (0 until length step 4).map { Triple(ObjectValue("alternative-output", offset = it),
-                        UltraKernelA64.NOP.toLong() and 0xffffffffL, 4) }
-                    val complete = walk(symbols, kernel, "alt_cb_patch_nops", null, {}, { _, _ -> null },
-                        maximumBytes = 512, startAt = replacement.toInt(), subject = Subject.ALTERNATIVE,
-                        alternativeInstructions = length / 4, subjectReturned = { _, trace ->
-                            if (trace.alternativeWrites != expected) error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK_WRITE")
-                            proved++
-                        })
-                    if (!complete || proved != 1) error("alternatives", "STRUCT_ALTERNATIVE_CALLBACK")
+                    verifyAlternativeNops(symbols, kernel, replacement.toInt(), length)
                     originalWords.mapValues { UltraKernelA64.NOP }
                 } else {
                     if (replacementLength != length || replacement + length > kernel.size)
@@ -1738,7 +1766,8 @@ internal object UltraKernelStructOffsets {
         val lockOwner = if (subject == Subject.SET_FS) "fs-argument" else "task-argument"
         val lockSubject = subject in setOf(Subject.EXIT_FILES, Subject.SET_FS, Subject.GET_MM, Subject.EXIT_FS)
         val stackSubject = subject in setOf(Subject.SET_FS, Subject.TRUNCATE_SIZE, Subject.SIMPLE_GETATTR,
-            Subject.POSIX_FILE_LOCK, Subject.ALLOCATE_EMPTY_GROUPS, Subject.COMM_LOCATION, Subject.TRACE_LOCATION)
+            Subject.POSIX_FILE_LOCK, Subject.ALLOCATE_EMPTY_GROUPS, Subject.COMM_LOCATION, Subject.TRACE_LOCATION,
+            Subject.ALTERNATIVE)
         val knownCalls = permittedCalls ?: when (subject) {
             Subject.GROUPS -> releasers
             Subject.ALLOCATE_GROUPS, Subject.ALLOCATE_EMPTY_GROUPS -> allocators
@@ -2798,7 +2827,8 @@ internal object UltraKernelStructOffsets {
                     } else {
                         val tracked = scalar && (registerFrameArguments && target is RegisterFrame ||
                             subject in setOf(Subject.CAPGET, Subject.SET_FS, Subject.TRUNCATE_SIZE, Subject.SIMPLE_GETATTR,
-                                Subject.POSIX_FILE_LOCK, Subject.ALLOCATE_EMPTY_GROUPS, Subject.COMM_LOCATION, Subject.TRACE_LOCATION)) &&
+                                Subject.POSIX_FILE_LOCK, Subject.ALLOCATE_EMPTY_GROUPS, Subject.COMM_LOCATION, Subject.TRACE_LOCATION,
+                                Subject.ALTERNATIVE)) &&
                             !(mode in setOf(1, 3) && rn in setOf(rd, second)) && rd != second
                         values[rd] = if (tracked) load(target, size) else null
                         values[second] = if (tracked) load(address(target, size), size) else null
@@ -2890,7 +2920,7 @@ internal class UltraKernelSymbolResolver(private val symbols: UltraKernelSymbols
  *
  * | body id | record | reference |
  * | --- | --- | --- |
- * | `execve-gate` | `die+0x0` | `patch_do_execve.cpp` - root_key loop, cred wipe, dispatch |
+ * | `execve-gate` | `die+0x0` | authenticated resident dispatcher; ordinary calls resume the original entry |
  * | `execve-tail` | `die+0xD4` | `patch_do_execve.cpp` tail - `module_alloc` and jump back |
  * | `execve-frame` | `arm64_notify_die+0x0` | register save frame around the execve entry |
  * | `puts-guide` | `__drm_puts_coredump+0x0` | `patch_filldir64.cpp` guide - materialise + copy |
@@ -2906,11 +2936,7 @@ internal object UltraKernelBodies {
     const val EXECUTOR_BYTES = 188
     const val METADATA_REBASE_BYTES = 448
 
-    private const val CRED_LEN = 48
-    private const val TRANSPORT_LEN = 18
-    private const val NAME_BYTES = 66
     private const val NAME_PTR = 68
-    private const val MAX_ERRNO = 4095
     private const val APP_PROCESS = "/app_process64"
 
     private const val SP = 31
@@ -2991,93 +3017,9 @@ internal object UltraKernelBodies {
     // -----------------------------------------------------------------------------------------
     // die+0x0
     //
-    // patch_do_execve.cpp: reject a non-filename pointer, compare `filename->name` against the
-    // credential stored at `panic`, then dispatch on `filename->name[66]` to the four copied-code
-    // entry points. Every address in it is either a label or a symbol offset.
-    // -----------------------------------------------------------------------------------------
-    private fun die0(a: UltraKernelAsm, r: UltraKernelSymbolResolver, f: UltraKernelFields) {
-        val minusMaxErrno = -MAX_ERRNO.toLong()
-        a.emit(UltraKernelA64.movn(11, minusMaxErrno.inv().toInt() and 0xFFFF))
-        a.emit(UltraKernelA64.cmpReg(1, 11))
-        a.bCond(UltraKernelA64.CS, "end")
-        a.emit(UltraKernelA64.mrs(16, UltraKernelA64.MRS_SP_EL0))
-        a.emit(UltraKernelA64.ldAuto("ldr", 17, 16, f.requireOffset(f.cred, UltraKernelStructOffsets.CRED), 8))
-        a.emit(UltraKernelA64.ldAuto("ldr", 11, 1, 0, 8))
-        val anchor = a.here()
-        if (materialiseAddress(a, 12, 13, anchor, r.require("panic"))) {
-            a.emit(UltraKernelA64.addReg(12, 12, 13))
-        }
-        a.emit(UltraKernelA64.encodeMovImm(13, 0))
-        a.mark("compare")
-        a.emit(UltraKernelA64.ldReg("ldrb", 14, 11, 13, 1))
-        a.emit(UltraKernelA64.ldReg("ldrb", 15, 12, 13, 1))
-        a.emit(UltraKernelA64.cmpReg(14, 15, sf = 0))
-        a.bCond(UltraKernelA64.NE, "drain")
-        a.emit(UltraKernelA64.addImm(13, 13, 1))
-        a.emit(UltraKernelA64.cmpImm(13, CRED_LEN))
-        a.bCond(UltraKernelA64.LT, "compare")
-        // getname() guarantees a terminated filename, not a complete SDK request.
-        // Validate the entire encoded transport before the in-place decode touches it.
-        a.mark("transport")
-        a.emit(UltraKernelA64.ldReg("ldrb", 14, 11, 13, 1))
-        a.cbz(14, "end", sf = false)
-        a.emit(UltraKernelA64.addImm(13, 13, 1))
-        a.emit(UltraKernelA64.cmpImm(13, CRED_LEN + TRANSPORT_LEN * 2))
-        a.bCond(UltraKernelA64.LT, "transport")
-        a.emit(UltraKernelA64.ldAuto("ldrb", 14, 11, CRED_LEN + TRANSPORT_LEN * 2, 1))
-        a.cbnz(14, "end", sf = false)
-        a.emit(UltraKernelA64.addImm(13, 13, TRANSPORT_LEN * 2, sub = true))
-        a.emit(UltraKernelA64.addReg(12, 11, 13))
-        a.mark("mix")
-        a.emit(UltraKernelA64.ldAuto("ldrb", 14, 12, 0, 1))
-        a.emit(UltraKernelA64.ldAuto("ldrb", 15, 12, 18, 1))
-        a.emit(UltraKernelA64.addReg(15, 15, 14, sf = 0))
-        a.emit(UltraKernelA64.ldAuto("strb", 15, 12, 18, 1))
-        a.emit(UltraKernelA64.addImm(12, 12, 1))
-        a.emit(UltraKernelA64.ldAuto("ldrb", 14, 12, 18, 1))
-        a.cbnz(14, "mix", sf = false)
-        a.emit(UltraKernelA64.ldAuto("ldrb", 12, 11, NAME_BYTES, 1))
-        a.emit(UltraKernelA64.ldAuto("ldr", 0, 11, NAME_PTR, 8))
-        a.emit(UltraKernelA64.cmpImm(12, '1'.code, sf = 0))
-        a.bCond(UltraKernelA64.EQ, "case1")
-        a.emit(UltraKernelA64.cmpImm(12, '2'.code, sf = 0))
-        a.bCond(UltraKernelA64.EQ, "case2")
-        a.emit(UltraKernelA64.cmpImm(12, '3'.code, sf = 0))
-        a.bCond(UltraKernelA64.EQ, "case3")
-        a.emit(UltraKernelA64.cmpImm(12, '4'.code, sf = 0))
-        if (f.requestV2) a.bCondAbs(UltraKernelA64.EQ, r.require("die") + UltraKernelRequestV2.CAVE_OFFSET)
-        else a.bCond(UltraKernelA64.EQ, "join")
-        a.emit(UltraKernelA64.cmpImm(12, '5'.code, sf = 0))
-        a.bCond(UltraKernelA64.EQ, "release")
-        a.emit(UltraKernelA64.stpPre(17, XZR, SP, -2))
-        a.bAbs(r.require("die") + EXECVE_GATE_BYTES)
-        a.blAbs(r.require("module_alloc"))
-        a.emit(UltraKernelA64.ldpPost(17, XZR, SP, 2))
-        a.b("join")
-        a.mark("case1")
-        a.emit(UltraKernelA64.ldAuto("ldrb", 14, 11, NAME_BYTES + 1, 1))
-        a.emit(UltraKernelA64.ldAuto("strb", 14, 0, 0, 1))
-        a.bAbs(r.require("drm_dev_printk") + 4)
-        a.mark("case2")
-        a.emit(UltraKernelA64.ldAuto("ldrb", 0, 0, 0, 1))
-        a.b("join")
-        a.mark("case3")
-        a.bAbs(r.require("__drm_printfn_coredump") + 4)
-        // Command 5 releases an owned, never-executed staging allocation after
-        // a failed userspace copy. It requires no further staging allocation.
-        a.mark("release")
-        a.emit(UltraKernelA64.stpPre(17, XZR, SP, -2))
-        a.blAbs(r.require("module_memfree"))
-        a.emit(UltraKernelA64.ldpPost(17, XZR, SP, 2))
-        a.emit(UltraKernelA64.encodeMovImm(0, 0))
-        a.mark("join")
-        a.emit(UltraKernelA64.ldAuto("str", 0, 17, f.requireOffset(f.credSuid, UltraKernelStructOffsets.SUID), 8))
-        a.b("end")
-        a.mark("drain")
-        a.emit(UltraKernelA64.ldAuto("ldr", 13, 17, f.requireOffset(f.credEuid, UltraKernelStructOffsets.CRED_EUID), 4))
-        a.cbnz(13, "end", sf = false)
-        a.bAbs(r.require("__dev_printk") + 4)
-        a.mark("end")
+    // Standard requests are handled by the resident owner-v3 dispatcher injected
+    // by UltraKernelManagerClaimCarrier. Non-requests resume the native execve frame.
+    private fun die0(a: UltraKernelAsm, r: UltraKernelSymbolResolver, _f: UltraKernelFields) {
         a.bAbs(r.require("arm64_notify_die"))
     }
 
@@ -3174,7 +3116,7 @@ internal object UltraKernelBodies {
         a.emit(UltraKernelA64.pair("ldp", 0, 1, SP, 0, true, 2))
         a.blAbs(r.require("set_memory_x"))
         a.cbnz(0, "failed", sf = false)
-        // Keep BLR/LR at their original offsets: the SDK key locates metadata from LR.
+        // Keep BLR/LR at their original offsets for the executor and metadata placement ABI.
         a.b("publish")
         a.mark("execute")
         a.emit(UltraKernelA64.ldAuto("ldr", 10, SP, 0, 8))

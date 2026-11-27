@@ -107,7 +107,7 @@ class UltraSdkLogPolicyTest {
         val source = File(base, "UltraRuntimeClient.kt").readText()
         for (operation in listOf("installEnvironment", "uninstallEnvironment")) {
             val body = source.substringAfter("fun $operation(").substringBefore("\n    fun ")
-            assertTrue(operation, body.indexOf("UltraSdkLogging.invalidate()") in 0 until body.indexOf("val receipt = call("))
+            assertTrue(operation, body.indexOf("UltraSdkLogging.invalidate()") in 0 until body.indexOf("val receipt = callWithIdentity("))
         }
     }
 }

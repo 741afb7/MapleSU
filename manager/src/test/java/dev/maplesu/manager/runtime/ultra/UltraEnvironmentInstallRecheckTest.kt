@@ -19,7 +19,6 @@ class UltraEnvironmentInstallRecheckTest {
             val result = UltraEnvironmentInstaller.install(port, UltraEnvironmentInstaller.Intent.ReuseRunning,
                 UltraEnvironmentInstaller.Attachments(
                     whitelist = { error("failed observation must not authorize") },
-                    backup = { error("failed observation must not deploy") },
                 ))
             assertFalse("failed recheck must preserve $error", result.ok)
             assertEquals(error, result.sdkError)
@@ -42,9 +41,28 @@ class UltraEnvironmentInstallRecheckTest {
             }
             val result = UltraEnvironmentInstaller.install(port, UltraEnvironmentInstaller.Intent.ReuseRunning,
                 UltraEnvironmentInstaller.Attachments(
-                    whitelist = { error("unreadable state must not authorize") }, backup = { null }))
+                    whitelist = { error("unreadable state must not authorize") }))
             assertFalse(result.ok)
             assertEquals(0, submits)
         }
     }
+    @Test fun committedHotloadReplyLossIsPreservedAsUncertain() {
+        var submissions = 0
+        val port = object : UltraEnvironmentInstaller.InstallPort {
+            override fun environmentState(): NativeReceipt = error("explicit install")
+            override fun submitInstall(): NativeReceipt {
+                submissions++
+                return NativeReceipt.parse("""{"backend":"maplesu_ultra","operation":"install_maplesu_environment","ok":false,"sdkError":"HOTLOAD_REPLY_LOST","sdkErrorCode":-21002,"operationCompleted":true}""")!!
+            }
+        }
+        val result = UltraEnvironmentInstaller.install(port, UltraEnvironmentInstaller.Intent.InstallToBundledBuild,
+            UltraEnvironmentInstaller.Attachments(whitelist = { error("pending does not authorize") },
+                verify = { error("pending does not claim installed") }))
+        assertFalse(result.ok)
+        assertFalse(result.verified)
+        assertTrue(result.submissionUnknown)
+        assertEquals(-21002, result.sdkErrorCode)
+        assertEquals(1, submissions)
+    }
+
 }

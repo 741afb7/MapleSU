@@ -12,7 +12,6 @@
 #include <vector>
 #include <unistd.h>
 
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
 extern "C" void __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c(const char*);
 extern "C" int maplesu_environment_identity_start();
 extern "C" KModErr maplesu_prepare_su_exec_directory(const char*);
@@ -62,9 +61,7 @@ KModErr stage(helper_context& context, const char* name, KModErr result) {
     helper_log_error(&context, name, static_cast<int64_t>(result));
     return result;
 }
-void bind(const char* key) {
-    if (!kernel_module::maplesu_request_owner_mode())
-        __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
+void bind() {
     // SDK built-ins share the original m039 storage identity; helper metadata keeps its own ID.
     __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c("GEfQdKmhZSkuWJI2rs21JO39Xmp8XcZg");
 }
@@ -75,17 +72,29 @@ module::SdkVersion sdk_version() {
     return {version.major, version.minor, version.patch};
 }
 
-KModErr acquire_root(const char* key) {
-    bind(key);
-    return default_modules::module_root::set_current_root(true);
+KModErr select_worker(helper_context& context, std::optional<storage::WorkerScope>& worker,
+                     kernel_module::RequestAuthMode mode) {
+    if (worker) {
+        const auto closed = worker->close_checked();
+        worker.reset();
+        if (is_failed(closed)) return closed;
+    }
+    if (mode == kernel_module::RequestAuthMode::ManagerOwner && (getuid() || geteuid()))
+        return KModErr::ERR_MODULE_ROOT_KEY;
+    RETURN_IF_ERROR(kernel_module::maplesu_request_set_auth_mode(mode));
+    worker.emplace("GEfQdKmhZSkuWJI2rs21JO39Xmp8XcZg");
+    RETURN_IF_ERROR(worker->root());
+    std::string directory;
+    RETURN_IF_ERROR(storage::current_kernel_directory(directory));
+    return directory == std::string(context.env_dir) + "/" ? KModErr::OK : KModErr::ERR_MODULE_ROOT_KEY;
 }
 
-KModErr initialize_core(helper_context& context) {
+KModErr initialize_core(helper_context& context, std::optional<storage::WorkerScope>& worker) {
     using namespace default_modules;
-    bind(context.root_key);
+    bind();
     const bool helper = kernel_module::maplesu_request_auth_helper(
         kernel_module::maplesu_request_auth_state());
-    RETURN_IF_ERROR(stage(context, "config-root rc=", module_root::set_current_root(true)));
+    RETURN_IF_ERROR(stage(context, "config-root rc=", module_root::set_current_root(false)));
     std::string mode_text;
     RETURN_IF_ERROR(stage(context, "install.mode rc=", read_config(context, "install.mode", mode_text)));
     RETURN_IF_ERROR(stage(context, "allocation-reset rc=", reset_boot_allocation_state(context)));
@@ -125,7 +134,7 @@ KModErr initialize_core(helper_context& context) {
     KModErr oem = vendor_stage(0, "oem-mtk rc=", [] { return module_bypass_mtk_mkp::init(); });
     if (is_ok(oem)) oem = vendor_stage(1, "oem-oplus-guard rc=", [] { return module_bypass_oplus_secure_guard::init(); });
     if (is_ok(oem)) (void)vendor_stage(2, "oem-oplus-inte rc=", [] { return module_bypass_oplus_inte::init(); });
-    RETURN_IF_ERROR(stage(context, "root rc=", module_root::set_current_root(true)));
+    RETURN_IF_ERROR(stage(context, "root rc=", module_root::set_current_root(false)));
     storage::StorageContext storage_context;
     RETURN_IF_ERROR(stage(context, "root-storage rc=", storage::current_context(storage_context)));
     RETURN_IF_ERROR(stage(context, "root-environment rc=",
@@ -135,10 +144,14 @@ KModErr initialize_core(helper_context& context) {
     RETURN_IF_ERROR(stage(context, "su-storage rc=", storage::current_system_directory(system_directory)));
     const std::string su = system_directory + "su";
     RETURN_IF_ERROR(stage(context, "su-redirect rc=", module_su_redirect::init(su.c_str(), false)));
+    if (helper) RETURN_IF_ERROR(stage(context, "proc-worker rc=", select_worker(context, worker,
+        kernel_module::RequestAuthMode::ManagerOwner)));
     (void)stage(context, "proc-bootconfig rc=", module_proc_bootconfig::init());
     (void)stage(context, "proc-cmdline rc=", module_proc_cmdline::init());
+    if (helper) RETURN_IF_ERROR(stage(context, "selinux-worker rc=", select_worker(context, worker,
+        kernel_module::RequestAuthMode::EarlyHelper)));
     // Re-read configuration at the same boundary as the original native chain.
-    RETURN_IF_ERROR(stage(context, "selinux-config-root rc=", module_root::set_current_root(true)));
+    RETURN_IF_ERROR(stage(context, "selinux-config-root rc=", module_root::set_current_root(false)));
     RETURN_IF_ERROR(stage(context, "selinux-install.mode rc=", read_config(context, "install.mode", mode_text)));
     const auto mode = mode_text == "hotload" ? maplesu::sdk::InstallMode::HotLoad : maplesu::sdk::InstallMode::Boot;
     std::string exploit_text;
@@ -154,7 +167,11 @@ KModErr initialize_core(helper_context& context) {
     if (policy) helper_log_pair(&context, "policy detail: ", message);
     // A policy failure still executes native SELinux initialization.
     RETURN_IF_ERROR(stage(context, "selinux-native rc=", module_selinux::init(mode, exploit)));
+    if (helper) RETURN_IF_ERROR(stage(context, "tombstone-worker rc=", select_worker(context, worker,
+        kernel_module::RequestAuthMode::ManagerOwner)));
     (void)stage(context, "tombstone rc=", module_tombstone_purge::init(false, false));
+    if (helper) RETURN_IF_ERROR(stage(context, "identity-worker rc=", select_worker(context, worker,
+        kernel_module::RequestAuthMode::EarlyHelper)));
     helper_log_error(&context, "identity-launch rc=", maplesu_environment_identity_start());
     return KModErr::OK;
 }
@@ -164,7 +181,7 @@ KModErr initialize_modules(helper_context& context) {
     context.capability_error = HELPER_E_UNKNOWN;
     if (context.policy_ready) {
         std::vector<module_runtime::Record> results;
-        const auto batch = module_runtime::run_boot_batch(context.root_key, sdk_version(), results);
+        const auto batch = module_runtime::run_boot_batch(sdk_version(), results);
         stage(context, "module-batch rc=", batch.first_error);
         if (is_failed(batch.bootstrap_error))
             return stage(context, "module-batch-bootstrap rc=", batch.bootstrap_error);
@@ -182,16 +199,16 @@ KModErr initialize_modules(helper_context& context) {
     return KModErr::OK;
 }
 
-KModErr initialize(helper_context& context) {
-    RETURN_IF_ERROR(initialize_core(context));
+KModErr initialize(helper_context& context, std::optional<storage::WorkerScope>& worker) {
+    RETURN_IF_ERROR(initialize_core(context, worker));
     return initialize_modules(context);
 }
 
 int load_single(helper_context& context, const char* id) {
     storage::WorkerScope worker(id);
-    const KModErr rooted = worker.owner_mode() ? worker.root() : acquire_root(context.root_key);
+    const KModErr rooted = worker.root();
     if (is_failed(rooted)) { stage(context, "single-root rc=", rooted); return HELPER_EXIT_ENVIRONMENT; }
-    const auto result = module_runtime::run_single(context.root_key, id, sdk_version());
+    const auto result = module_runtime::run_single(id, sdk_version());
     helper_log_error(&context, "single-loader rc=", static_cast<int64_t>(result.loader));
     helper_log_error(&context, "single-main rc=", result.entry);
     if (result.skipped) helper_log(&context, "single-module skipped");

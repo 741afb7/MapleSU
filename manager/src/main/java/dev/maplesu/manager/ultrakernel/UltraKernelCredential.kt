@@ -1,27 +1,13 @@
 package dev.maplesu.manager.ultrakernel
 
-/**
- * The 48 byte device credential a Ultra kernel is bound to, plus everything that is derived from it.
- *
- * A Ultra kernel is not "patched" in the abstract: three of its 18 records carry the device secret.
- * The `panic` record *is* the 48 byte literal the dispatcher compares the caller's key against, and
- * two envelopes carry `/data/<credential[0:16]>/init`, the path the kernel execs to bring the
- * environment up. Baking one device's secret into a shipped asset is exactly why the released k22
- * only works on the device it was generated for: the running app sends whatever key it has, and the
- * kernel compares it with a constant nobody can change.
- *
- * This class is the single place that knows the credential's shape. It is Android-free on purpose so
- * the host tests and the (host-side) spec generator can share the same rules.
- *
- * Rules, all of which the kernel side depends on:
- *  - exactly [LENGTH] bytes;
- *  - ASCII `[A-Za-z0-9]` only (`MapleSuCredentialStore` generates from the same alphabet, and the
- *    Lite stdin protocol rejects anything else);
- *  - the init directory is the first [KEY16_LENGTH] characters, used verbatim.
+import java.security.SecureRandom
+
+/** Historical 48-byte credential for explicit legacy calls and older image restoration.
+ * Standard owner-v3 uses verified installation identity and DeploymentNamespace.
  */
 internal class UltraKernelCredential private constructor(private val secret: ByteArray) {
 
-    /** SDK parser_root_key_info: signed delta from the payload's BLR to its metadata. */
+    /** Historical base62 encoding: signed delta from the payload's BLR to its metadata. */
     val metadataDisplacement: Int?
         get() {
             val count = (alphabetIndex(secret[1]) - alphabetIndex(secret[0]) + 62) % 62
@@ -42,13 +28,13 @@ internal class UltraKernelCredential private constructor(private val secret: Byt
             return (if (negative) -magnitude else magnitude).toInt()
         }
 
-    /** Reject arbitrary Lite/random keys before they reach the SDK's direct kernel reads. */
+    /** Validate the historical locator before using it to identify an older image. */
     val sdkMetadataValid: Boolean
         get() = metadataDisplacement?.let {
             it != 0 && it % 4 == 0 && it.toLong() in -MAX_METADATA_DELTA..MAX_METADATA_DELTA
         } == true
 
-    /** Bind an existing random identity to the final placed metadata, keeping the unused bytes. */
+    /** Bind the legacy SDK locator to this generated image's actual metadata. */
     fun withMetadataDisplacement(displacement: Int): UltraKernelCredential {
         require(displacement != 0 && displacement % 4 == 0 &&
             displacement.toLong() in -MAX_METADATA_DELTA..MAX_METADATA_DELTA) {
@@ -129,6 +115,12 @@ internal class UltraKernelCredential private constructor(private val secret: Byt
         const val INIT_PATH_FIELD = 28
 
         fun initPathFor(key16: String): String = "/data/$key16/init"
+
+        fun create(): UltraKernelCredential {
+            val random = SecureRandom()
+            val bytes = ByteArray(LENGTH) { ALPHABET[random.nextInt(ALPHABET.length)].code.toByte() }
+            return try { of(bytes) } finally { bytes.fill(0) }
+        }
 
         fun isValid(credential: ByteArray): Boolean =
             credential.size == LENGTH && credential.all { isAlphanumeric(it) }

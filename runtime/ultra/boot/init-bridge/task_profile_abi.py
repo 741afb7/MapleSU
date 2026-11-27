@@ -97,7 +97,11 @@ def source_proof(selection_path, build_path, root, successor, build_config):
     build_command = build.get("command", [])
     if len(build_command) < 3 or build_command[:2] != ["make", "-C"]:
         fail("ACTUAL_BUILD_DIRECTORY")
-    actual_config_path = build_command[2].rstrip("/") + "/.config"
+    outputs = [token[2:] for token in build_command[3:] if token.startswith("O=")]
+    if len(outputs) > 1 or (outputs and (not outputs[0].startswith("/") or
+            "\\" in outputs[0] or ".." in outputs[0].split("/"))):
+        fail("ACTUAL_BUILD_DIRECTORY")
+    actual_config_path = (outputs[0] if outputs else build_command[2]).rstrip("/") + "/.config"
     retained_config = one(build.get("sources", []), lambda row: row.get("path") == actual_config_path, "build-config")
     if any(retained_config.get(key) != config_identity[key] for key in ("bytes", "sha256")):
         fail("BUILD_CONFIG")
@@ -330,6 +334,40 @@ def probe_source_main():
     print(json.dumps(package.file_identity(args.output.resolve()), indent=2))
 
 
+
+def stage_probe_main():
+    parser = argparse.ArgumentParser(description="Stage the same-flags TaskProfile native type probe without compiling.")
+    parser.add_argument("--module-source", type=Path, required=True)
+    args = parser.parse_args(sys.argv[2:])
+    root = args.module_source.resolve()
+    selection_path, runtime = root / "SOURCE-SELECTION.json", root / "selected-runtime.mk"
+    probe = root / "host/manager_task_state_native_facts.c"
+    backup = root / "SOURCE-SELECTION.before-native-probe.json"
+    if (not selection_path.is_file() or not runtime.is_file() or any(root.rglob("*.o")) or
+            any(root.rglob("*.ko")) or probe.exists() or backup.exists()):
+        fail("FRESH_NATIVE_PROBE_STAGE_REQUIRED")
+    selected_bytes, runtime_bytes = selection_path.read_bytes(), runtime.read_bytes()
+    selection = json.loads(selected_bytes)
+    if b"manager_task_state_native_facts" in runtime_bytes or selection.get("generatedTaskProfileNativeProbe"):
+        fail("NATIVE_PROBE_ALREADY_PRESENT")
+    backup.write_bytes(selected_bytes)
+    probe.write_bytes(NATIVE_PROBE_SOURCE.encode("ascii"))
+    runtime.write_bytes(runtime_bytes + (
+        "\n# Retain the actual task-state TU flags and final-link provenance.\n"
+        "maplesu_ultra_bridge-y += host/manager_task_state_native_facts.o\n"
+        "CFLAGS_host/manager_task_state_native_facts.o = $(CFLAGS_host/manager_task_state.o)\n").encode("ascii"))
+    receipt = dict(schema="maplesu-init-bridge-native-type-probe-stage/1",
+        generator=package.file_identity(Path(__file__).resolve()), source=package.file_identity(probe),
+        copiedActualCflagsFrom="CFLAGS_host/manager_task_state.o",
+        selectedRuntimeBefore=dict(bytes=len(runtime_bytes), sha256=package.digest(runtime_bytes)),
+        selectedRuntimeAfter=package.file_identity(runtime), originalSelection=package.file_identity(backup),
+        buildExecuted=False, testExecuted=False, deviceExecuted=False)
+    selection["generatedTaskProfileNativeProbe"] = receipt
+    selection_path.write_text(json.dumps(selection, indent=2) + "\n", encoding="utf-8")
+    (root / "TASK-PROFILE-NATIVE-PROBE.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(receipt))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("bridge", "task-object", "task-command", "source-selection", "build-receipt", "target-config", "build-config",
@@ -551,6 +589,8 @@ def legacy_api():
 if __name__ == "__main__":
     if sys.argv[1:2] == ["probe-source"]:
         probe_source_main()
+    elif sys.argv[1:2] == ["stage-probe"]:
+        stage_probe_main()
     elif sys.argv[1:2] == ["legacy"]:
         legacy_api().main(SimpleNamespace(**globals()))
     else:

@@ -5,8 +5,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class UltraMaintenanceRootReceiptTest {
-    @Test fun existingProviderConstructorRemainsAvailableToTheDeviceProbe() {
-        assertNotNull(UltraRuntimeClient::class.java.getConstructor(kotlin.jvm.functions.Function0::class.java))
+    @Test fun deviceProbeUsesTheKeylessConstructor() {
+        assertNotNull(UltraRuntimeClient::class.java.getConstructor())
     }
 
     @Test fun successfulScriptPreservesTheCommandReceiptEncoding() {

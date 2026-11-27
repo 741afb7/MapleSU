@@ -73,6 +73,15 @@ internal object UltraKernelResidentAbi {
         origins == managementCallbacks + uidCallbacks + taskCallbacks
     private val cfiConfigs = setOf("CONFIG_CFI", "CONFIG_CFI_CLANG", "CONFIG_CFI_ICALL_NORMALIZE_INTEGERS")
     private val sessionConfigKeys = setOf("CONFIG_COMPAT")
+    private val bootConfigKeys = setOf("CONFIG_KPROBES")
+    // arm64/lib assembly entry points have header declarations but no BTF FUNC.
+    // Their same-object declaration/relocation evidence is retained by Payload.
+    internal val assemblyFunctionSignatures = mapOf(
+        "__arch_copy_from_user" to "fi8:64(*v;*v;i8:64;)",
+        "__arch_copy_to_user" to "fi8:64(*v;*v;i8:64;)",
+        "memchr" to "f*v(*v;i4:16777248;i8:64;)",
+        "memmove" to "f*v(*v;*v;i8:64;)",
+        "strchr" to "f*i1:8(*i1:8;i4:16777248;)")
 
     fun verifyCfi(kernel: ByteArray, mode: String, normalizeIntegers: Boolean) {
         val config = targetConfig(kernel)
@@ -162,7 +171,8 @@ internal object UltraKernelResidentAbi {
     }
     fun verifyFunctions(kernel: ByteArray, symbols: UltraKernelSymbols,
                         functions: Map<String, String>, callbacks: Map<String, String>,
-                        origins: Map<String, CallbackOrigin> = emptyMap()) {
+                        origins: Map<String, CallbackOrigin> = emptyMap(),
+                        assemblyFunctions: Map<String, String> = emptyMap()) {
         require(functions.isNotEmpty() && callbacks.keys == fsnotifyCallbacks + origins.keys &&
             validOrigins(origins.keys)) {
             "ULTRA_KERNEL_RESIDENT_ABI_FUNCTION_MANIFEST"
@@ -172,9 +182,15 @@ internal object UltraKernelResidentAbi {
                 value.startsWith("*f") && value.length <= 65536 }) {
             "ULTRA_KERNEL_RESIDENT_ABI_FUNCTION_SIGNATURE"
         }
-        val actual = UltraKernelBtf.signatures(kernel, symbols, functions.keys, fsnotifyCallbacks)
+        require(assemblyFunctions.all { (name, signature) ->
+            assemblyFunctionSignatures[name] == signature && functions[name] == signature }) {
+            "ULTRA_KERNEL_RESIDENT_ASM_DECLARATION"
+        }
+        val actual = UltraKernelBtf.signatures(kernel, symbols, functions.keys, fsnotifyCallbacks, assemblyFunctions.keys)
             ?: error("ULTRA_KERNEL_RESIDENT_ABI_BTF_REQUIRED")
-        for ((key, expected) in functions.toSortedMap()) require(actual[key] == expected) {
+        val missing = functions.keys - actual.keys
+        if (missing.isNotEmpty()) verifyAssemblyFunctions(kernel, symbols, missing.associateWith(assemblyFunctions::getValue))
+        for ((key, expected) in functions.toSortedMap()) require((actual[key] ?: assemblyFunctions[key]) == expected) {
             "ULTRA_KERNEL_RESIDENT_ABI_FUNCTION_MISMATCH:$key"
         }
         for ((key, expected) in callbacks.filterKeys { it in fsnotifyCallbacks }.toSortedMap()) require(actual[key] == expected) {
@@ -234,6 +250,33 @@ internal object UltraKernelResidentAbi {
                 else -> error("ULTRA_KERNEL_MANAGEMENT_CALLBACK_ORIGIN:$key")
             }
             require(observed != null && observed == origin.signature) { "ULTRA_KERNEL_MANAGEMENT_CALLBACK_TYPE:$key" }
+        }
+    }
+
+    internal fun verifyAssemblyFunctions(kernel: ByteArray, symbols: UltraKernelSymbols,
+                                         functions: Map<String, String>) {
+        require(kernel.size == symbols.imageSize && functions.isNotEmpty() && functions.all { (name, signature) ->
+            assemblyFunctionSignatures[name] == signature }) { "ULTRA_KERNEL_RESIDENT_ASM_DECLARATION" }
+        val start = symbols.offsetsOf("_stext").distinct().singleOrNull()
+            ?: symbols.offsetsOf("_text").distinct().singleOrNull()
+            ?: error("ULTRA_KERNEL_RESIDENT_ASM_TEXT")
+        val end = symbols.offsetsOf("_etext").distinct().singleOrNull()
+            ?: error("ULTRA_KERNEL_RESIDENT_ASM_TEXT")
+        require(start >= 0 && start and 3 == 0 && end > start && end <= kernel.size) {
+            "ULTRA_KERNEL_RESIDENT_ASM_TEXT"
+        }
+        val targets = functions.mapValues { (name, _) ->
+            val at = symbols.offsetsOf(name).distinct().singleOrNull()
+                ?: error("ULTRA_KERNEL_RESIDENT_ASM_SYMBOL:$name")
+            require(at >= start && at and 3 == 0 && at.toLong() + 4 <= end && symbols.isSymbolStart(at)) {
+                "ULTRA_KERNEL_RESIDENT_ASM_RANGE:$name"
+            }
+            at
+        }
+        require(targets.values.toSet().size == targets.size) { "ULTRA_KERNEL_RESIDENT_ASM_ALIAS" }
+        val callers = UltraKernelBtf.directCallers(kernel, symbols, targets, start, end)
+        for (name in functions.keys) require(!callers[name].isNullOrEmpty()) {
+            "ULTRA_KERNEL_RESIDENT_ASM_CALLSITE:$name"
         }
     }
 
@@ -551,19 +594,35 @@ internal object UltraKernelResidentAbi {
     fun verifyCoreLifecycleMetadata(compiledFacts: Map<String, Int>, uidCompiledFacts: Map<String, Int>,
         compiledLayouts: Map<String, CompiledLayout>, localFunctionAbi: Map<String, String>,
         callbackParameters: Map<String, CallbackOrigin>, readerFenceAbi: Map<String, String>, complete: Boolean,
-        lifecycleRevision: Int, runtimeSuccessor: Boolean = false, runtimeLayoutSuccessor: Boolean = false) {
-        require(lifecycleRevision in setOf(1, 2) && (!runtimeSuccessor || lifecycleRevision == 2)) { "ULTRA_KERNEL_CORE_LIFECYCLE_REVISION" }
+        lifecycleRevision: Int, runtimeSuccessor: Boolean = false, runtimeLayoutSuccessor: Boolean = false,
+        currentSourceSelection: Boolean = false) {
+        require(lifecycleRevision in setOf(1, 2) && (!runtimeSuccessor || lifecycleRevision == 2) &&
+            (!currentSourceSelection || lifecycleRevision == 2 && runtimeSuccessor && runtimeLayoutSuccessor)) {
+            "ULTRA_KERNEL_CORE_LIFECYCLE_REVISION"
+        }
         val revisionTypes = if (lifecycleRevision == 1) coreLayoutTypes else coreLayoutTypes + mapOf(
             "readerFence" to ("msu_uid_reader_fence" to (coreLayoutTypes.getValue("readerFence").second + "retire")),
             "controller" to ("msu_uid_controller_slot" to listOf("state", "host", "fence", "quarantined_transaction",
                 "id", "revision", "closed", "shutdown_pending", "shutdown_complete", "fence_broken")),
             "candidate" to ("msu_uid_candidate_slot" to listOf("snapshot", "controller", "kernel_owner", "id", "session", "expected_revision")),
         )
-        val layoutTypes = revisionTypes + if (runtimeSuccessor) mapOf(
+        val layoutTypes = revisionTypes + (if (runtimeSuccessor) mapOf(
             "service" to ("msu_runtime_service" to listOf("operation", "host", "lifecycle_owner", "id", "entries", "entry_count",
                 "operations", "helper_sessions", "kind", "reserved", "active", "aborting", "discarded", "factory_owned", "sealed")),
             "session" to ("msu_management_session" to listOf("operation", "cleanup", "task", "mm", "original", "active", "helper",
                 "service", "id", "exec_id", "principal_uid", "epoch", "references", "attached")),
+        ) else emptyMap()) + if (currentSourceSelection) mapOf(
+            "session" to ("msu_management_session" to listOf("operation", "cleanup", "task", "mm", "original", "active", "helper",
+                "service", "legacy_gateway", "id", "exec_id", "principal_uid", "epoch", "references", "attached", "legacy_active",
+                "legacy_opened", "root")),
+            "publication" to ("msu_publication" to listOf("operation", "cleanup", "session", "service", "control", "members", "id",
+                "entry", "gate", "payload", "epoch", "count", "references", "original", "branch", "private_return_owners",
+                "private_return_pool", "private_return_count", "private_return_error", "private_return_failures", "target_module",
+                "private_actor_module", "private_actor_target", "private_actor_allocation", "private_actor_kcfi", "private_actor_attached",
+                "reserved", "canceled", "ever_exposed", "enabled", "entry_restored", "retire_requested", "payload_released", "quarantined",
+                "entry_drained", "gate_drained", "native_text_owned", "legacy", "root")),
+            "sharedBool" to ("msu_shared_bool" to listOf("operation", "creator", "service", "address", "id", "published_address", "epoch",
+                "references", "reserved", "creator_reference", "quarantined", "legacy", "root")),
         ) else emptyMap()
         val functionNames = coreFunctions + if (lifecycleRevision == 2) setOf("msu_management_discard_unpublished",
             "msu_uid_gateway_prepare_kernel", "msu_uid_gateway_commit_kernel", "msu_uid_gateway_cancel_kernel",
@@ -599,9 +658,9 @@ internal object UltraKernelResidentAbi {
                 val alignment = facts.getValue(prefix + "Align")
                 require(bytes > 0 && bytes == layout.bytes && alignment > 0 && alignment and (alignment - 1) == 0 &&
                     bytes % alignment == 0 && layout.members.keys == type.second.toSet()) { "ULTRA_KERNEL_CORE_LAYOUT:$prefix" }
-                // CORE selects fact members before the later runtime source adds legacy session state.
-                // Its full BTF signature still includes those exact runtime members.
-                val fullMembers = if (runtimeLayoutSuccessor && prefix == "session") {
+                // Historical CORE facts predate the legacy session fields in the runtime BTF.
+                // Current-source facts contain the complete measured structure.
+                val fullMembers = if (!currentSourceSelection && runtimeLayoutSuccessor && prefix == "session") {
                     val service = layout.members.getValue("service")
                     val id = layout.members.getValue("id")
                     val attached = layout.members.getValue("attached")
@@ -841,7 +900,8 @@ internal object UltraKernelResidentAbi {
                 }
             val mutex = UltraKernelBtf.typeSignature(kernel, symbols, "mutex")
             require(mutex != null && mutex.startsWith("smutex:") &&
-                UltraKernelBtf.variableSignatures(kernel, symbols, setOf("text_mutex"))?.get("text_mutex") == mutex) {
+                UltraKernelBtf.dataObjectSizes(kernel, symbols, mapOf("text_mutex" to mutex))?.get("text_mutex") ==
+                    layout.fields.getValue("mutex.__size").widthBytes.toLong()) {
                 "ULTRA_KERNEL_MANAGEMENT_ABI_TEXT_MUTEX"
             }
         }
@@ -988,7 +1048,9 @@ internal object UltraKernelResidentAbi {
             13 to "path.dentry", 17 to "file_operations.write", 21 to "inode.i_sb",
             25 to "super_block.s_magic", 29 to "dentry.d_parent", 31 to "dentry.d_name",
             35 to "qstr.len", 37 to "qstr.name")
-        verifySupplemental(kernel, symbols, words, facts, 40, sizes, members, emptySet(), emptySet(), enabled, bound)
+        val alignments = facts.typeAlignments.mapKeys { (name, _) -> procattrLayoutTypes[name]?.first ?: name }
+        verifySupplemental(kernel, symbols, words, facts.copy(typeAlignments = alignments), 40, sizes, members,
+            emptySet(), emptySet(), enabled, bound)
         if (!enabled) return
         require(facts.config.keys.containsAll(procattrConfigKeys) &&
             (words[2] == 1) == procattrConfigKeys.all { facts.config[it] == "y" }) {
@@ -1170,7 +1232,7 @@ internal object UltraKernelResidentAbi {
                 key = line.removePrefix("# ").removeSuffix(" is not set"); value = "n"
             } else continue
             if (key in configs || key in cfiConfigs || key in managementConfigKeys || key in uidConfigKeys ||
-                key in procattrConfigKeys || key in taskConfigKeys || key in sessionConfigKeys) {
+                key in procattrConfigKeys || key in taskConfigKeys || key in sessionConfigKeys || key in bootConfigKeys) {
                 require(value in setOf("y", "n") && result.put(key, value) == null) {
                     "ULTRA_KERNEL_RESIDENT_ABI_CONFIG_VALUE:$key"
                 }
@@ -1178,7 +1240,7 @@ internal object UltraKernelResidentAbi {
         }
         // In the target's embedded complete .config, an undefined CONFIG_* is
         // disabled, exactly as IS_ENABLED() in the compiled payload observes.
-        return (configs + cfiConfigs + managementConfigKeys + uidConfigKeys + procattrConfigKeys + taskConfigKeys + sessionConfigKeys)
+        return (configs + cfiConfigs + managementConfigKeys + uidConfigKeys + procattrConfigKeys + taskConfigKeys + sessionConfigKeys + bootConfigKeys)
             .associateWith { result[it] ?: "n" }
     }
 }

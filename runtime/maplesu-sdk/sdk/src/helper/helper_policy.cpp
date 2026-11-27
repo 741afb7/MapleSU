@@ -2,12 +2,12 @@
 
 // The maintained loader validates the generated filename, size and ELF note
 // before dlopen; it retains the DSO after entering the policy initializer.
-extern "C" int maplesu_environment_policy_load(const char*);
+extern "C" int maplesu_environment_policy_load();
 
 int helper_policy_start(helper_context* context, char* message, helper_u32 capacity) {
     context->policy_ready = 0;
     if (capacity) message[0] = 0;
-    const int result = maplesu_environment_policy_load(context->root_key);
+    const int result = maplesu_environment_policy_load();
     if (result != 0) {
         helper_u32 length = 0;
         helper_append(message, capacity, &length, "paired loader stage=");

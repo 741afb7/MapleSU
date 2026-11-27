@@ -178,6 +178,11 @@ fun ThemeStoreScreen(localOnly: Boolean = false, storeViewModel: ThemeStoreViewM
     var sourceDraft by rememberSaveable { mutableStateOf(state.catalog.id) }
     var customDraft by rememberSaveable { mutableStateOf(prefs.getString(ThemeStoreSource.CUSTOM_URL,"").orEmpty()) }
     val file = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(operations::prepare) }
+    fun requestDownload(theme: StoreTheme) {
+        val external = ThemeStore.browserDownload(theme, mode)
+        if (external == null) viewModel.download(theme)
+        else runCatching { uriHandler.openUri(external) }.onFailure(operations::error)
+    }
     val all = if (localOnly) state.local else state.items
     val list = remember(all, query, type, source, author, sorted) {
         all.filter { (type.isEmpty() || it.type == type) && (source.isEmpty() ||
@@ -241,9 +246,8 @@ fun ThemeStoreScreen(localOnly: Boolean = false, storeViewModel: ThemeStoreViewM
                     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),horizontalArrangement = Arrangement.End) {
                         val downloaded = state.local.any { viewModel.repository.samePackage(it, theme) }
                         ThemeButton(if (downloaded) stringResource(R.string.theme_apply) else stringResource(R.string.theme_download), state.downloading == null) {
-                            if (downloaded) operations.prepare(Uri.fromFile(viewModel.repository.packageFile(theme)), viewModel.repository.identity(theme))
-                            else if (mode == "compat") runCatching { uriHandler.openUri(theme.download) }.onFailure { operations.error(it) }
-                            else viewModel.download(theme)
+                            if (downloaded) operations.prepare(Uri.fromFile(viewModel.repository.packageFile(theme)), viewModel.repository.identity(theme), theme.metadata())
+                            else requestDownload(theme)
                         }
                         if (localOnly) ThemeButton(stringResource(R.string.theme_delete)) { deletingId = viewModel.repository.identity(theme) }
                     }
@@ -262,7 +266,7 @@ fun ThemeStoreScreen(localOnly: Boolean = false, storeViewModel: ThemeStoreViewM
                 }
             }) {
             Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                listOf("maplesu","finasu","custom").forEach { id ->
+                listOf("maplesu","finasu","sukisu","custom").forEach { id ->
                     ThemeChoice(catalogSourceLabel(id),sourceDraft == id) { sourceDraft = id }
                 }
             }
@@ -271,7 +275,8 @@ fun ThemeStoreScreen(localOnly: Boolean = false, storeViewModel: ThemeStoreViewM
                 ThemeText(stringResource(if (customDraft.isNotBlank() && selectedSource == null)
                     R.string.theme_catalog_url_invalid else R.string.theme_catalog_url_hint),secondary=true)
             } else ThemeText(stringResource(if (sourceDraft == "maplesu")
-                R.string.theme_catalog_maple_summary else R.string.theme_catalog_fina_summary),secondary=true)
+                R.string.theme_catalog_maple_summary else if (sourceDraft == "sukisu")
+                R.string.theme_catalog_sukisu_summary else R.string.theme_catalog_fina_summary),secondary=true)
         }
     }
     if (intro || chooseMode) ThemeDialog(stringResource(R.string.theme_download_mode_title), { intro = false; chooseMode = false; modeDraft = mode }, onConfirm = {
@@ -297,8 +302,8 @@ fun ThemeStoreScreen(localOnly: Boolean = false, storeViewModel: ThemeStoreViewM
     selectedId?.let { id -> all.firstOrNull { viewModel.repository.identity(it) == id }?.let { theme ->
         ThemeDialog(theme.name, { selectedId = null }, confirm = if (state.local.any { viewModel.repository.samePackage(it,theme) }) stringResource(R.string.theme_apply) else stringResource(R.string.theme_download), onConfirm = {
             selectedId = null
-            if (state.local.any { viewModel.repository.samePackage(it,theme) }) operations.prepare(Uri.fromFile(viewModel.repository.packageFile(theme)), viewModel.repository.identity(theme))
-            else if (mode == "compat") runCatching { uriHandler.openUri(theme.download) }.onFailure { operations.error(it) } else viewModel.download(theme)
+            if (state.local.any { viewModel.repository.samePackage(it,theme) }) operations.prepare(Uri.fromFile(viewModel.repository.packageFile(theme)), viewModel.repository.identity(theme), theme.metadata())
+            else requestDownload(theme)
         }) { ThemeText("${theme.author} · ${theme.version} · ${theme.type}"); ThemeText(theme.description) }
     } }
     deletingId?.let { id -> state.local.firstOrNull { viewModel.repository.identity(it) == id }?.let { theme ->
@@ -315,7 +320,7 @@ fun ThemeStoreScreen(localOnly: Boolean = false, storeViewModel: ThemeStoreViewM
     }
     state.completed?.let { theme ->
         ThemeDialog(stringResource(R.string.theme_download_done), viewModel::dismissCompleted, confirm = stringResource(R.string.theme_apply), onConfirm = {
-            viewModel.dismissCompleted(); operations.prepare(Uri.fromFile(viewModel.repository.packageFile(theme)), viewModel.repository.identity(theme))
+            viewModel.dismissCompleted(); operations.prepare(Uri.fromFile(viewModel.repository.packageFile(theme)), viewModel.repository.identity(theme), theme.metadata())
         }) {
             Column(Modifier.fillMaxWidth().testTag("theme-download-result"),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                 ThemeText(theme.name)
@@ -350,6 +355,7 @@ private fun ThemeStoreAction(icon: ImageVector, label: String, enabled: Boolean 
 private fun catalogSourceLabel(id: String): String = when (id) {
     "maplesu" -> "MapleSU"
     "finasu" -> "FinaSU"
+    "sukisu" -> "SukiSU / Nova"
     else -> stringResource(R.string.theme_catalog_custom)
 }
 

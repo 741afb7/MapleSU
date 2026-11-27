@@ -410,13 +410,24 @@ class InstallerPartitionService : RootService() {
             }
         }
 
-        override fun refreshUltraAuthorization(rootKey: String): String = callerVerifier.withCallingManager {
-            check(dev.maplesu.manager.runtime.ultra.UltraRecoveryKey.isValidKeyFormat(rootKey))
-            val fingerprint = java.security.MessageDigest.getInstance("SHA-256")
-                .digest(rootKey.toByteArray(Charsets.US_ASCII)).joinToString("") { "%02x".format(it.toInt() and 255) }
-            authorizationRestore.ensure(dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.currentBootId(), fingerprint) {
-                if (File(dev.maplesu.manager.runtime.ultra.UltraIdentityBroker.DISABLED).exists()) return@ensure "SUSPENDED"
-                val receipt = dev.maplesu.manager.runtime.ultra.UltraRuntimeClient { rootKey }.refreshSuAuthList()
+        override fun refreshUltraAuthorization(): String = callerVerifier.withCallingManager {
+            fun suspended(): Boolean = try {
+                dev.maplesu.manager.runtime.ultra.UltraEnvironmentRemoval.isSuspended(this@InstallerPartitionService)
+            } catch (error: Exception) {
+                authorizationRestore.invalidate()
+                throw IllegalStateException("ULTRA_REMOVAL_STATE_READ_FAILED", error)
+            }
+            if (suspended()) {
+                authorizationRestore.invalidate()
+                return@withCallingManager "SUSPENDED"
+            }
+            val client = dev.maplesu.manager.runtime.ultra.UltraRuntimeClient()
+            val owner = client.queryManagerOwnerIdentity().identity
+                ?: return@withCallingManager "IDENTITY_PENDING"
+            val identity = "${owner.fullUid}:${owner.epoch}:${owner.hostInstance}"
+            authorizationRestore.ensure(dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.currentBootId(), identity,
+                ::suspended) {
+                val receipt = client.refreshSuAuthList()
                 if (receipt.succeeded) "OK" else receipt.sdkError.takeUnless { it == "OK" } ?: "INVALID_RECEIPT"
             }
         }

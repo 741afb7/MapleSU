@@ -4,6 +4,6 @@
 #include <string>
 
 namespace skroot_env {
-KModErr get_root(const char* root_key);
-KModErr run_root_cmd(const char* root_key, const char* cmd, std::string& out_result);
+KModErr get_root();
+KModErr run_root_cmd(const char* cmd, std::string& out_result);
 }  // namespace skroot_env

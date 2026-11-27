@@ -41,6 +41,38 @@ class UltraInitBootCatalogTest {
         assertEquals(UltraKernelSpec.sha256(exactBundle.getValue("target-boot.img")), exact.targetBootSha256)
     }
 
+    @Test fun flowCustomReleaseRetainsTheRealTargetCatalogResolver() {
+        val exactBundle = bundle()
+        val source = target(exactBundle)
+        val before = source.readBytes()
+        assertEquals("", dev.maplesu.image.KernelIdentity.kmiOf(UltraKernelPlan.readKernel(source)))
+        val selected = requireNotNull(UltraKernelFlow.artifactForKernelBoot(temporary.newFolder(),
+            opener(catalog(listOf(exactBundle))), source))
+        assertFalse(selected.isKmiComponent)
+        assertEquals(UltraKernelSpec.sha256(source), selected.targetBootSha256)
+        assertEquals(UltraKernelSpec.sha256(UltraKernelPlan.readKernel(source)), selected.kernelSha256)
+        assertArrayEquals(before, source.readBytes())
+    }
+
+    @Test fun flowStandardKmiKeepsComponentSelectionWithoutReadingTargetTemplates() {
+        val source = target(bundle())
+        val bytes = source.readBytes()
+        val banner = 4096 + 128
+        java.util.Arrays.fill(bytes, banner, banner + 384, 0.toByte())
+        "Linux version 6.6.1-android15-1-fixture (fixture)\n".toByteArray().copyInto(bytes, banner)
+        source.writeBytes(bytes)
+        val assets = kmiCatalog(listOf(kmiBundle()))
+        val reads = mutableListOf<String>()
+        val open = opener(assets)
+        val selected = requireNotNull(UltraKernelFlow.artifactForKernelBoot(temporary.newFolder(), {
+            reads += it; open(it)
+        }, source))
+        assertTrue(selected.isKmiComponent)
+        assertEquals("android15-6.6", selected.componentKmi)
+        assertFalse(reads.contains("ultra-init-bridge/catalog.json"))
+        assertArrayEquals(bytes, source.readBytes())
+    }
+
     @Test fun missingPackagedKmiManifestDoesNotReusePrivateCache() {
         val assets = kmiCatalog(listOf(kmiBundle()))
         val files = temporary.newFolder()

@@ -31,8 +31,8 @@ fun ThemeBackground(page: Int, legacy: @Composable () -> Unit, content: @Composa
     var failed by remember(video?.absolutePath) { mutableStateOf(false) }
     val dark = isInDarkTheme()
     val dim = LocalThemeWallpaperStyle.current?.dim ?: if (j.optBoolean("isDualBackgroundDimEnabled")) j.optDouble(if (dark) "backgroundNightDim" else "backgroundDayDim",.2).toFloat()
-        else prefs.getFloat("wallpaper_dim",.2f)
-    val blur = prefs.getFloat("wallpaper_blur",0f)
+        else if (j.has("sukisu.original")) j.optDouble("backgroundDim",0.0).toFloat() else prefs.getFloat("wallpaper_dim",.2f)
+    val blur = if (j.has("sukisu.original")) j.optDouble("backgroundBlur",0.0).toFloat() else prefs.getFloat("wallpaper_blur",0f)
     val imageOrder = remember { java.util.concurrent.atomic.AtomicInteger() }
     val imageLayer = remember(frame.photo) { imageOrder.incrementAndGet().toFloat() }
     Box(Modifier.fillMaxSize()) {

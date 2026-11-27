@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "maplesu/compat/native_module_abi.h"
 #include <cstdint>
 #include <cstring>
@@ -18,7 +18,7 @@ inline char maplesu_module_name_5d1745f8a8fb4814fb0dbb5aab27bbca[1024] = {0};
     extern "C" void Error_Missing_MapleSU_Module_Name__Please_define_MAPLESU_MODULE_NAME() { \
         strncpy(maplesu_module_name_5d1745f8a8fb4814fb0dbb5aab27bbca, MAPLESU_MODULE_NAME_TAG_BEGIN val MAPLESU_MODULE_NAME_TAG_END, sizeof(maplesu_module_name_5d1745f8a8fb4814fb0dbb5aab27bbca) - 1); \
     }; \
-    extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) int MAPLESU_MODULE_ENTRY_NAME(const char* root_key, const char* module_private_dir) { \
+    extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) int MAPLESU_MODULE_ENTRY_NAME(const char* module_private_dir) { \
         extern void Error_Missing_MapleSU_Module_Name__Please_define_MAPLESU_MODULE_NAME(); \
         extern void Error_Missing_MapleSU_Module_Version__Please_define_MAPLESU_MODULE_VERSION(); \
         extern void Error_Missing_MapleSU_Module_Descriptor__Please_define_MAPLESU_MODULE_DESC(); \
@@ -37,9 +37,7 @@ inline char maplesu_module_name_5d1745f8a8fb4814fb0dbb5aab27bbca[1024] = {0};
         if(strlen(maplesu_module_update_json_7310fa0a06d95799b3f9beaf60e26e85) == 0) printf(""); \
         extern void __compile_save_min_support_sdk_ver(void); \
         __compile_save_min_support_sdk_ver(); \
-        extern void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*); \
-        __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key); \
-        return maplesu_module_main(root_key, module_private_dir); \
+        return maplesu_module_main(module_private_dir); \
     }
 
 inline char maplesu_module_ver_61432c728da7c34d7fd698461a36a421[1024] = {0};
@@ -101,11 +99,9 @@ inline char maplesu_module_on_install_enable_flag_wnx27u34cpuazxit73f52qkylnq89f
         strncpy(maplesu_module_on_install_enable_flag_wnx27u34cpuazxit73f52qkylnq89f3s, MAPLESU_MODULE_INSTALL_TAG_BEGIN MAPLESU_MODULE_INSTALL_TAG_END, sizeof(maplesu_module_on_install_enable_flag_wnx27u34cpuazxit73f52qkylnq89f3s) - 1); \
         return 0; \
     }();\
-    extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) void MAPLESU_MODULE_INSTALL_NAME(const char* root_key, const char* module_private_dir, void (*cb)(const char* reason)) { \
+    extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) void MAPLESU_MODULE_INSTALL_NAME(const char* module_private_dir, void (*cb)(const char* reason)) { \
         if(!maplesu_module_on_install_func_jngvokk4mlkkwbg92nj1u7vkhyjan2qj) return;\
-        extern void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*); \
-        __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key); \
-        cb(maplesu_module_on_install_func_jngvokk4mlkkwbg92nj1u7vkhyjan2qj(root_key, module_private_dir).c_str()); \
+        cb(maplesu_module_on_install_func_jngvokk4mlkkwbg92nj1u7vkhyjan2qj(module_private_dir).c_str()); \
     };
 
 inline decltype(&module_on_uninstall) maplesu_module_on_uninstall_func_lv5biogiKlWBDvrs1clgywqMPwmqXkry = nullptr;
@@ -116,22 +112,17 @@ inline char maplesu_module_on_uninstall_enable_flag_ngln4z5zaku6lil4vrz2jtpoecb6
         strncpy(maplesu_module_on_uninstall_enable_flag_ngln4z5zaku6lil4vrz2jtpoecb64avp, MAPLESU_MODULE_UNINSTALL_TAG_BEGIN MAPLESU_MODULE_UNINSTALL_TAG_END, sizeof(maplesu_module_on_uninstall_enable_flag_ngln4z5zaku6lil4vrz2jtpoecb64avp) - 1); \
         return 0; \
     }();\
-    extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) void MAPLESU_MODULE_UNINSTALL_NAME(const char* root_key, const char* module_private_dir) { \
+    extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) void MAPLESU_MODULE_UNINSTALL_NAME(const char* module_private_dir) { \
         if(!maplesu_module_on_uninstall_func_lv5biogiKlWBDvrs1clgywqMPwmqXkry) return;\
-        extern void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*); \
-        __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key); \
-        maplesu_module_on_uninstall_func_lv5biogiKlWBDvrs1clgywqMPwmqXkry(root_key, module_private_dir); \
+        maplesu_module_on_uninstall_func_lv5biogiKlWBDvrs1clgywqMPwmqXkry(module_private_dir); \
     };
 
 
-#ifndef FOLDER_HEAD_ROOT_KEY_LEN
-#define FOLDER_HEAD_ROOT_KEY_LEN 16
-#endif
 
-extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) void MAPLESU_MODULE_WEBUI_NAME(const char* root_key, const char* module_private_dir, const char* module_webroot_dir, const char* mod_id32, int port, KModErr& err) {
+extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) void MAPLESU_MODULE_WEBUI_NAME(const char* module_private_dir, const char* module_webroot_dir, const char* mod_id32, int port, KModErr& err) {
     if(strlen(maplesu_web_ui_enable_flag_e0c73f6473a0e653be67875a3cf23a53) == 0) printf("");
-    KModErr unsafe_module_start_web_ui_server(const char* root_key, const char* module_private_dir, const char* module_webroot_dir, const char* mod_id32, kernel_module::WebUIHttpHandler* handler, int port);
-    err = unsafe_module_start_web_ui_server(root_key, module_private_dir, module_webroot_dir, mod_id32, maplesu_web_ui_handler_6f9d89cc84c2ea1bf7364fc1afda99b5, port);
+    KModErr unsafe_module_start_web_ui_server(const char* module_private_dir, const char* module_webroot_dir, const char* mod_id32, kernel_module::WebUIHttpHandler* handler, int port);
+    err = unsafe_module_start_web_ui_server(module_private_dir, module_webroot_dir, mod_id32, maplesu_web_ui_handler_6f9d89cc84c2ea1bf7364fc1afda99b5, port);
 }
 
 extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) void MAPLESU_MODULE_LAST_SERVER_PORT_NAME(int& out_port, KModErr& err) {
@@ -147,9 +138,7 @@ extern "C" __attribute__((visibility("default"))) __attribute__((used, weak)) vo
 }
 
 #ifdef KERNEL_MODULE_KIT_TEST
-    extern "C" int fake_maplesu_module_main(const char* root_key) {
-        extern void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
-        __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
+    extern "C" int fake_maplesu_module_main() {
         extern void __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c(const char*);
         __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c("u5BcRRTUwMqU6A6iLkG90jTEq8EXShrE");
         return 0;

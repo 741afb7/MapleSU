@@ -505,76 +505,44 @@ class MapleSuModuleBackend(
     }
 }
 
-/**
- * The user-supplied Ultra root key.
- *
- * MapleSU Ultra's Manager asks the user for this key (`MainActivity.showBootModeInputDlg` /
- * `showHotloadModeInputDlg`) and stores it under the settings name `rootKey`; in hotload mode
- * it can instead be read from the `ROOT_KEY=` line of the vendor patch package at
- * `/sdcard/1.h`. MapleSU keeps the same name and the same "user provides it" rule, and never
- * generates or guesses a key: an absent key is a recorded condition, not an error to work
- * around.
- */
+/** Explicit environment removal survives reboot; normal requests use installation identity. */
 object UltraRootKeyStore {
     private const val PREFS = "maplesu-ultra"
-    private const val KEY = "rootKey"
-    /** Legacy local suspension. Migrate it back so the manager can install the environment. */
-    private const val KEY_SUSPENDED = "rootKeySuspended"
     private const val REMOVAL = "environmentRemoval"
 
-    @Synchronized
-    fun read(context: Context): String? {
+    /** Retire former local secrets without activating or pairing an environment. */
+    fun clearLegacy(context: Context) {
         val prefs = context.ultraPreferences(PREFS, Context.MODE_PRIVATE)
-        if (prefs.getString(REMOVAL, null) == "permanent") return null
-        dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).activateAfterBoot()
-        val current = prefs.getString(KEY, null)?.trim()?.takeIf { it.isNotEmpty() }
-        if (current != null) return current
-        val parked = prefs.getString(KEY_SUSPENDED, null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        check(prefs.edit().putString(KEY, parked).remove(KEY_SUSPENDED).commit()) { "ULTRA_KEY_STORE_FAILED" }
-        return parked
+        val names = arrayOf("rootKey", "rootKeySuspended", "pendingKernelCredential", "previousInstallCredential",
+            "keyVerified", "keyVerifiedFor", "installCredentialTaskId", "installCredentialForKey",
+            "installCredentialSourceBoot", "installCredentialProvenance", "installAuthorizationObservedForKey")
+        if (names.any(prefs::contains)) {
+            val editor = prefs.edit()
+            names.forEach(editor::remove)
+            check(editor.commit()) { "ULTRA_LEGACY_STORAGE_CLEANUP_FAILED" }
+        }
+        val exports = context.ultraPreferences("maplesu-ultra-image-exports", Context.MODE_PRIVATE)
+        if (exports.all.isNotEmpty()) check(exports.edit().clear().commit()) { "ULTRA_LEGACY_STORAGE_CLEANUP_FAILED" }
     }
 
-    /** Capture already-loaded preference fields without activating or persisting credentials. */
     internal fun captureOwnerMarker(context: Context): () -> Boolean {
         val prefs = context.ultraPreferences(PREFS, Context.MODE_PRIVATE)
-        val key = prefs.getString(KEY, null)
-        val suspended = prefs.getString(KEY_SUSPENDED, null)
-        val removal = prefs.getString(REMOVAL, null)
-        val pendingName = dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore.RECORD
-        val previousName = dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore.PREVIOUS_RECORD
-        val pending = prefs.getString(pendingName, null)
-        val previous = prefs.getString(previousName, null)
-        return {
-            prefs.getString(KEY, null) == key && prefs.getString(KEY_SUSPENDED, null) == suspended &&
-                prefs.getString(REMOVAL, null) == removal && prefs.getString(pendingName, null) == pending &&
-                prefs.getString(previousName, null) == previous
-        }
+        val names = arrayOf(REMOVAL, "rootKey", "rootKeySuspended", "keyVerified", "keyVerifiedFor",
+            "pendingKernelCredential", "previousInstallCredential")
+        val captured = names.associateWith { prefs.all[it] }
+        return { names.all { prefs.all[it] == captured[it] } }
     }
 
-    @Synchronized
-    fun write(context: Context, value: String?) {
-        context.ultraPreferences(PREFS, Context.MODE_PRIVATE).edit().apply {
-            remove(dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore.RECORD)
-            remove(dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore.PREVIOUS_RECORD)
-            if (value.isNullOrBlank()) remove(KEY) else {
-                putString(KEY, value.trim())
-                remove(KEY_SUSPENDED)
-                remove(REMOVAL)
-            }
-        }.apply()
-    }
-
-    /** An explicit uninstall must survive reboot without startup/self-heal reinstalling it. */
+    /** An explicit uninstall must survive reboot without startup reinstalling it. */
     fun isSuspended(context: Context): Boolean = context
         .ultraPreferences(PREFS, Context.MODE_PRIVATE)
         .getString(REMOVAL, null) != null
 
     @Synchronized
     fun recordRemoval(context: Context, permanent: Boolean) {
+        clearLegacy(context)
         check(context.ultraPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(REMOVAL, if (permanent) "permanent" else "temporary")
-            .remove(dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore.RECORD)
-            .remove(dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore.PREVIOUS_RECORD)
             .commit()) { "ULTRA_REMOVAL_STORE_FAILED" }
     }
 
@@ -582,8 +550,6 @@ object UltraRootKeyStore {
         check(context.ultraPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .remove(REMOVAL).commit()) { "ULTRA_REMOVAL_STORE_FAILED" }
     }
-
-
 }
 
 /**

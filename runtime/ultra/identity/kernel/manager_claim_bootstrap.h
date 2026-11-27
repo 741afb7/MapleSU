@@ -24,7 +24,7 @@ _Static_assert(__builtin_offsetof(struct msu_manager_claim_anchor, binding) == 5
 
 /* New support accepts resident v2/v3/v4 anchors. The original v1 anchor and
  * bootstrap asset bytes retain their existing compatibility path separately.
- * Legacy Key/v2 requests are dispatched by the retained host.
+ * The host accepts the current-task v3 protocol; historical Key claims are ignored.
  * Both arguments come from the bound exec entry; name is kernel-owned.
  * A v3 anchor is initialized by msu_manager_resident_boot after basic initcalls;
  * requests dispatch READY only. V4 explicitly selects deployment binding/config

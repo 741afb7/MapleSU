@@ -274,12 +274,8 @@ object KsuCli {
      * 所以占位 shell 同样不会被缓存。
      */
     private fun obtain(globalMnt: Boolean): Shell {
-        // 🛑 Ultra 环境：不建任何 root shell。`MapleSuCommandExecutor` 启动的
-        // `libmaplesu_runtime.so` 在 MapleSU Ultra 内核上会触发系统重启（2026-10-29 实测：
-        // 设置页「配对 key」= `MapleSuCredentialStore.pair` → openShell → 系统重启）。
-        // 这里返回占位 shell：所有 `KsuCli` 命令（launchApp / forceStop / 诊断…）只会
-        // 失败返回，不抛异常、不起进程；既有的"未授权"分支也就自然成立。
-        // 判据是 [dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe] 的缓存，不做 JNI。
+        // Ultra 的执行由免 Key SDK 路由负责；KsuCli 仅返回占位 shell。
+        // 这里读取 UltraEnvironmentProbe 缓存，不发 JNI 请求或启动探测进程。
         if (runCatching { dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.usesUltraBackend(ksuApp) }
                 .getOrDefault(false)) {
             return DeadShell
@@ -964,7 +960,6 @@ fun installBoot(
         directRequest = directRequest.copy(defaultKernel = variantId == "generated" ||
             variantId == dev.maplesu.manager.ultrakernel.UltraKernelSpecGenerator().recipeId)
     }
-    var kernelCredentialToPreserve: dev.maplesu.manager.ultrakernel.UltraKernelCredential? = null
     // Run before any native PRE, original-image recovery, or boot candidate generation.
     val environmentResult = UltraDirectInstallPolicy.dispatch<FlashResult?>(
         directRequest,
@@ -980,10 +975,7 @@ fun installBoot(
         },
         patchBoot = { null },
         requiresKernelUpdate = {
-            dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.required(ksuApp).also { required ->
-                if (required) kernelCredentialToPreserve = dev.maplesu.manager.modules.UltraRootKeyStore.read(ksuApp)
-                    ?.let(dev.maplesu.manager.ultrakernel.UltraKernelCredential::of)
-            }
+            dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.required(ksuApp)
         },
     )
     if (environmentResult != null) return environmentResult
@@ -1078,7 +1070,6 @@ fun installBoot(
         onStdout, onStderr, onStage, selectedImageOnly = !downloaded,
         lenovoSigning = lenovoSigning,
         vivoInputs = vivoInputs,
-        preservedCredential = kernelCredentialToPreserve,
         initBootArtifact = ultraInitBootArtifact,
         initBootKmi = (lkm as? LkmSelection.KmiString)?.value,
         pairedBootSnapshot = pairedBootSnapshot,
@@ -1088,21 +1079,75 @@ fun installBoot(
     )
 }
 
-/** Explicit environment repair shares the existing boot transaction, without SDK-only dispatch. */
-internal fun installUltraKernelUpdate(taskId: String): FlashResult {
-    check(ModeRuntime.active == dev.maplesu.manager.workmode.WorkMode.LITE) { "ULTRA_KERNEL_UPGRADE_MODE_CHANGED" }
-    val credential = dev.maplesu.manager.modules.UltraRootKeyStore.read(ksuApp)
-        ?.let(dev.maplesu.manager.ultrakernel.UltraKernelCredential::of)
-        ?: error("ULTRA_KERNEL_CREDENTIAL_REQUIRED")
-    val (partition, _) = InstallerServiceClient.analyzeCurrentCarrier(ksuApp)
-    return installStockTarget(
-        target = InstallTargetMode.ULTRA, partition = partition, bootUri = null, taskId = taskId,
+/** Explicit environment repair keeps the proven carrier in the protected install transaction. */
+internal fun installUltraKernelUpdate(taskId: String, onTaskSelected: (String) -> Unit = {},
+                                    verifyScope: () -> Unit): FlashResult {
+    val (observed, partition, signingOptions) = try {
+        verifyScope()
+        check(ModeRuntime.active.let { it == null || it == dev.maplesu.manager.workmode.WorkMode.LITE }) {
+            "ULTRA_KERNEL_UPGRADE_MODE_CHANGED"
+        }
+        val observed = InstallerServiceClient.observeBootChain(ksuApp)
+        val carrier = requireNotNull(InstallerServiceClient.installedCarrierPartition(ksuApp, observed)) {
+            "ULTRA_KERNEL_UPGRADE_CARRIER_UNPROVEN"
+        }
+        verifyScope()
+        Triple(observed, carrier, dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.signingOptions(ksuApp))
+    } catch (error: Exception) {
+        dev.maplesu.manager.installer.rethrowInstallerCancellation(error)
+        val message = "EXCEPTION:" + generateSequence(error as Throwable) { it.cause }
+            .take(4).joinToString(" <- ") { it.toString() }
+        return FlashResult(dev.maplesu.manager.installer.installerFailureExitCode(error),
+            dev.maplesu.manager.runtime.ultra.UltraSdkLogging.redact(message), false, FlashOutcome.FAILED)
+    }
+    fun install(selected: String, selectedTask: String,
+                artifact: dev.maplesu.image.UltraInitBootProducer.Artifact? = null) = installStockTarget(
+        target = InstallTargetMode.ULTRA, partition = selected, bootUri = null, taskId = selectedTask,
         restoreOriginal = false, originalManager = null, conflictAccepted = false, variantId = null,
         normalOptions = null, kmiCatalog = null,
         onStdout = { Log.i(TAG, it) }, onStderr = { Log.w(TAG, it) }, onStage = {},
-        selectedImageOnly = false, preservedCredential = credential,
-        lenovoSigning = dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.signingOptions(ksuApp),
+        selectedImageOnly = false,
+        lenovoSigning = signingOptions,
+        initBootArtifact = artifact,
+        verifyScope = verifyScope,
     )
+    val first = install(partition, taskId)
+    val componentFailures = setOf("ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED", "ULTRA_INIT_TARGET_KMI_REQUIRED",
+        "ULTRA_INIT_KMI_COMPONENT_MISSING")
+    if (partition != "init_boot" || first.code == 0 || first.outcome != FlashOutcome.FAILED ||
+        componentFailures.none { first.err.contains(it) }) return first
+    var cancellationConfirmed = false
+    val artifact = try {
+        // The failed producer must have released its PRE before a new carrier transaction starts.
+        val cancelled = InstallerServiceClient.installationStatus(ksuApp, taskId, InstallTargetMode.ULTRA)
+        if (cancelled.getString("state") != "CANCELLED") return first.copy(
+            outcome = FlashOutcome.RECOVERY_REQUIRED, err = first.err + "\nINSTALLER_CANCELLATION_UNCONFIRMED")
+        cancellationConfirmed = true
+        verifyScope()
+        val current = InstallerServiceClient.observeBootChain(ksuApp)
+        check(current.slotSuffix == observed.slotSuffix && current.kernelRelease == observed.kernelRelease &&
+            current.firmware == observed.firmware && current.partitions == observed.partitions) { "INSTALLER_DEVICE_CHANGED" }
+        if ("init_boot" !in current.partitions) return first
+        val paired = File(ksuApp.filesDir, "ultra-upgrade-paired-$taskId.img")
+        try {
+            InstallerServiceClient.capturePairedBoot(ksuApp, current, paired)
+            dev.maplesu.manager.ultrakernel.UltraKernelFlow.initBootArtifact(ksuApp, paired)
+                ?.takeIf { it.isKmiComponent } ?: return first
+        } finally { paired.delete() }
+    } catch (error: Exception) {
+        dev.maplesu.manager.installer.rethrowInstallerCancellation(error)
+        val message = dev.maplesu.manager.runtime.ultra.UltraSdkLogging.redact(error.toString())
+        return first.copy(err = first.err + "\n" + message,
+            outcome = if (cancellationConfirmed) first.outcome else FlashOutcome.RECOVERY_REQUIRED)
+    }
+    verifyScope()
+    val selectedTask = java.util.UUID.randomUUID().toString()
+    onTaskSelected(selectedTask)
+    // Retry the same proven init_boot carrier after resolving its actual paired-boot component.
+    val retry = install(partition, selectedTask, artifact)
+    val trace = "ULTRA_KERNEL_UPGRADE_RETRY:firstCarrier=$partition:finalCarrier=$partition"
+    Log.i(TAG, trace)
+    return retry.copy(err = first.err + "\n" + trace + "\n" + retry.err)
 }
 
 /** A builder can stop before any write (including an already-patched input). */
@@ -1125,13 +1170,13 @@ private fun installStockTarget(
     selectedImageOnly: Boolean,
     lenovoSigning: dev.maplesu.manager.installer.LenovoSigningOptions = dev.maplesu.manager.installer.LenovoSigningOptions(),
     vivoInputs: dev.maplesu.manager.installer.VivoCompatibilityInputs = dev.maplesu.manager.installer.VivoCompatibilityInputs(),
-    preservedCredential: dev.maplesu.manager.ultrakernel.UltraKernelCredential? = null,
     initBootArtifact: dev.maplesu.image.UltraInitBootProducer.Artifact? = null,
     initBootKmi: String? = null,
     pairedBootSnapshot: android.os.Bundle? = null,
     pairedBootUri: Uri? = null,
     pairedSourceSha256: String? = null,
     pairedBootSha256: String? = null,
+    verifyScope: () -> Unit = {},
 ): FlashResult {
     check(pairedBootUri == null || target == InstallTargetMode.ULTRA && partition == "init_boot" &&
         bootUri != null && selectedImageOnly && pairedBootSnapshot == null &&
@@ -1186,8 +1231,6 @@ private fun installStockTarget(
     fun written(): FlashResult {
         InstallerServiceClient.rememberInstallTarget(ksuApp, id, target)
         if (target == InstallTargetMode.ULTRA) {
-            runCatching { dev.maplesu.manager.runtime.ultra.UltraInstallCredentialRecovery.recover(ksuApp) }
-                .onFailure { Log.w(TAG, "Install credential handoff deferred to startup", it) }
         }
         onStage(InstallStage.AWAITING_REBOOT)
         onStdout(ksuApp.getString(R.string.install_image_installed))
@@ -1228,16 +1271,7 @@ private fun installStockTarget(
                         onStdout("镜像已修补，继续安装")
                         (built as UltraImageBuild.AlreadyPatched).candidate
                     }
-                    val artifact = selectedArtifact
-                    val expectedCredential = if (result.partition == "init_boot" &&
-                        artifact?.credentialMode == "module-parameter") {
-                        preservedCredential?.withMetadataDisplacement(artifact.metadataDisplacement)
-                    } else preservedCredential
-                    dev.maplesu.manager.ultrakernel.UltraKernelUpdateRequirement.requirePreserved(
-                        expectedCredential, result.credential)
                     check(result.partition == partition) { "ULTRA_KERNEL_CANDIDATE_PARTITION_MISMATCH" }
-                    if (!exportOnly) dev.maplesu.manager.runtime.ultra.UltraInstallCredentials.retainCandidate(
-                        ksuApp, result.image, result.bootSha256, result.credential, id)
                     InstallCandidateImage(result.image, result.bootSha256, result.image.length(), partition)
                 }
                 is UltraImageBuild.Refused -> throw InstallBuildStopped(
@@ -1331,8 +1365,9 @@ private fun installStockTarget(
             }
         }
     }
+    val active = ModeRuntime.active
+    verifyScope()
     try {
-        val active = ModeRuntime.active
         if (active != null && active != target.workMode) {
             InstallerServiceClient.rememberModeSwitchTask(ksuApp, id)
             val facade = ModeSwitchRuntime.facadeOrNull() ?: ModeSwitchRuntime.initialize(ksuApp)
@@ -1405,7 +1440,9 @@ private fun installStockTarget(
         val result = StockInstallFlow.install(
             ksuApp, id, target, partition, bootUri, restoreOriginal, originalManager, conflictAccepted,
             onPrepared = { prepared ->
-                preparedRestoreOriginal = prepared.getBoolean("restoreOriginal")
+                preparedRestoreOriginal = prepared.getParcelableArrayList<android.os.Bundle>("partitionRows").orEmpty().any {
+                    it.getString("sourceSha256") != it.getString("preSha256")
+                }
                 prepared.getString("baselineDirectory")?.takeIf(String::isNotBlank)?.let {
                     onStdout(ksuApp.getString(R.string.install_originals_saved, it))
                 }
@@ -1415,6 +1452,7 @@ private fun installStockTarget(
             },
             produce = ::buildPatched,
             onWriting = {
+                verifyScope()
                 onStage(InstallStage.WRITING)
                 onStdout(ksuApp.getString(if (preparedRestoreOriginal) R.string.install_stock_restoring else R.string.install_image_writing))
             },
@@ -1442,8 +1480,16 @@ private fun installStockTarget(
         onStderr(message)
         return recovered.copy(err = message)
     } catch (stop: InstallBuildStopped) {
-        if (stop.result.code == 0) onStdout(stop.result.err) else onStderr(stop.result.err)
-        return stop.result
+        val stopped = if (stop.suppressed.none { it.message == "INSTALLER_CANCELLATION_FAILED" }) stop.result else {
+            val cancelled = runCatching { InstallerServiceClient.installationStatus(ksuApp, id, target) }.getOrElse {
+                dev.maplesu.manager.installer.rethrowInstallerCancellation(it)
+                null
+            }?.getString("state") == "CANCELLED"
+            if (cancelled) stop.result else stop.result.copy(outcome = FlashOutcome.RECOVERY_REQUIRED,
+                err = stop.result.err + "\nINSTALLER_CANCELLATION_FAILED", installationSubmitted = nativePrepareSubmitted)
+        }
+        if (stopped.code == 0) onStdout(stopped.err) else onStderr(stopped.err)
+        return stopped
     } catch (error: Exception) {
         dev.maplesu.manager.installer.rethrowInstallerCancellation(error)
         Log.w(TAG, "Stock installation failed", error)
@@ -1457,7 +1503,11 @@ private fun installStockTarget(
         if (status?.getString("state") in setOf("REBOOT_REQUIRED", "REBOOT_REQUESTED", "BOOT_IMAGE_VERIFIED", "BOOT_VERIFIED", "VERIFIED")) {
             return written()
         }
-        val recovery = status?.let {
+        val cancellationUnconfirmed = status?.getString("state") != "CANCELLED" &&
+            generateSequence<Throwable>(error) { it.cause }.take(8).any { cause ->
+                cause.suppressed.any { it.message == "INSTALLER_CANCELLATION_FAILED" }
+            }
+        val recovery = if (cancellationUnconfirmed) FlashResult(1, "", false, FlashOutcome.RECOVERY_REQUIRED) else status?.let {
             installerTaskResult(it.getString("state").orEmpty(), it.getBoolean("rebootRequired"), it.getString("error").orEmpty())
         } ?: FlashResult(1, "", false,
             if (nativePrepareSubmitted == false) FlashOutcome.FAILED else FlashOutcome.RECOVERY_REQUIRED)
@@ -1470,7 +1520,8 @@ private fun installStockTarget(
             recovery.outcome == FlashOutcome.RESTORED -> R.string.install_image_restored
             recovery.outcome == FlashOutcome.RECOVERY_REQUIRED -> R.string.install_image_recovery_required
             else -> R.string.install_image_patch_failed
-        }) + "\n" + dev.maplesu.manager.installer.installerFailureDiagnostic(error, status?.getString("error").orEmpty())
+        }) + "\n" + dev.maplesu.manager.installer.installerFailureDiagnostic(error, status?.getString("error").orEmpty()) +
+            if (cancellationUnconfirmed) "\nINSTALLER_CANCELLATION_FAILED" else ""
         onStderr(message)
         return recovery.copy(code = dev.maplesu.manager.installer.installerFailureExitCode(error, recovery.code),
             err = message, installationSubmitted = nativePrepareSubmitted)
@@ -1623,8 +1674,6 @@ private fun installBootFromChosenImage(
         onStage(InstallStage.WRITING)
         onStdout(ksuApp.getString(R.string.install_image_writing))
         val installed = try {
-            dev.maplesu.manager.runtime.ultra.UltraInstallCredentials.retainCandidate(
-                ksuApp, built.image, built.bootSha256, built.credential, transactionTaskId)
             dev.maplesu.manager.installer.InstallerServiceClient.installBoot(
                 ksuApp, built.image, observed, rollback, transactionTaskId)
         } catch (exception: Exception) {
@@ -1636,8 +1685,6 @@ private fun installBootFromChosenImage(
         }
         val state = installed.getString("state")
         if (state == "REBOOT_REQUIRED" && installed.getBoolean("rebootRequired")) {
-            runCatching { dev.maplesu.manager.runtime.ultra.UltraInstallCredentialRecovery.recover(ksuApp) }
-                .onFailure { Log.w(TAG, "Install credential handoff deferred to startup", it) }
             onStage(InstallStage.AWAITING_REBOOT)
             onStdout(ksuApp.getString(R.string.install_image_installed))
             return FlashResult(0, "", true, FlashOutcome.WRITTEN)

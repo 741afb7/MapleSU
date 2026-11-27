@@ -3,6 +3,8 @@ package dev.maplesu.manager.runtime.ultra
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class UltraPolicyBackendInstallTest {
@@ -11,8 +13,7 @@ class UltraPolicyBackendInstallTest {
     private fun failed() = NativeReceipt.parse("""{"backend":"maplesu_ultra","ok":false,"sdkError":"FIXTURE_SUBMIT","sdkErrorCode":-1001}""")!!
     private fun attachments(events: MutableList<String>, failure: () -> String? = { null }) =
         UltraEnvironmentInstaller.Attachments(
-            whitelist = { error("unsubmitted fixture must not authorize") }, backup = { null },
-            prepareUpgrade = { events += "authorization"; null },
+            whitelist = { UltraSelfWhitelist.Result(true, true, true, true, true) },
             prepareInstall = { events += "backend"; failure() },
         )
 
@@ -23,7 +24,7 @@ class UltraPolicyBackendInstallTest {
             override fun submitInstall(): NativeReceipt { events += "submit"; return failed() }
         }
         UltraEnvironmentInstaller.install(port, UltraEnvironmentInstaller.Intent.UpgradeToBundledBuild, attachments(events))
-        assertEquals(listOf("backend", "authorization", "submit"), events)
+        assertEquals(listOf("backend", "submit"), events)
     }
 
     @Test fun failedOrInterruptedPublicationDoesNotSubmitANewHelper() {
@@ -41,6 +42,22 @@ class UltraPolicyBackendInstallTest {
         }
     }
 
+    @Test fun cancelledBackendPreparationKeepsTheOriginalCancellationAndNeverSubmits() {
+        val events = mutableListOf<String>()
+        val cancelled = java.util.concurrent.CancellationException("publication cancelled")
+        val port = object : UltraEnvironmentInstaller.InstallPort {
+            override fun environmentState() = state("NotInstalled")
+            override fun submitInstall(): NativeReceipt = error("cancelled preparation must not submit")
+        }
+        val observed = assertThrows(java.util.concurrent.CancellationException::class.java) {
+            UltraEnvironmentInstaller.install(port, UltraEnvironmentInstaller.Intent.ReuseRunning,
+                attachments(events) { throw cancelled })
+        }
+        assertTrue(observed is UltraInstallPreparationCancelled)
+        assertSame(cancelled, observed.cause)
+        assertEquals(listOf("backend"), events)
+    }
+
     @Test fun failedToolsPreflightNeverFirstReplacesTheCurrentIdentity() {
         for (intent in listOf(UltraEnvironmentInstaller.Intent.UpgradeToBundledBuild,
             UltraEnvironmentInstaller.Intent.RefreshToBundledBuild)) {
@@ -55,20 +72,6 @@ class UltraPolicyBackendInstallTest {
             assertEquals("POLICY_BACKEND_PREPARATION_FAILED", result.sdkError)
             assertEquals(listOf("backend"), events)
         }
-    }
-
-    @Test fun failedIdentityPreparationNeverSubmitsAndStillFollowsToolsPreflight() {
-        val events = mutableListOf<String>()
-        val port = object : UltraEnvironmentInstaller.InstallPort {
-            override fun environmentState(): NativeReceipt = error("explicit install")
-            override fun submitInstall(): NativeReceipt = error("identity failed")
-        }
-        val result = UltraEnvironmentInstaller.install(port, UltraEnvironmentInstaller.Intent.RefreshToBundledBuild,
-            UltraEnvironmentInstaller.Attachments(whitelist = { error("unsubmitted") }, backup = { null },
-                prepareInstall = { events += "backend"; null },
-                prepareUpgrade = { events += "identity"; UltraEnvironmentInstaller.Outcome(false, "UPGRADE_PREPARATION_FAILED") }))
-        assertFalse(result.ok)
-        assertEquals(listOf("backend", "identity"), events)
     }
 
     @Test fun firstInstallationPreparesBackendBeforeSubmission() {

@@ -24,15 +24,12 @@ class HomeRuntimeRecognitionWiringTest {
     @Test fun normalDoesNotOfferTheUltraEnvironmentInstallAction() {
         val panel = source("com/maplesu/core/ui/screen/settings/UltraEnvironmentSettings.kt")
             .substringAfter("class UltraEnvironmentInstallPanel")
-        val refresh = panel.substringAfter("fun refresh(").substringBefore("fun install()")
-        val readiness = panel.substringAfter("private fun localIdentity(").substringBefore("fun refresh(")
-        assertTrue(refresh.contains("localIdentity(mode)"))
-        assertTrue(readiness.contains("mode == WorkMode.KSU || ModeRuntime.active == WorkMode.KSU"))
-        assertTrue(readiness.contains("return UltraRootKeyStore.read(context)"))
-        assertFalse(readiness.contains("UltraEnvironmentProbe.refresh("))
-        assertFalse(readiness.contains("testBasics("))
-        assertFalse("Temporary uninstall must remain installable before mode activation",
-            refresh.contains("ModeRuntime.active == WorkMode.LITE"))
+        val eligible = panel.substringAfter("private fun eligible(").substringBefore("fun refresh(")
+        assertTrue(eligible.contains("mode == WorkMode.LITE && ModeRuntime.active == WorkMode.LITE"))
+        assertTrue(eligible.contains("!HookRootExecutor.production(context).available()"))
+        assertFalse(eligible.contains("UltraRootKeyStore.read("))
+        assertFalse(eligible.contains("UltraEnvironmentProbe.refresh("))
+        assertTrue(panel.contains("if (!eligible()) return"))
     }
 
     @Test fun modeAndSameModeSdkChangesRefreshTheInstallCardInBothThemes() {
@@ -43,12 +40,10 @@ class HomeRuntimeRecognitionWiringTest {
         val remember = source("com/maplesu/core/ui/screen/settings/UltraEnvironmentSettings.kt")
             .substringAfter("fun rememberUltraEnvironmentInstallPanel(")
             .substringBefore("@Composable")
-        assertTrue("A restored key can change NoKey/Unknown to NotInstalled without changing mode",
-            remember.contains("UltraEnvironmentProbe.states.collectAsStateWithLifecycle("))
-        assertTrue(remember.contains("initialValue = UltraEnvironmentProbe.currentSnapshot(appContext).state"))
-        assertTrue(remember.contains("LaunchedEffect(panel, mode, state) { panel.refresh(mode) }"))
-        assertFalse("Timestamp updates from the refresh itself must not restart the effect",
-            remember.contains("observedAtWallClockMs"))
+        assertTrue(remember.contains("UltraEnvironmentProbe.observations.collectAsStateWithLifecycle("))
+        assertTrue(remember.contains("initialValue = UltraEnvironmentProbe.currentSnapshot(appContext)"))
+        assertTrue(remember.contains("LaunchedEffect(panel, mode, observation.state, observation.kernelChannelAbsent) { panel.refresh(mode) }"))
+        assertFalse(remember.contains("observedAtWallClockMs"))
     }
 
     @Test fun newerPanelRefreshAndInstallationCancelOlderObservations() {
@@ -67,10 +62,11 @@ class HomeRuntimeRecognitionWiringTest {
         val install = panel.substringAfter("fun install()").substringBefore("internal fun environmentReadinessSummaryResId")
         assertTrue(install.contains("val modeBeforeInstall = ModeRuntime.active"))
         assertTrue(install.contains("val stateBeforeInstall = UltraEnvironmentProbe.currentSnapshot(context).state"))
-        assertTrue(install.contains("localIdentity() != keyBeforeInstall"))
+        assertTrue(install.contains("UltraSdkCredentials.captureOwnerMarker(context)"))
+        assertTrue(install.contains("ModeRuntime.active != modeBeforeInstall || !current()"))
         assertTrue(install.contains("UltraEnvironmentInstaller.Intent.InstallToBundledBuild"))
         assertTrue(install.contains("ERR_MODULE_NO_BOOT"))
-        assertTrue(install.contains("ERR_MODULE_ROOT_KEY"))
+        assertFalse(install.contains("ERR_MODULE_ROOT_KEY"))
         val completion = install.substringAfter("finally {")
         assertTrue(completion.contains("busy = false"))
         assertTrue(completion.contains("ModeRuntime.active != modeBeforeInstall ||"))

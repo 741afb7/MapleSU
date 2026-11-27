@@ -3,7 +3,6 @@ package dev.maplesu.manager.runtime.ultra
 
 import android.content.Context
 import android.util.Log
-import dev.maplesu.manager.modules.UltraRootKeyStore
 
 internal const val SU_DELIVERY_INCOMPLETE = "ERR_SU_DELIVERY_INCOMPLETE"
 
@@ -39,25 +38,18 @@ interface SuAuthPort {
 }
 
 /**
- * 「自白名单」：把管理器**自己**的包名写进 Ultra `su_auth`。
- *
- * <p>为什么必须这么做：A2 形态下 Lite 的根来自 Ultra `su_auth`，而普通卸载会清掉
- * `maplesu-ultra/rootKey`；重装后管理器既没有 key（问不了 SDK）、也不在白名单里
- * （没有 su），等于**永久失去根通道**。把自己写进白名单之后，即使 key 丢了，
- * [UltraSuChannel] 仍然能拿到 uid 0，从而读回 [UltraRecoveryKeyStore] 里的备份、
- * 完成恢复 —— 这是整条自愈链的前置条件。
- *
- * <p>代价必须说清楚：**等于给管理器自身一份常驻 root 能力**（Ultra 的 su_auth 是包名级
- * 预授权，没有逐次确认），调用方须向用户说明这项持久能力。
- *
- * <p>幂等纪律：先读快照，已在列表里就**不发** add（禁止重复添加）；写入后重新读取快照，目标条目存在才确认成功；读回失败与空列表分开记录。
+ * Explicitly maintains the Manager's own SU decision in the existing authority.
+ * Manager identity authenticates administration independently of this grant;
+ * standard su access still requires an applied full-UID decision and readback.
+ * Reads distinguish unavailable state from an empty list and never replay a
+ * committed decision merely because a later delivery/readback is pending.
  */
 object UltraSelfWhitelist {
 
     private const val TAG = "MapleSUUltraSelfWL"
 
     data class Result(
-        /** 快照是否确认目标条目存在；不代表无 key su 已验证。 */
+        /** 快照是否确认目标条目存在；不代表标准 su 已验证。 */
         val inList: Boolean,
         val added: Boolean,
         val alreadyPresent: Boolean,
@@ -155,12 +147,12 @@ object UltraSelfWhitelist {
     }
 
     /**
-     * Android 入口：用绑定 key 的 [client] 保证本应用在 `su_auth` 里。
+     * Android 入口：用绑定当前安装身份的 [client] 保证本应用在 `su_auth` 里。
      * 阻塞（JNI），必须在后台线程调用。
      */
     fun ensure(
         context: Context,
-        client: UltraRuntimeClient = UltraRuntimeClient { UltraRootKeyStore.read(context) },
+        client: UltraRuntimeClient = UltraRuntimeClient(),
         packageName: String = context.packageName,
         force: Boolean = false,
     ): Result {

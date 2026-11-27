@@ -19,7 +19,6 @@ class UltraSdkParallelismTest {
             fun field(name: String, value: Any?) = UltraRuntimeClient::class.java.getDeclaredField(name).apply {
                 isAccessible = true
             }.set(it, value)
-            field("rootKeyProvider", { null })
             field("identityCurrent", current)
             field("lock", Any())
         }
@@ -130,11 +129,11 @@ class UltraSdkParallelismTest {
     @Test fun changedCallerIdentityIsRejectedBeforeSubmission() {
         val submissions = AtomicInteger()
         val result = UltraRuntimeClient::class.java.getDeclaredMethod("callWithIdentity", String::class.java,
-            kotlin.jvm.functions.Function1::class.java).apply { isAccessible = true }
-            .invoke(client { false }, "get_module_policy_settings", { _: String? ->
+            kotlin.jvm.functions.Function0::class.java).apply { isAccessible = true }
+            .invoke(client { false }, "get_module_policy_settings", { ->
                 submissions.incrementAndGet(); raw("get_module_policy_settings")
             }) as NativeReceipt
-        assertEquals("SDK_CREDENTIAL_SCOPE_CHANGED", result.sdkError)
+        assertEquals("SDK_IDENTITY_SCOPE_CHANGED", result.sdkError)
         assertEquals(0, submissions.get())
     }
 }

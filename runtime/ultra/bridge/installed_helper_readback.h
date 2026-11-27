@@ -57,17 +57,15 @@ struct InstalledHelperReadbackResult {
 using InstalledHelperChunkConsumer = bool (*)(void*, const uint8_t*, size_t);
 
 // Call under the bridge Isolated admission; this owns a bounded worker/slot.
-// Null Key explicitly selects Owner;
-// a non-null Key explicitly selects Legacy. No fallback or transport replay.
-// Only /data/[A-Za-z0-9]{16}/init is accepted. A null path is Owner-only
-// and resolves the retained image namespace in this worker's authenticated session.
-// offset <= 0 hashes unchanged bytes.
+// Uses the current verified owner/task session, with no transport replay.
+// Only /data/[A-Za-z0-9]{16}/init is accepted. A null path resolves the retained
+// image namespace in this worker's authenticated session.
+// Hashes the complete deployed helper bytes.
 // timeout_ms is the single worker/transport/wait deadline (1..5000, page default 300).
 // Existing SDK publication-lock admission can wait longer; an expired admission
 // is rejected before fork, and no stale worker is submitted.
 __attribute__((visibility("hidden")))
-InstalledHelperReadbackResult read_installed_helper(const char* root_key_or_null,
-    const char* helper_path, int64_t slot_offset,
+InstalledHelperReadbackResult read_installed_helper(const char* helper_path,
     InstalledHelperChunkConsumer consume, void* context, uint32_t timeout_ms = 300);
 
 // Read-only classification of the existing completion facts. This never changes

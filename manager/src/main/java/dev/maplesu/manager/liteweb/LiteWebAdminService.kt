@@ -318,12 +318,10 @@ class AndroidLiteWebBackend(
     override fun close() = moduleBridge.close()
 
     private val liteModules = LiteScriptModuleBackend.get(service)
-    private val nativeClient = dev.maplesu.manager.runtime.ultra.UltraRuntimeClient {
-        dev.maplesu.manager.modules.UltraRootKeyStore.read(service)
-    }
+    private val nativeClient = dev.maplesu.manager.runtime.ultra.UltraRuntimeClient()
     private val nativeModules = dev.maplesu.manager.liteweb.daemon.DaemonUltraRuntimeFacts(
         DaemonUltraSdkAccess(DaemonRuntimeShell),
-        // An installed root service uses the app's key; recovery backups belong to the standalone daemon.
+        // The installed service uses its verified current-task identity.
         openSdk = { dev.maplesu.manager.liteweb.daemon.DaemonUltraSdkResult.Ready(nativeClient, "installed_manager") },
     )
     private val assets = AndroidLiteWebAssets(service.assets)

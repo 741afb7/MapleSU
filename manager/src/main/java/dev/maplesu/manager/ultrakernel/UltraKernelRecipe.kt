@@ -16,9 +16,9 @@ import java.security.MessageDigest
  *  - one **site locator** per record - a symbol name plus a byte delta inside that symbol - so the
  *    site re-resolves on any kernel whose `kallsyms` decodes;
  *  - the replacement **bytes**, either a template blob (code) or a field list assembled from rules
- *    (envelopes, the credential slot, the one-instruction stubs);
+ *    (envelopes, historical credential slots, the one-instruction stubs);
  *  - one **relocation** per address-bearing field, so every address is recomputed for the target;
- *  - the credential contract: which field is the 48 byte key and which are the derived init path.
+ *  - the historical credential fields retained for reading older recipes; current generation omits them.
  *
  * Record order is part of the format: the applier writes records in file order, so the two records
  * that overlap k22's 108 byte cave only work in the order the recipe declares.
@@ -140,12 +140,13 @@ internal class UltraKernelRecipe(
     fun render(
         symbols: UltraKernelSymbols,
         kernel: ByteArray,
-        credential: UltraKernelCredential,
+        credential: UltraKernelCredential? = null,
         structOverrides: Map<String, Int> = emptyMap(),
     ): List<Rendered> = renderDetailed(symbols, kernel, credential, structOverrides).records
 
-    /** The rendered records plus the optional ones this kernel does not carry a site for. */
+    /** Final effective recipe, rendered records and optional sites absent from this kernel. */
     class RenderResult(
+        val effectiveRecipe: UltraKernelRecipe,
         val records: List<Rendered>,
         val skipped: List<String>,
         val placements: Map<String, UltraKernelCaveAllocator.Placement> = emptyMap(),
@@ -159,11 +160,19 @@ internal class UltraKernelRecipe(
     fun renderDetailed(
         symbols: UltraKernelSymbols,
         kernel: ByteArray,
-        credential: UltraKernelCredential,
+        credential: UltraKernelCredential? = null,
         structOverrides: Map<String, Int> = emptyMap(),
         preservedMetadataDisplacement: Int? = null,
+        deploymentNamespace: UltraKernelDeploymentNamespace? = null,
     ): RenderResult {
-        if (credential.length != credentialLength) {
+        if (credential == null && records.any { item -> item.relocs.any { it.kind == KIND_CREDENTIAL } }) {
+            // No Key reservation overwrites the kernel's native panic implementation.
+            return UltraKernelRecipe(id, referenceRelease, credentialLength, initPathTemplate,
+                records.filterNot { item -> item.relocs.any { it.kind == KIND_CREDENTIAL } },
+                legacyMetadataDisplacement).renderDetailed(symbols, kernel, null, structOverrides,
+                    preservedMetadataDisplacement, deploymentNamespace)
+        }
+        if (credential != null && credential.length != credentialLength) {
             throw UltraKernelGenerateException(
                 UltraKernelGenerateCodes.CREDENTIAL_INVALID,
                 "length=${credential.length}!=${credentialLength}",
@@ -181,7 +190,7 @@ internal class UltraKernelRecipe(
                 records + Record("execve-null-guard", "arm64_notify_die", 52,
                     16, null, emptyList(), null, code = "execve-null-guard", cave = "arm64_notify_die"),
                 legacyMetadataDisplacement)
-                .renderDetailed(symbols, kernel, credential, structOverrides, preservedMetadataDisplacement)
+                .renderDetailed(symbols, kernel, credential, structOverrides, preservedMetadataDisplacement, deploymentNamespace)
         }
         if (records.any { it.code == "execve-gate" } &&
             records.none { it.code == "request-v2" } &&
@@ -192,7 +201,7 @@ internal class UltraKernelRecipe(
                 records + Record("request-v2", "die", UltraKernelRequestV2.CAVE_OFFSET,
                     UltraKernelRequestV2.BYTES, null, emptyList(), null,
                     code = "request-v2", cave = "die"), legacyMetadataDisplacement)
-                .renderDetailed(symbols, kernel, credential, structOverrides, preservedMetadataDisplacement)
+                .renderDetailed(symbols, kernel, credential, structOverrides, preservedMetadataDisplacement, deploymentNamespace)
         }
         // The execmem API takes (type, size), unlike module_alloc(size). Keep the existing
         // call sites and their fixed offsets, and place one shared tail adapter after die's body.
@@ -204,7 +213,7 @@ internal class UltraKernelRecipe(
                 records + Record("module_alloc-adapter", "die", UltraKernelBodies.EXECVE_GATE_BYTES + 16,
                     12, null, emptyList(), null,
                     code = "module-alloc-adapter", cave = "die"), legacyMetadataDisplacement)
-                .renderDetailed(symbols, kernel, credential, structOverrides, preservedMetadataDisplacement)
+                .renderDetailed(symbols, kernel, credential, structOverrides, preservedMetadataDisplacement, deploymentNamespace)
         }
         // Retain the native prefix at its original address, including PAC's unwind address.
         // Feature symbol names are not a reliable proof that dynamic SCS is absent.
@@ -240,7 +249,7 @@ internal class UltraKernelRecipe(
                 UltraKernelGenerateCodes.SITE, "HOOK_FRAME_UNSUPPORTED:do_execveat_common")
             execvePrologue = word
         }
-        val path = initPath(credential).toByteArray(Charsets.US_ASCII)
+        val path = (credential?.let(::initPath) ?: "/data/${requireNotNull(deploymentNamespace) { "ULTRA_KERNEL_DEPLOYMENT_REQUIRED" }.name()}/init").toByteArray(Charsets.US_ASCII)
         val layout = resolveLayout(symbols, kernel, structOverrides)
         val structs = layout.fields.mapValues { it.value.offsetBytes }.toMutableMap()
         layout.offset(UltraKernelStructOffsets.SECCOMP_MODE)?.let {
@@ -283,7 +292,8 @@ internal class UltraKernelRecipe(
                         UltraKernelBodies.METADATA_REBASE_BYTES, null, emptyList(), null,
                         code = "metadata-rebase", cave = executor.cave),
                     preservedMetadataDisplacement)
-                    .renderDetailed(symbols, kernel, credential, structOverrides)
+                    .renderDetailed(symbols, kernel, credential, structOverrides,
+                        deploymentNamespace = deploymentNamespace)
             }
             try {
                 return renderPlaced(allocation, kernel, credential, path, structs, fields, layout)
@@ -307,7 +317,7 @@ internal class UltraKernelRecipe(
     private fun renderPlaced(
         allocation: UltraKernelCaveAllocator.Allocation,
         kernel: ByteArray,
-        credential: UltraKernelCredential,
+        credential: UltraKernelCredential? = null,
         path: ByteArray,
         structs: Map<String, Int>,
         fields: UltraKernelFields,
@@ -395,7 +405,7 @@ internal class UltraKernelRecipe(
                 shiftedFrom = placement?.shiftedFrom,
             )
         }
-        return RenderResult(rendered, skipped, allocation.placements, layout)
+        return RenderResult(this, rendered, skipped, allocation.placements, layout)
     }
 
     /** `/data/<key16>/init`, built from the recipe's template so the two can never drift. */
@@ -409,7 +419,7 @@ internal class UltraKernelRecipe(
         site: Int,
         symbols: UltraKernelSymbols,
         path: ByteArray,
-        credential: UltraKernelCredential,
+        credential: UltraKernelCredential? = null,
         structs: Map<String, Int>,
         sites: Map<String, Int>,
     ) {
@@ -501,8 +511,9 @@ internal class UltraKernelRecipe(
                 path.copyInto(blob, at)
             }
             KIND_CREDENTIAL -> {
-                val length = reloc.length ?: credential.length
-                val secret = credential.copySecret()
+                val length = reloc.length ?: credentialLength
+                // Historical slot keeps its width; standard carriers contain no secret.
+                val secret = credential?.copySecret() ?: ByteArray(length)
                 try {
                     if (secret.size != length || at + length > blob.size) {
                         throw UltraKernelGenerateException(

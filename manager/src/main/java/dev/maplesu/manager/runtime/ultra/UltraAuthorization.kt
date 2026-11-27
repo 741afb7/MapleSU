@@ -2,7 +2,6 @@ package dev.maplesu.manager.runtime.ultra
 
 import android.content.Context
 import android.util.Log
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import dev.maplesu.manager.workmode.ModeRuntime
 
 object UltraAuthorization {
@@ -21,8 +20,7 @@ object UltraAuthorization {
     internal fun captureClientScope(context: Context, client: UltraRuntimeClient,
                                     expectedCurrent: () -> Boolean): Scope? {
         val scope = capture(context, null, expectedCurrent) ?: return null
-        val key = UltraSdkCredentials.read(context)
-        return Scope(client.scoped(key, scope.current), scope.current, scope.cacheCurrent)
+        return Scope(client.scoped(scope.current), scope.current, scope.cacheCurrent)
     }
 
     internal fun captureOwnerScope(context: Context, session: UltraRuntimeClient.ManagerOwnerIdentity,
@@ -42,22 +40,30 @@ object UltraAuthorization {
                         expectedCurrent: () -> Boolean): Scope? = runCatching {
         if (!expectedCurrent()) return@runCatching null
         val app = context.applicationContext
-        val key = UltraSdkCredentials.read(app)
         val bootId = UltraEnvironmentAutoSetup.currentBootId()
-        if (session != null && (session.key != key || session.bootId != bootId)) return@runCatching null
+        if (session != null && session.bootId != bootId) return@runCatching null
         val activation = ModeRuntime.activation
-        val rootCurrent = UltraRootKeyStore.captureOwnerMarker(app)
+        val observation = UltraEnvironmentProbe.currentSnapshot(app)
+        val observedOwner = observation.managerOwnerIdentity
+        val observedLegacy = observation.legacyCredentialFingerprint
         val sessionCurrent = UltraSdkSession.captureOwnerMarker(app)
+        val installationCurrent = UltraSdkCredentials.captureOwnerMarker(app)
         val cacheCurrent = {
-            ModeRuntime.activation == activation && rootCurrent() && sessionCurrent()
+            ModeRuntime.activation === activation && sessionCurrent() && installationCurrent() &&
+                UltraEnvironmentProbe.currentSnapshot(app).let {
+                    it.managerOwnerIdentity == observedOwner && it.legacyCredentialFingerprint == observedLegacy
+                }
         }
         val current = {
             expectedCurrent() && !Thread.currentThread().isInterrupted && cacheCurrent() && bootId != null &&
-                UltraEnvironmentAutoSetup.currentBootId() == bootId && UltraSdkCredentials.read(app) == key
+                UltraEnvironmentAutoSetup.currentBootId() == bootId
         }
-        val owner = if (session == null) UltraSdkCredentials.client(app, key, bootId)
-            else UltraSdkSession.client(app, session)
-        val client = owner.scoped(key) { cacheCurrent() && expectedCurrent() }
+        val owner = when {
+            session != null -> UltraSdkSession.client(app, session)
+            observedOwner != null -> UltraRuntimeClient()
+            else -> UltraSdkCredentials.client(app, current)
+        }
+        val client = owner.scoped(current)
         if (current()) Scope(client, current, cacheCurrent) else null
     }.getOrNull()
 
@@ -180,7 +186,8 @@ object UltraAuthorization {
     /** Missing userspace still gets its existing bounded setup; helper state never grants SU. */
     internal fun prepareExplicitMutation(context: Context): UltraAuthorizationAttempt.Preparation {
         // The existing Hook authority may establish its first SDK session here.
-        if (UltraSdkCredentials.hookWithoutSdk(context)) return prepareExplicitMutation(context, null)
+        if (dev.maplesu.manager.runtime.HookRootExecutor.production(context).available() &&
+            UltraSdkSession.current(context) == null) return prepareExplicitMutation(context, null)
         val scope = captureScope(context) ?: return UltraAuthorizationAttempt.Preparation(
             false, false, "BLOCKED", "SU_AUTH_SCOPE_CHANGED")
         return prepareExplicitMutation(context, scope)

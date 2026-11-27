@@ -161,7 +161,7 @@ object SuAutoWire {
         // library directory: checking the latter could never succeed and made every Manager
         // start re-implant another side library. The trailing colon is part of PATH, so
         // matching it keeps a directory whose name merely starts the same way from counting.
-        val shared = SuPublication.suDirectory(application) + ":"
+        val shared = (SuPublication.suDirectory(application) ?: return null) + ":"
         val script = buildString {
             append("PS=\"\$(/system/bin/ps -A -o PID,NAME 2>/dev/null)\"; ")
             targets.forEachIndexed { index, (packageName, directory) ->
@@ -196,43 +196,29 @@ object SuAutoWire {
         return probes
     }
 
-    /**
-     * True when the delivered image no longer matches the client this build ships.
-     *
-     * <p>The image is the client plus a 56-byte trailer, so a size mismatch means the
-     * application is holding an older build - which is exactly how a granted application
-     * ends up with root but without the newer terminal handling.
-     */
+    /** The delivered image is the complete raw client; no per-install trailer is used. */
     private fun imageIsStale(context: Context, packageName: String): Boolean {
         val image = SuDelivery.deliveredPath(context, packageName) ?: return false
         val shipped = File(context.applicationInfo.nativeLibraryDir, "libmaplesu_su.so")
         if (!shipped.isFile) return false
         val delivered = File(image)
-        if (!delivered.isFile) return true
-        // Size alone misses a rebuild that happens to produce the same length, and the
-        // application then keeps running last build's client forever. An image older than
-        // the shipped client is stale too.
-        if (delivered.length() != shipped.length() + 56) return true
-        // Timestamps inside an APK are the build time, so two rebuilds can compare equal.
-        // Compare content instead: a different client must always replace the image.
-        val head = minOf(65536L, delivered.length())
-        return !samePrefix(delivered, shipped, head)
+        if (!delivered.isFile || delivered.length() != shipped.length()) return true
+        return !sameImage(delivered, shipped)
     }
 
-
-    /** Compares the first [count] bytes of the delivered image and the shipped client. */
-    private fun samePrefix(delivered: java.io.File, shipped: java.io.File, count: Long): Boolean {
-        return runCatching {
-            java.io.FileInputStream(delivered).use { left ->
-                java.io.FileInputStream(shipped).use { right ->
-                    val a = ByteArray(count.toInt())
-                    val b = ByteArray(count.toInt())
-                    left.read(a)
-                    right.read(b)
-                    a.contentEquals(b)
+    private fun sameImage(delivered: File, shipped: File): Boolean = runCatching {
+        fun digest(file: File): ByteArray {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val block = ByteArray(8192)
+                while (true) {
+                    val count = input.read(block)
+                    if (count < 0) break
+                    digest.update(block, 0, count)
                 }
             }
-        }.getOrDefault(false)
-    }
-
+            return digest.digest()
+        }
+        digest(delivered).contentEquals(digest(shipped))
+    }.getOrDefault(false)
 }

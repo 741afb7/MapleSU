@@ -21,7 +21,7 @@ internal class ModeSwitchRootBridge(
     private val lease = ModeSwitchRootLease()
     private val requests = ModeSwitchRootRequests(
         execute = commands::execute,
-        uninstall = { ModeSwitchRootMain.uninstall(nativeDirectory, it) },
+        uninstall = { ModeSwitchRootMain.uninstall(nativeDirectory) },
         acquire = lease::acquire,
         release = lease::release,
         isHeld = lease::isHeld,

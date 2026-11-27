@@ -28,4 +28,3 @@ static_assert(sizeof(module_record) == 9236 && alignof(module_record) == 4);
 static_assert(offsetof(module_record, desc) == 0 && offsetof(module_record, state) == 9232);
 static_assert(sizeof(ModuleRunState) == 4);
 }
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();

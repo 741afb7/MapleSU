@@ -117,7 +117,7 @@ class ModeSwitchRootSessionTest {
             { calls += it; rootResult() }, { calls += "uninstall"; HookResult.OK })
         assertTrue(pin.ensureReady().ok)
         assertTrue(pin.execute("archive").ok)
-        assertTrue(pin.uninstallUltra("A".repeat(48)).ok)
+        assertTrue(pin.uninstallUltra().ok)
         assertTrue(pin.execute("restore").ok)
         assertEquals(1, preparations)
         assertEquals(listOf("archive", "uninstall", "restore"), calls)
@@ -133,7 +133,7 @@ class ModeSwitchRootSessionTest {
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.execute("write").detail)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.execute("rollback").detail)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.ensureReady().code)
-        assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.uninstallUltra("A".repeat(48)).code)
+        assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.uninstallUltra().code)
         assertEquals(1, preparations)
         assertEquals(1, executions)
         assertEquals(0, uninstalls)
@@ -183,7 +183,7 @@ class ModeSwitchRootSessionTest {
         })
         val workers = Executors.newFixedThreadPool(2)
         try {
-            val removed = workers.submit<HookResult> { pin.uninstallUltra("A".repeat(48)) }
+            val removed = workers.submit<HookResult> { pin.uninstallUltra() }
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             val rollback = workers.submit<RootExecResult> { pin.execute("rollback") }
             complete.countDown()
@@ -226,7 +226,7 @@ class ModeSwitchRootSessionTest {
     @Test fun acceptedUninstallRebootsEvenWhenManagerDisconnectsBeforeReply() {
         val calls = mutableListOf<String>()
         val request = ByteArrayOutputStream()
-        ModeSwitchRootProtocol.request(request, token, ModeSwitchRootProtocol.UNINSTALL, "A".repeat(48))
+        ModeSwitchRootProtocol.request(request, token, ModeSwitchRootProtocol.UNINSTALL, "")
         val disconnected = object : java.io.OutputStream() {
             override fun write(value: Int) { throw IOException("manager exited") }
         }
@@ -257,7 +257,7 @@ class ModeSwitchRootSessionTest {
         val channel = ModeSwitchRootChannel({ token.copyOf() }, {
             connection(ModeSwitchRootProtocol.Reply(0, ModeSwitchRootProtocol.REBOOT_REQUESTED))
         }, { rootResult() }, {})
-        val result = channel.uninstallUltra("A".repeat(48))
+        val result = channel.uninstallUltra()
         assertTrue(result.ok)
         assertEquals(ModeSwitchRootProtocol.REBOOT_REQUESTED, result.code)
     }
@@ -266,7 +266,7 @@ class ModeSwitchRootSessionTest {
         val calls = mutableListOf<String>()
         val requests = ModeSwitchRootRequests({ calls += "exec:$it"; ModeSwitchRootProtocol.Reply(0, "written") },
             { calls += "uninstall"; ModeSwitchRootProtocol.Reply(0) }, isHeld = { true })
-        assertEquals(0, requests.handle(ModeSwitchRootProtocol.UNINSTALL, "A".repeat(48)).code)
+        assertEquals(0, requests.handle(ModeSwitchRootProtocol.UNINSTALL, "").code)
         assertEquals("written", requests.handle(ModeSwitchRootProtocol.EXEC, "restore boot").output)
         assertEquals(listOf("uninstall", "exec:restore boot"), calls)
     }
@@ -276,20 +276,20 @@ class ModeSwitchRootSessionTest {
         val requests = ModeSwitchRootRequests({ executed = true; ModeSwitchRootProtocol.Reply(0) },
             { ModeSwitchRootProtocol.Reply(-1, detail = ModeSwitchRootProtocol.UNCERTAIN) }, isHeld = { true })
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN,
-            requests.handle(ModeSwitchRootProtocol.UNINSTALL, "A".repeat(48)).detail)
+            requests.handle(ModeSwitchRootProtocol.UNINSTALL, "").detail)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN,
             requests.handle(ModeSwitchRootProtocol.EXEC, "rollback").detail)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, requests.handle(ModeSwitchRootProtocol.PING, "").detail)
         assertFalse(executed)
     }
 
-    @Test fun rootKeyIsNotForwardedToExecAndInvalidKeysAreRejected() {
+    @Test fun uninstallUsesEmptyPayloadAndRejectsUnexpectedData() {
         var uninstallCalls = 0
-        val requests = ModeSwitchRootRequests({ fail("key must not become a shell command"); ModeSwitchRootProtocol.Reply(0) },
+        val requests = ModeSwitchRootRequests({ fail("payload must not become a shell command"); ModeSwitchRootProtocol.Reply(0) },
             { uninstallCalls++; ModeSwitchRootProtocol.Reply(0) }, isHeld = { true })
         assertEquals(ModeSwitchRootProtocol.BAD_REQUEST, requests.handle(ModeSwitchRootProtocol.UNINSTALL, "short").detail)
         assertEquals(0, uninstallCalls)
-        assertEquals(0, requests.handle(ModeSwitchRootProtocol.UNINSTALL, "A".repeat(48)).code)
+        assertEquals(0, requests.handle(ModeSwitchRootProtocol.UNINSTALL, "").code)
         assertEquals(1, uninstallCalls)
     }
 
@@ -298,7 +298,7 @@ class ModeSwitchRootSessionTest {
         val requests = ModeSwitchRootRequests({ ModeSwitchRootProtocol.Reply(0) },
             { uninstalls++; ModeSwitchRootProtocol.Reply(0) })
         assertEquals(ModeSwitchRootProtocol.LEASE_REQUIRED,
-            requests.handle(ModeSwitchRootProtocol.UNINSTALL, "A".repeat(48)).detail)
+            requests.handle(ModeSwitchRootProtocol.UNINSTALL, "").detail)
         assertEquals(0, uninstalls)
     }
 
@@ -312,11 +312,11 @@ class ModeSwitchRootSessionTest {
         assertEquals(ModeSwitchRootProtocol.BAD_REQUEST, requests.handle(ModeSwitchRootProtocol.ACQUIRE, "invalid").detail)
         assertEquals(0, requests.handle(ModeSwitchRootProtocol.ACQUIRE, SWITCH_ID).code)
         assertEquals(SWITCH_ID, id)
-        assertEquals(0, requests.handle(ModeSwitchRootProtocol.UNINSTALL, "A".repeat(48)).code)
+        assertEquals(0, requests.handle(ModeSwitchRootProtocol.UNINSTALL, "").code)
         assertEquals(0, requests.handle(ModeSwitchRootProtocol.RELEASE, SWITCH_ID).code)
         assertFalse(held)
         assertEquals(ModeSwitchRootProtocol.LEASE_REQUIRED,
-            requests.handle(ModeSwitchRootProtocol.UNINSTALL, "A".repeat(48)).detail)
+            requests.handle(ModeSwitchRootProtocol.UNINSTALL, "").detail)
     }
 
     @Test fun uncertainSdkCallRetainsLeaseAndBlocksItsRelease() {
@@ -328,7 +328,7 @@ class ModeSwitchRootSessionTest {
             isHeld = { held })
         assertEquals(0, requests.handle(ModeSwitchRootProtocol.ACQUIRE, SWITCH_ID).code)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN,
-            requests.handle(ModeSwitchRootProtocol.UNINSTALL, "A".repeat(48)).detail)
+            requests.handle(ModeSwitchRootProtocol.UNINSTALL, "").detail)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, requests.handle(ModeSwitchRootProtocol.RELEASE, SWITCH_ID).detail)
         assertEquals(0, releases)
         assertTrue(held)
@@ -359,7 +359,7 @@ class ModeSwitchRootSessionTest {
             { HookResult.failed(ModeSwitchRootProtocol.UNCERTAIN) },
             acquireLease = { acquires++; HookResult.OK }, releaseLease = { releases++; HookResult.OK })
         assertTrue(pin.acquire(SWITCH_ID).ok)
-        assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.uninstallUltra("A".repeat(48)).code)
+        assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.uninstallUltra().code)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.release(SWITCH_ID).code)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, pin.acquire(SWITCH_ID).code)
         assertEquals(0, releases)

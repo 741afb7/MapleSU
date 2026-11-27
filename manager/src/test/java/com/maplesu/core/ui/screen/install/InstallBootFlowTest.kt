@@ -47,12 +47,12 @@ class InstallBootFlowTest {
     }
 
     /**
-     * 生产装配是 `UltraKernelGeneration.port`（真的会读凭据 + 渲 36 MB 内核）。
+     * 生产装配是 `UltraKernelGeneration.port`（真的会渲染目标内核）。
      * 纯投影用例一律换成 fake；否则这些用例会在 host 上碰 `ksuApp`。
      */
     @Before
     fun useFakeGenerationByDefault() {
-        InstallBootFlow.generation = unavailable(UltraKernelGenerateCodes.CREDENTIAL_REQUIRED)
+        InstallBootFlow.generation = unavailable(UltraKernelGenerateCodes.SITE_SYMBOL_MISSING)
     }
 
     @After
@@ -127,11 +127,11 @@ class InstallBootFlowTest {
     }
 
     @Test
-    fun unknownReleaseWithoutCredentialIsRefusedWithTheCredentialCode() {
+    fun unknownReleasePreservesTheRendererSiteFailure() {
         val profile = InstallBootFlow.fromFacts("boot.img", "", unknownFacts().copy(series = "6.12"))
         assertNull(profile.target)
         // 端口的码优先于 facts 的"暂不支持"：它告诉用户下一步该干什么。
-        assertEquals(UltraKernelGenerateCodes.CREDENTIAL_REQUIRED, profile.stableCode)
+        assertEquals(UltraKernelGenerateCodes.SITE_SYMBOL_MISSING, profile.stableCode)
         assertEquals(listOf(release), profile.knownReleases)
         assertFalse(profile.selectable)
         assertEquals("6.12.x", profile.seriesLabel)
@@ -166,7 +166,7 @@ class InstallBootFlowTest {
 
     @Test
     fun aDeferredPlanIsStillASelectableTarget() {
-        // 当前分区的 boot 只在安装时 dump，探测阶段只能确认"已接线 + 有凭据"。
+        // 当前分区的 boot 只在安装时 dump，探测阶段只能确认"已接线，等待目标镜像"。
         InstallBootFlow.generation = available(sha = "", patches = 0, deferred = true)
         val profile = InstallBootFlow.fromFacts("current", release, unknownFacts(release))
         assertEquals(InstallBootFlow.GENERATED_VARIANT_ID, profile.target?.id)

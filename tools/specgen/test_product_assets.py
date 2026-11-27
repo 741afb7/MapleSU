@@ -22,14 +22,13 @@ class ProductAssetsTest(unittest.TestCase):
         return SimpleNamespace(**fields)
 
     def invoke(self, args):
-        credential = b"Aa1" * 16
         with patch.object(product, "_host_runtime", return_value=("java", Path("host.jar"), "deps")), \
                 patch.object(product.subprocess, "run", return_value=subprocess.CompletedProcess([], 7)) as run:
-            result = product.generate(args, credential)
+            result = product.generate(args)
         self.assertEqual(result, 7)
         command = run.call_args.args[0]
-        self.assertNotIn(credential.decode(), command)
-        self.assertEqual(run.call_args.kwargs["input"], credential + b"\n")
+        self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertNotIn("input", run.call_args.kwargs)
         self.assertEqual(command.count("--assets"), 1)
         return command[command.index("--assets") + 1]
 

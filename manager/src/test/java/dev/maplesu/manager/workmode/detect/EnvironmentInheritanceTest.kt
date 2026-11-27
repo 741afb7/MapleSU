@@ -241,7 +241,7 @@ class EnvironmentInheritanceTest {
         val outcome = runner(probes, store).check()
 
         assertEquals(EnvironmentVerdict.UNKNOWN, outcome.verdict)
-        assertEquals("ENV_UNKNOWN_TIMEOUT", outcome.code)
+        assertEquals("ENV_UNKNOWN", outcome.code)
         assertFalse(outcome.terminal)
         assertEquals(EnvironmentCheckDetail.KSU_PROBE_UNAVAILABLE, outcome.detail)
         // 上次状态原样保留（脏位也保留，下一次仍会重新探测）。

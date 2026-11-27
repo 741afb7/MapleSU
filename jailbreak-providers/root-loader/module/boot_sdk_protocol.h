@@ -16,6 +16,7 @@ static void msu_sdk_store(unsigned char *p, unsigned long long value, unsigned i
     for (n = 0; n < bytes; ++n) p[n] = (unsigned char)(value >> (n * 8));
 }
 /* Decode in a private copy; never modify the syscall's userspace filename. */
+#ifndef MSU_BOOT_SDK_NATIVE
 static int msu_sdk_decode(unsigned char *packet, const char *key)
 {
     unsigned int n, difference = 0;
@@ -51,6 +52,7 @@ static int msu_sdk_bind_key(char *key, long displacement)
     key[1] = alphabet[(first + count + 2) % 62];
     return 0;
 }
+#endif
 static int msu_sdk_metadata_offset(unsigned long base, unsigned long metadata,
     unsigned int *offset)
 {

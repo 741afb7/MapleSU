@@ -1,5 +1,5 @@
 // Real environment entry -> shared boot state -> Zygisk permission gate.
-// Only device paths, SDK credential setup and kernel preparation are fixtures.
+// Only device paths and kernel preparation are fixtures.
 #include "module_policy_config.h"
 #include "module_policy_mode.h"
 #include <cassert>
@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-extern "C" int maplesu_environment_policy_start(const char*);
+extern "C" int maplesu_environment_policy_start();
 extern "C" int __real_open(const char*, int, ...);
 namespace {
 unsigned hides = 0;
@@ -28,7 +28,7 @@ void boot(unsigned id) {
     assert(fd >= 0 && write(fd, value.data(), value.size()) == ssize_t(value.size()));
     close(fd);
 }
-int start() { return maplesu_environment_policy_start("FIXTURE_ONLY_NOT_A_DEVICE_CREDENTIAL"); }
+int start() { return maplesu_environment_policy_start(); }
 }
 extern "C" int __wrap_open(const char* path, int flags, ...) {
     mode_t mode = 0;
@@ -37,7 +37,6 @@ extern "C" int __wrap_open(const char* path, int flags, ...) {
     else if (std::string(path) == "/proc/sys/kernel/random/boot_id") path = "/output/current-boot";
     return __real_open(path, flags, mode);
 }
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*) {}
 namespace maplesu::module_policy {
 bool hidden_kernel_policy_supported() { return true; }
 unsigned prepare_hidden_kernel_policy(bool) {

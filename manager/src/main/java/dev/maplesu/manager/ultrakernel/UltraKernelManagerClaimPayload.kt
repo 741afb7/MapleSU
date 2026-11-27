@@ -56,7 +56,9 @@ internal data class UltraKernelManagerClaimPayload(
                             val managementLayoutSha256: String? = null,
                             val descriptor: DescriptorAbi? = null,
                             val credentialDomainSha256: String? = null,
-                            val taskProfile: TaskProfileFacts? = null)
+                            val taskProfile: TaskProfileFacts? = null,
+                            val assemblyFunctions: Map<String, String> = emptyMap(),
+                            val coreTaskCleanupQualified: Boolean = false)
     data class TaskProfileFacts(val words: List<Int>, val layoutSha256: String,
         val verified: Boolean, val missing: Set<String>, val imports: Map<String, String>,
         val entries: Map<String, CallbackPrefix>, val cfiMode: String,
@@ -77,6 +79,65 @@ internal data class UltraKernelManagerClaimPayload(
     data class RetainedFunction(val section: String, val entry: Int, val bytes: Int, val typeid: Int?)
     companion object {
         private const val DIRECTORY = "ultra-manager-claim"
+        // Called only after the core and SU source/object/ABI records have been verified.
+        internal fun coreTaskCleanupQualified(reference: JsonObject): Boolean {
+            val core = reference["coreLifecycleAbi"]?.jsonObject ?: return false
+            val su = reference["suProviderAbi"]?.jsonObject ?: return false
+            return core["kernelMetadataComplete"]?.jsonPrimitive?.booleanOrNull == true &&
+                core["taskState"]?.jsonObject?.isNotEmpty() == true &&
+                su["callbackOrigins"]?.jsonObject?.containsKey("su.task.validate") == true &&
+                (core["config"]?.jsonObject?.get("CONFIG_SECCOMP_FILTER")?.jsonPrimitive?.content != "y" ||
+                    core["nativeFunctionAbi"]?.jsonObject?.get("seccomp_filter_release")?.jsonObject
+                        ?.get("verified")?.jsonPrimitive?.booleanOrNull == true)
+        }
+        internal fun assemblyDeclarations(reference: JsonObject): Map<String, String> {
+            val declarations = reference["declarationAbi"]?.jsonObject ?: return emptyMap()
+            val source = reference.getValue("source").jsonObject
+            val config = source.getValue("configSha256").jsonPrimitive.content
+            fun identity(value: JsonElement?) = value?.jsonObject?.let {
+                it["bytes"]?.jsonPrimitive?.longOrNull?.let { size -> size > 0 } == true &&
+                    it["sha256"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{64}")) == true
+            } == true
+            return declarations.filterKeys { it in UltraKernelResidentAbi.assemblyFunctionSignatures }.mapValues { (name, value) ->
+                val item = value.jsonObject
+                val expected = UltraKernelResidentAbi.assemblyFunctionSignatures.getValue(name)
+                require(item["kind"]?.jsonPrimitive?.content == "FUNC" &&
+                    item["signature"]?.jsonPrimitive?.content == expected &&
+                    reference.getValue("functionAbi").jsonObject[name]?.jsonPrimitive?.content == expected) {
+                    "ULTRA_KERNEL_RESIDENT_ASM_REFERENCE:$name"
+                }
+                val rows = item.getValue("declarations").jsonArray
+                require(rows.isNotEmpty() && rows.all { row ->
+                    val proof = row.jsonObject
+                    val method = proof["method"]?.jsonPrimitive?.content
+                    val extent = proof.getValue("referenceExtent").jsonObject
+                    val address = extent.getValue("address").jsonPrimitive.content.toULong()
+                    val sectionAddress = extent.getValue("sectionAddress").jsonPrimitive.content.toULong()
+                    val bytes = extent.getValue("bytes").jsonPrimitive.long
+                    val sectionBytes = extent.getValue("sectionBytes").jsonPrimitive.long
+                    val offset = if (address >= sectionAddress) address - sectionAddress else ULong.MAX_VALUE
+                    method in setOf("same-object-DWARF-declaration-to-BTF-type", "same-object-BTF-pointer-relocation") &&
+                        listOf("sourceIdentity", "objectIdentity", "commandIdentity", "dependencyReceiptIdentity").all {
+                            identity(proof[it]) } && proof["referenceConfigSha256"]?.jsonPrimitive?.content == config &&
+                        (proof["declarationConfigSha256"]?.jsonPrimitive?.content == config ||
+                            source["configSymbolsSha256"] != null &&
+                            proof["referenceConfigSymbolsSha256"] == source["configSymbolsSha256"]) &&
+                        extent["kind"]?.jsonPrimitive?.content == "FUNC" && bytes > 0 && sectionBytes >= bytes &&
+                        address % 4uL == 0uL && offset <= (sectionBytes - bytes).toULong() &&
+                        extent.getValue("sectionFlags").jsonPrimitive.long and 6L == 6L &&
+                        proof.getValue("parameterSignatures").jsonArray.joinToString("", postfix = ")") {
+                            it.jsonPrimitive.content + ";" } == expected.substringAfter('(') &&
+                        proof.getValue("externalSymbolRelocations").jsonArray.any { relocation ->
+                            val call = relocation.jsonObject
+                            call["type"]?.jsonPrimitive?.intOrNull == (if (method == "same-object-BTF-pointer-relocation") 257 else 283) &&
+                                call["addend"]?.jsonPrimitive?.longOrNull == 0L &&
+                                call["offset"]?.jsonPrimitive?.longOrNull?.let { it >= 0 } == true &&
+                                call["symbolIndex"]?.jsonPrimitive?.intOrNull?.let { it > 0 } == true
+                        }
+                }) { "ULTRA_KERNEL_RESIDENT_ASM_REFERENCE_PROOF:$name" }
+                expected
+            }
+        }
         internal val taskProfileFunctions = mapOf(
             "msu_task_profile_flags_supported" to "fi4:16777248(i8:64;)",
             "msu_task_profile_check_current" to "fi4:16777248(*fi4:16777248(*v;);*v;)",
@@ -223,7 +284,9 @@ internal data class UltraKernelManagerClaimPayload(
                 "ULTRA_KERNEL_TASK_PROFILE_IMPORTS"
             }
             val proofs = report.getValue("qualification").jsonObject
-            val required = setOf("slot63", "rcu", "bitops", "cfi", "syscallTracepoint", "cloneExec")
+            val required = if (implementationReport?.get("targetProofSchema")?.jsonPrimitive?.content ==
+                UltraKernelTaskProfileTarget.PROOF_SCHEMA) UltraKernelTaskProfileTarget.proofBits.keys
+                else setOf("slot63", "rcu", "bitops", "cfi", "syscallTracepoint", "cloneExec")
             require(required.containsAll(proofs.keys)) { "ULTRA_KERNEL_TASK_PROFILE_PROOFS" }
             val target = report["targetSha256"]?.jsonPrimitive?.content
             val missing = required.filter { key ->
@@ -306,6 +369,95 @@ internal data class UltraKernelManagerClaimPayload(
             "6.12" to "android16-6.12", "6.18" to "android17-6.18",
         )
 
+        private const val CURRENT_SOURCE_SCHEMA = "maplesu-claim-current-source-selection/1"
+
+        private fun verifyCurrentSources(selection: JsonObject, freeze: JsonObject,
+            reference: JsonObject, manifest: JsonObject): Map<String, JsonObject> {
+            fun identity(value: JsonElement?): JsonObject = (value?.jsonObject
+                ?: error("ULTRA_KERNEL_CURRENT_SOURCE_IDENTITY")).also {
+                require(!it["path"]?.jsonPrimitive?.content.isNullOrBlank() &&
+                    (it["bytes"]?.jsonPrimitive?.longOrNull ?: 0) > 0 &&
+                    it["sha256"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{64}")) == true) {
+                    "ULTRA_KERNEL_CURRENT_SOURCE_IDENTITY"
+                }
+            }
+            fun path(value: JsonObject) = value.getValue("path").jsonPrimitive.content.replace('\\', '/')
+            fun same(a: JsonObject, b: JsonObject) = a["bytes"] == b["bytes"] && a["sha256"] == b["sha256"]
+            val inputs = manifest.getValue("inputs").jsonObject.entries.associate { it.key.replace('\\', '/') to it.value }
+            require(inputs.size == manifest.getValue("inputs").jsonObject.size) { "ULTRA_KERNEL_CURRENT_INPUT_ALIASES" }
+            fun selected(value: JsonElement?): JsonObject = identity(value).also { item ->
+                val matches = inputs.entries.filter { path(item) == it.key || path(item).endsWith("/" + it.key) }
+                val longest = matches.maxOfOrNull { it.key.length }
+                require(matches.singleOrNull { it.key.length == longest }?.value == item["sha256"]) {
+                    "ULTRA_KERNEL_CURRENT_SELECTED_SOURCE:${path(item)}"
+                }
+            }
+            require(selection == freeze && selection["schema"]?.jsonPrimitive?.content == CURRENT_SOURCE_SCHEMA &&
+                selection["sourceOwnerFrozen"]?.jsonPrimitive?.booleanOrNull == true &&
+                selection["targetQualified"]?.jsonPrimitive?.booleanOrNull == false &&
+                selection["rootKeyRequired"]?.jsonPrimitive?.booleanOrNull == false) {
+                "ULTRA_KERNEL_CURRENT_SOURCE_FREEZE"
+            }
+            val frozen = selected(selection["identity"])
+            val files = selection.getValue("files").jsonArray.map { it.jsonObject }
+            val roles = setOf("native", "support", "su", "private", "protocol", "frame", "bridge")
+            require(files.isNotEmpty() && files.map { it["role"] to it["logicalPath"] }.distinct().size == files.size &&
+                files.map { it["role"]?.jsonPrimitive?.content }.toSet() == roles) {
+                "ULTRA_KERNEL_CURRENT_SOURCE_ROWS"
+            }
+            val sources = linkedMapOf<String, JsonObject>()
+            for (row in files) {
+                val logical = row.getValue("logicalPath").jsonPrimitive.content
+                require(logical.isNotBlank() && '\\' !in logical && !logical.startsWith('/') &&
+                    logical.split('/').none { it in setOf("", ".", "..") } && row["before"] is JsonNull) {
+                    "ULTRA_KERNEL_CURRENT_SOURCE_PATH"
+                }
+                val after = selected(row["after"])
+                require(path(after) == logical && inputs[logical] == after["sha256"]) {
+                    "ULTRA_KERNEL_CURRENT_SOURCE_ROLE:$logical"
+                }
+                val previous = sources[logical]
+                if (previous == null) sources[logical] = JsonObject(row + mapOf("path" to JsonPrimitive(logical),
+                    "nativeCopyIdentity" to after))
+                else require(previous["after"] == after) { "ULTRA_KERNEL_CURRENT_SOURCE_ALIAS:$logical" }
+            }
+            // Publication inputs are independently checked by the management gate binding.
+            val publicationInputs = setOf("runtime/maplesu-sdk/sdk/src/func_hook/module_base_kernel_func_hook.cpp",
+                "runtime/maplesu-sdk/sdk/src/func_hook/owner_hook_codegen.h",
+                "runtime/maplesu-sdk/sdk/src/func_hook/owner_hook_publication.h",
+                "runtime/maplesu-sdk/sdk/src/func_hook/owner_publication_gate.h",
+                "runtime/maplesu-sdk/sdk/src/func_hook/legacy_hook_publication.h",
+                "runtime/maplesu-sdk/sdk/include/maplesu_hook_private.h",
+                "runtime/ultra/identity/kernel/native-text/kprobe_text_owner.inc")
+            val expected = inputs.keys.filter { logical ->
+                (logical.startsWith("runtime/ultra/") || logical.startsWith("runtime/maplesu-sdk/") ||
+                    logical.startsWith("third_party/kernelsu/") || logical.startsWith("jailbreak-providers/root-loader/")) &&
+                    (logical.substringAfterLast('.').lowercase() in setOf("c", "h", "s", "inc") || logical.endsWith("/Kbuild")) &&
+                    logical !in publicationInputs
+            }.toSet()
+            require(sources.keys == expected) { "ULTRA_KERNEL_CURRENT_SOURCE_CLOSURE" }
+            val su = reference.getValue("suProviderAbi").jsonObject.getValue("sourceSelection").jsonObject
+            require(su["schema"]?.jsonPrimitive?.content == CURRENT_SOURCE_SCHEMA &&
+                su["targetQualified"]?.jsonPrimitive?.booleanOrNull == false && selected(su["identity"]) == frozen) {
+                "ULTRA_KERNEL_CURRENT_CORE_SU_FREEZE"
+            }
+            val suRows = su.getValue("files").jsonArray.map { it.jsonObject }
+            val frozenSu = files.filter { it["role"]?.jsonPrimitive?.content == "su" }
+                .associateBy { it.getValue("logicalPath").jsonPrimitive.content }
+            require(suRows.size == frozenSu.size && suRows.map { it["logicalPath"] }.distinct().size == suRows.size) {
+                "ULTRA_KERNEL_CURRENT_CORE_SU_ROWS"
+            }
+            for (row in suRows) {
+                val logical = row.getValue("logicalPath").jsonPrimitive.content
+                val chosen = identity(frozenSu[logical]?.get("after"))
+                val after = selected(row["after"])
+                require(row["role"]?.jsonPrimitive?.content == "su" && row["before"] is JsonNull &&
+                    path(after).endsWith("/$logical") && same(chosen, after) &&
+                    selected(row["snapshotIdentity"]) == after) { "ULTRA_KERNEL_CURRENT_CORE_SU_PAIR:$logical" }
+            }
+            return sources
+        }
+
         private fun verifyCoreLifecycle(report: JsonObject, manifest: JsonObject, payload: JsonObject,
                                         reference: JsonObject, elf: ByteArray, mode: String, normalize: Boolean): Map<String, JsonObject> {
             fun identity(value: JsonElement?): JsonObject {
@@ -343,13 +495,19 @@ internal data class UltraKernelManagerClaimPayload(
                 listOf("metadataComplete", "targetQualified", "taskStateQualified", "profileDomainQualified", "factoryBound", "lifecycleQualified")
                     .all { !flag(report, it) }) { "ULTRA_KERNEL_CORE_QUALIFICATION_UNBOUND" }
             val complete = flag(report, "kernelMetadataComplete")
+            val owner = report.getValue("sourceSelection").jsonObject
+            val freeze = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze").jsonObject
+            val currentSources = owner["schema"]?.jsonPrimitive?.content == CURRENT_SOURCE_SCHEMA
+            val runtimeEvolution = freeze["runtimeLayoutEvolution"]?.jsonObject
+            val lifecycleRevision = if (currentSources) 2 else owner["lifecycleRevision"]?.jsonPrimitive?.intOrNull ?: 1
+            val runtimeSuccessor = owner["runtimeSuccessor"]?.jsonObject
+            val sources = if (currentSources) verifyCurrentSources(owner, freeze, reference, manifest) else {
             val evolution = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze").jsonObject
                 .getValue("coreLifecycleEvolution").jsonObject
             require(evolution["schema"]?.jsonPrimitive?.content == "maplesu-core-lifecycle-source-evolution/1" &&
                 !flag(evolution, "productionWritten")) { "ULTRA_KERNEL_CORE_SOURCE_EVOLUTION" }
             for (key in listOf("selectionIdentity", "freezeIdentity", "baselineIdentity", "changesetIdentity", "parentFreezeIdentity"))
                 selected(evolution[key])
-            val owner = report.getValue("sourceSelection").jsonObject
             require(flag(owner, "sourceOwnerFrozen") && !flag(owner, "productionWritten") &&
                 selected(owner["identity"]) == selected(evolution["selectionIdentity"]) &&
                 selected(owner["freezeIdentity"]) == selected(evolution["freezeIdentity"]) &&
@@ -366,8 +524,6 @@ internal data class UltraKernelManagerClaimPayload(
                 selected(JsonObject(item + ("path" to JsonPrimitive(archive))))
                 return item
             }
-            val runtimeEvolution = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze")
-                .jsonObject["runtimeLayoutEvolution"]?.jsonObject
             val runtimeRows = runtimeEvolution?.let { runtime ->
                 require(runtime["schema"]?.jsonPrimitive?.content == "maplesu-claim-runtime-layout-source-selection/1" &&
                     runtime["sourceOwnerFrozen"]?.jsonPrimitive?.booleanOrNull == true &&
@@ -415,7 +571,6 @@ internal data class UltraKernelManagerClaimPayload(
                 evolution["runtimeLayoutSourceSelection"] == null) { "ULTRA_KERNEL_RUNTIME_LAYOUT_SOURCE_UNEXPECTED" }
             val ownerRevision = owner["lifecycleRevision"]?.jsonPrimitive?.intOrNull
             val evolutionRevision = evolution["lifecycleRevision"]?.jsonPrimitive?.intOrNull
-            val lifecycleRevision = ownerRevision ?: 1
             val sourceFileCount = owner["sourceFileCount"]?.jsonPrimitive?.intOrNull
             val deploymentChannel = lifecycleRevision == 2 && sourceFileCount == 54
             val previousFreeze = "d1fcaf09895cbfea764457c7b946fd05165fabd249bd4e131309f9629c0b8cd1"
@@ -430,7 +585,6 @@ internal data class UltraKernelManagerClaimPayload(
                     if (lifecycleRevision == 2) sourceFileCount in setOf(48, 54) else sourceFileCount == 47)) {
                 "ULTRA_KERNEL_CORE_SOURCE_REVISION"
             }
-            val runtimeSuccessor = owner["runtimeSuccessor"]?.jsonObject
             val coreRuntimeEvolution = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze")
                 .jsonObject["coreRuntimeEvolution"]?.jsonObject
             require(runtimeSuccessor == coreRuntimeEvolution) { "ULTRA_KERNEL_CORE_RUNTIME_SOURCE" }
@@ -743,6 +897,8 @@ internal data class UltraKernelManagerClaimPayload(
                     "ULTRA_KERNEL_CORE_DEPLOYMENT_CONTRACT"
                 }
             }
+            sources
+            }
             val objects = setOf("manager_management", "manager_uid_gateway", "manager_task_state", "manager_credential_domain") +
                 (if (lifecycleRevision == 2) setOf("manager_uid_snapshot") else emptySet())
             val probes = setOf("manager_core_facts", "manager_core_uid_facts", "manager_core_callback_types")
@@ -762,7 +918,7 @@ internal data class UltraKernelManagerClaimPayload(
             val receipts = identities("dependencyReceiptIdentities", ".json")
             fun dependencyIdentity(value: JsonElement): JsonObject {
                 val item = value.jsonObject
-                return if (runtimeEvolution == null || item["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(value)
+                return if (!currentSources && runtimeEvolution == null || item["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(value)
                 else item.also {
                     val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                     require(path(it).isNotBlank() && it["sha256"]?.jsonPrimitive?.content == empty &&
@@ -801,7 +957,8 @@ internal data class UltraKernelManagerClaimPayload(
             }
             val fence = report.getValue("readerFenceAbi").jsonObject.mapValues { it.value.jsonPrimitive.content }
             UltraKernelResidentAbi.verifyCoreLifecycleMetadata(facts, uidFacts, compiled, functions, callbackSignatures, fence, complete,
-                lifecycleRevision, runtimeSuccessor != null, runtimeEvolution != null)
+                lifecycleRevision, currentSources || runtimeSuccessor != null, currentSources || runtimeEvolution != null,
+                currentSourceSelection = currentSources)
             val functionObjects = mapOf(
                 "manager_management" to setOf("msu_runtime_service_register", "msu_runtime_service_bind", "msu_runtime_service_bind_held",
                     "msu_runtime_service_revoke", "msu_runtime_service_alloc", "msu_runtime_service_write", "msu_runtime_service_shared_bool_create",
@@ -1266,6 +1423,17 @@ internal data class UltraKernelManagerClaimPayload(
             val freeze = management.getValue("upstreamSourceFreeze").jsonObject
             val selection = proof.getValue("sourceSelection").jsonObject
             val digest = UltraKernelSpec.sha256(elf)
+            if (freeze["schema"]?.jsonPrimitive?.content == CURRENT_SOURCE_SCHEMA) {
+                verifyCurrentSources(core.getValue("sourceSelection").jsonObject, freeze, reference, manifest)
+                require(selection["claimSha256"]?.jsonPrimitive?.content == digest &&
+                    same(identity(selection["buildInputs"]), identity(management["buildInputIdentity"])) &&
+                    selection["runtime"] == freeze && selection["host"] == reference.getValue("hostRuntimeAbi").jsonObject["sourceSelection"] &&
+                    JsonObject(selection.getValue("host").jsonObject.filterKeys {
+                        it !in setOf("runtimeChannel", "runtimeObjects")
+                    }) == freeze) {
+                    "ULTRA_KERNEL_SOURCE_QUALIFICATION_CURRENT_GENERATION"
+                }
+            } else {
             require(selection["claimSha256"]?.jsonPrimitive?.content == digest &&
                 same(identity(selection["buildInputs"]), identity(management["buildInputIdentity"])) &&
                 selection["host"] == freeze["hostDeploymentEvolution"] &&
@@ -1291,6 +1459,7 @@ internal data class UltraKernelManagerClaimPayload(
                         "ULTRA_KERNEL_SOURCE_QUALIFICATION_RUNTIME_ROLES"
                     }
                 }
+            }
             }
             val policy = proof.getValue("cfiPolicy").jsonObject
             require(flag(policy, "kcfiEnabled") == (mode == "kcfi") &&
@@ -1552,9 +1721,17 @@ internal data class UltraKernelManagerClaimPayload(
                 "ULTRA_KERNEL_RUNTIME_LAYOUT_MANIFEST"
             }
             val selection = identity(report["sourceSelectionIdentity"])
-            val evolution = payload.getValue("referenceAbi").jsonObject.getValue("managementAbi").jsonObject
-                .getValue("upstreamSourceFreeze").jsonObject.getValue("runtimeLayoutEvolution").jsonObject
-            require(evolution["schema"]?.jsonPrimitive?.content == "maplesu-claim-runtime-layout-source-selection/1" &&
+            val freeze = payload.getValue("referenceAbi").jsonObject.getValue("managementAbi").jsonObject
+                .getValue("upstreamSourceFreeze").jsonObject
+            val currentSources = freeze["schema"]?.jsonPrimitive?.content == CURRENT_SOURCE_SCHEMA
+            val evolution = if (currentSources) freeze else freeze.getValue("runtimeLayoutEvolution").jsonObject
+            if (currentSources) require(freeze == payload.getValue("referenceAbi").jsonObject
+                .getValue("coreLifecycleAbi").jsonObject.getValue("sourceSelection").jsonObject &&
+                freeze["rootKeyRequired"]?.jsonPrimitive?.booleanOrNull == false) {
+                "ULTRA_KERNEL_RUNTIME_LAYOUT_CURRENT_FREEZE"
+            }
+            require(evolution["schema"]?.jsonPrimitive?.content ==
+                (if (currentSources) CURRENT_SOURCE_SCHEMA else "maplesu-claim-runtime-layout-source-selection/1") &&
                 evolution["sourceOwnerFrozen"]?.jsonPrimitive?.booleanOrNull == true &&
                 evolution["targetQualified"]?.jsonPrimitive?.booleanOrNull == false &&
                 same(selection, identity(evolution["identity"]))) { "ULTRA_KERNEL_RUNTIME_LAYOUT_SOURCE_SELECTION" }
@@ -1570,6 +1747,12 @@ internal data class UltraKernelManagerClaimPayload(
                 val prior = identity(selectedSources[path]?.get("after"))
                 val successor = taskSuccessors[path]
                 val chosen = successor?.let {
+                    if (currentSources) {
+                        require(same(identity(it["after"]), prior) && it["before"] is JsonNull) {
+                            "ULTRA_KERNEL_RUNTIME_LAYOUT_CURRENT_SOURCE:$path"
+                        }
+                        return@let identity(it["after"])
+                    }
                     val before = identity(it["before"])
                     require(same(before, prior) && before.getValue("path").jsonPrimitive.content.replace('\\', '/') ==
                         prior.getValue("path").jsonPrimitive.content.replace('\\', '/')) {
@@ -1939,9 +2122,11 @@ internal data class UltraKernelManagerClaimPayload(
                 require(descriptor?.get("metadataEncoding") == null) { "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_SCHEMA" }
                 return manifest
             }
-            require(descriptor != null && descriptor["metadataEncoding"]?.jsonPrimitive?.let {
-                it.isString && it.content == "gzip-chunks-v1"
-            } == true) { "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_ENCODING" }
+            val encoding = (descriptor?.get("metadataEncoding") as? JsonPrimitive)?.takeIf { it.isString }?.content
+            require(descriptor != null && encoding in setOf("gzip-chunks-v1", "xz-chunks-v1")) {
+                "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_ENCODING"
+            }
+            val codec = if (encoding == "xz-chunks-v1") "xz" else "gzip"
             fun bytes(value: JsonElement?, maximum: Int): Int {
                 val number = value as? JsonPrimitive
                 val count = number?.longOrNull
@@ -1959,8 +2144,8 @@ internal data class UltraKernelManagerClaimPayload(
             }
             val decodedBytes = bytes(descriptor["decodedBytes"], 32 * 1048576)
             val decodedHash = digest(descriptor["decodedSha256"])
-            val gzipBytes = bytes(descriptor["gzipBytes"], 4 * 1048576)
-            val gzipHash = digest(descriptor["gzipSha256"])
+            val compressedBytes = bytes(descriptor["${codec}Bytes"], 4 * 1048576)
+            val compressedHash = digest(descriptor["${codec}Sha256"])
             val payloadBytes = bytes(descriptor["bytes"], 1048576)
             val payloadHash = digest(descriptor["sha256"])
             require(elf.size == payloadBytes && UltraKernelSpec.sha256(elf) == payloadHash) {
@@ -1969,7 +2154,7 @@ internal data class UltraKernelManagerClaimPayload(
             val chunks = descriptor["chunks"] as? JsonArray
             require(chunks != null && chunks.size in 1..8) { "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_CHUNKS" }
             val paths = linkedSetOf<String>()
-            val compressed = java.io.ByteArrayOutputStream(gzipBytes)
+            val compressed = java.io.ByteArrayOutputStream(compressedBytes)
             for (element in chunks) {
                 val chunk = element.jsonObject
                 val path = (chunk["path"] as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -1980,7 +2165,7 @@ internal data class UltraKernelManagerClaimPayload(
                 }
                 val size = bytes(chunk["bytes"], 512 * 1024)
                 val hash = digest(chunk["sha256"])
-                require(size <= gzipBytes - compressed.size()) { "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_GZIP_SIZE" }
+                require(size <= compressedBytes - compressed.size()) { "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_${codec.uppercase()}_SIZE" }
                 val content = read(path, 1048576)
                 require(content.size == size && UltraKernelSpec.sha256(content) == hash) {
                     "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_CHUNK_IDENTITY"
@@ -1988,12 +2173,15 @@ internal data class UltraKernelManagerClaimPayload(
                 compressed.write(content)
             }
             val encoded = compressed.toByteArray()
-            require(encoded.size == gzipBytes && UltraKernelSpec.sha256(encoded) == gzipHash) {
-                "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_GZIP_IDENTITY"
+            require(encoded.size == compressedBytes && UltraKernelSpec.sha256(encoded) == compressedHash) {
+                "ULTRA_KERNEL_MANAGER_CLAIM_METADATA_${codec.uppercase()}_IDENTITY"
             }
             val output = java.io.ByteArrayOutputStream(minOf(decodedBytes, 65536))
             try {
-                java.util.zip.GZIPInputStream(java.io.ByteArrayInputStream(encoded)).use { input ->
+                val stream = java.io.ByteArrayInputStream(encoded)
+                val decoder = if (codec == "xz") org.tukaani.xz.XZInputStream(stream, 32 * 1024)
+                    else java.util.zip.GZIPInputStream(stream)
+                decoder.use { input ->
                     val buffer = ByteArray(16384)
                     while (true) {
                         val count = input.read(buffer)
@@ -2003,7 +2191,7 @@ internal data class UltraKernelManagerClaimPayload(
                     }
                 }
             } catch (error: java.io.IOException) {
-                throw IllegalStateException("ULTRA_KERNEL_MANAGER_CLAIM_METADATA_GZIP", error)
+                throw IllegalStateException("ULTRA_KERNEL_MANAGER_CLAIM_METADATA_${codec.uppercase()}", error)
             }
             val decoded = output.toByteArray()
             require(decoded.size == decodedBytes && UltraKernelSpec.sha256(decoded) == decodedHash) {
@@ -2074,7 +2262,9 @@ internal data class UltraKernelManagerClaimPayload(
                                 abi.getValue("coreLifecycleAbi").jsonObject.getValue("sourceSelection").jsonObject
                                     .getValue("identity").jsonObject)
                         }.orEmpty()
-                    require((managementReport?.get("upstreamSourceFreeze")?.jsonObject?.get("coreLifecycleEvolution") != null) == coreInputs.isNotEmpty()) {
+                    require((managementReport?.get("upstreamSourceFreeze")?.jsonObject?.let {
+                        it["schema"]?.jsonPrimitive?.content == CURRENT_SOURCE_SCHEMA || it["coreLifecycleEvolution"] != null
+                    } == true) == coreInputs.isNotEmpty()) {
                         "ULTRA_KERNEL_CORE_REFERENCE_MISSING"
                     }
                     val sourceQualification = verifySourceQualification(manifest, payload, abi, elf, mode,
@@ -2128,7 +2318,8 @@ internal data class UltraKernelManagerClaimPayload(
                         selectedIdentity("runtime/ultra/identity/kernel/manager_management.c", facts["sourceIdentity"])
                         val freeze = facts.getValue("upstreamSourceFreeze").jsonObject
                         val generation = freeze["generation"]?.jsonPrimitive?.content
-                        require(freeze["schemaVersion"]?.jsonPrimitive?.intOrNull == 1 &&
+                        val currentSources = freeze["schema"]?.jsonPrimitive?.content == CURRENT_SOURCE_SCHEMA
+                        require(currentSources || freeze["schemaVersion"]?.jsonPrimitive?.intOrNull == 1 &&
                             generation in setOf("R08", "R09", "R10")) { "ULTRA_KERNEL_MANAGEMENT_UPSTREAM_FREEZE" }
                         val inputs = manifest.getValue("inputs").jsonObject.entries.associate {
                             it.key.replace('\\', '/') to it.value.jsonPrimitive.content
@@ -2144,6 +2335,11 @@ internal data class UltraKernelManagerClaimPayload(
                             require(matches.singleOrNull { it.key.length == longest }?.value ==
                                 item.getValue("sha256").jsonPrimitive.content) { "ULTRA_KERNEL_MANAGEMENT_PACKAGED_SOURCE" }
                         }
+                        if (currentSources) {
+                            require(sourceQualification != null && coreInputs.isNotEmpty()) { "ULTRA_KERNEL_MANAGEMENT_CURRENT_SOURCE_PROOF" }
+                            verifyCurrentSources(abi.getValue("coreLifecycleAbi").jsonObject.getValue("sourceSelection").jsonObject,
+                                freeze, abi, manifest)
+                        } else {
                         for (key in listOf("sourceFreezeIdentity", "baselineIdentity", "contactIdentity", "changeSetIdentity"))
                             identity(freeze[key])
                         val migration = if (generation == "R10") freeze.getValue("sourceMigration").jsonObject else null
@@ -2276,6 +2472,7 @@ internal data class UltraKernelManagerClaimPayload(
                                 }
                             }
                         }
+                        }
                         identity(facts["sourceIdentity"])
                         identity(facts["objectIdentity"])
                         identity(facts["commandIdentity"])
@@ -2283,7 +2480,7 @@ internal data class UltraKernelManagerClaimPayload(
                         require(dependencies.isNotEmpty()) { "ULTRA_KERNEL_MANAGEMENT_DEPENDENCIES" }
                         fun dependencyIdentity(value: JsonElement) {
                             val item = value.jsonObject
-                            if (freeze["runtimeLayoutEvolution"] == null || item["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(value)
+                            if (!currentSources && freeze["runtimeLayoutEvolution"] == null || item["bytes"]?.jsonPrimitive?.longOrNull != 0L) identity(value)
                             else {
                                 val empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                                 require(!item["path"]?.jsonPrimitive?.content.isNullOrBlank() &&
@@ -2338,7 +2535,7 @@ internal data class UltraKernelManagerClaimPayload(
                                 signature == abi.getValue("functionAbi").jsonObject[name]
                             }) { "ULTRA_KERNEL_MANAGEMENT_SHARED_IMPORTS" }
                         val uidSnapshot = facts["uidSnapshotAbi"]?.jsonObject?.let { uid ->
-                            require(generation in setOf("R09", "R10") && uid["schemaVersion"]?.jsonPrimitive?.intOrNull == 1 &&
+                            require((currentSources || generation in setOf("R09", "R10")) && uid["schemaVersion"]?.jsonPrimitive?.intOrNull == 1 &&
                                 uid["metadataComplete"]?.jsonPrimitive?.booleanOrNull == true &&
                                 (if (sourceQualification != null) uid["targetQualified"]?.jsonPrimitive?.booleanOrNull == false
                                     else uid["targetQualified"]?.jsonPrimitive?.booleanOrNull == true)) {
@@ -2395,7 +2592,7 @@ internal data class UltraKernelManagerClaimPayload(
                             UltraKernelResidentAbi.UidSnapshotFacts(uid.getValue("compiledFacts").jsonObject.mapValues { it.value.jsonPrimitive.int },
                                 layouts, uid.getValue("config").jsonObject.mapValues { it.value.jsonPrimitive.content }, uidOrigins)
                         }
-                        require((uidSnapshot != null) == (generation in setOf("R09", "R10"))) { "ULTRA_KERNEL_UID_REFERENCE_MISSING" }
+                        require((uidSnapshot != null) == (currentSources || generation in setOf("R09", "R10"))) { "ULTRA_KERNEL_UID_REFERENCE_MISSING" }
                         val wire = facts.getValue("wireLayout").jsonObject.mapValues { it.value.jsonPrimitive.int }
                         val views = wire["queryViews"]
                         require(views != null && views in 2..5) { "ULTRA_KERNEL_MANAGEMENT_QUERY_VIEWS" }
@@ -2462,7 +2659,7 @@ internal data class UltraKernelManagerClaimPayload(
                         val procattrNative = facts["procattrAbi"]?.jsonObject?.takeIf {
                             it["metadataComplete"]?.jsonPrimitive?.booleanOrNull == true || "procattr" in enabledFeatures
                         }?.let { native ->
-                            require(generation == "R10" && native["schemaVersion"]?.jsonPrimitive?.intOrNull == 1 &&
+                            require((currentSources || generation == "R10") && native["schemaVersion"]?.jsonPrimitive?.intOrNull == 1 &&
                                 native["metadataComplete"]?.jsonPrimitive?.booleanOrNull == true &&
                                 (if (sourceQualification != null) native["targetQualified"]?.jsonPrimitive?.booleanOrNull == false
                                     else native["targetQualified"]?.jsonPrimitive?.booleanOrNull != null &&
@@ -2682,7 +2879,8 @@ internal data class UltraKernelManagerClaimPayload(
                         dataImports, CallbackCfi(mode, cfi.getValue("normalizeIntegers").jsonPrimitive.boolean, prefixes),
                         dataSignatures, management, abi["managementAbi"]?.jsonObject?.get("compiledLayoutSha256")?.jsonPrimitive?.content, descriptor,
                         abi["coreLifecycleAbi"]?.jsonObject?.get("credentialDomain")?.jsonObject?.get("compiledLayoutSha256")?.jsonPrimitive?.content,
-                        taskProfile)
+                        taskProfile, assemblyFunctions = assemblyDeclarations(abi),
+                        coreTaskCleanupQualified = coreTaskCleanupQualified(abi))
                 }
             } else null
             val permissions = manifest?.get("support")?.jsonObject?.get("permissions")?.jsonObject?.let { item ->

@@ -97,10 +97,12 @@ static void unregister_kprobe(void *p) { CHECK(p == probe); }
 static int msu_boot_sdk_pre(void *p,void *r) { (void)p;(void)r; return 0; }
 static uptr sdk_lookup(const char *name) { (void)name; return 0; }
 #ifdef MSU_BOOT_SDK_NATIVE
-static int msu_init_bridge_host_start(uptr image,const void *append,unsigned bytes,const char *key){
+static int msu_init_bridge_host_start(uptr image,const void *append,unsigned bytes){
     CHECK(image==kernel_base&&append==storage+MSU_BS_PAGE_BYTES&&bytes>=54);
-    CHECK(!memcmp(key,root_key,48));return 0;
+    CHECK(!memcmp((const unsigned char *)append+14,"PublicNamespace1",16));return 0;
 }
+static int msu_init_bridge_deployment_namespace(char output[16]){memcpy(output,"PublicNamespace1",16);return 0;}
+#define EOPNOTSUPP 95
 static int msu_init_bridge_host_abort(void){return 0;}
 static int msu_init_bridge_environment_filename(unsigned int *offset){if(filename_error)return filename_error;*offset=24;return 0;}
 #endif
@@ -125,8 +127,12 @@ static void cold(unsigned environment,unsigned audit,int failure) {
     }
     CHECK(error == 0 && state == MSU_BOOT_SDK_READY && allocations == 1 && hooks == 1);
     CHECK(nine_calls==((allocator_kind&10)!=10)&&thirteen_calls==((allocator_kind&10)==10));
+#ifndef MSU_BOOT_SDK_NATIVE
     for(unsigned n=0;n<48;++n)CHECK(original_root_key[n]=='0');
     CHECK(!memcmp(original_root_key+48,"",1)&&memcmp(root_key,original_root_key,48));
+#else
+    for(unsigned n=0;n<sizeof root_key;++n)CHECK(!root_key[n]&&!original_root_key[n]);
+#endif
     CHECK(sdk_request_metadata.magic == MAPLESU_METADATA_MAGIC && sdk_request_metadata.version == 2);
     CHECK(sdk_request_metadata.length == 48 && !sdk_request_metadata.layout_length && !sdk_request_metadata.layout_version);
     CHECK(!sdk_request_metadata.layout_displacement);
@@ -156,8 +162,8 @@ int main(int argc,char **argv) {
     CHECK(allocator_kind<16&&allocate_segmented_range==fixture_allocate_segmented_range);
     /* Keep both compile-time environment variants warning-clean. */
     (void)msu_sdk_lookup_end;(void)msu_sdk_lookup_target;(void)msu_sdk_avc_end;
-    (void)msu_sdk_avc_branch;(void)msu_sdk_avc_result;(void)sdk_execve_offset;
-    (void)sdk_filldir_offset;(void)sdk_seccomp_offset;
+    (void)msu_sdk_avc_branch;(void)msu_sdk_avc_result;(void)sdk_execve_offset;(void)msu_sdk_call_blr;
+    (void)sdk_filldir_offset;(void)sdk_seccomp_offset;(void)sdk_audit_offset;
     (void)random_bytes;(void)sdk_lookup;
     cold(0,0x123456,0); cold(1,0x123456,0); cold(1,0,0); cold(1,0x123456,-5);
 #if defined(MSU_BOOT_SDK_NATIVE) && MSU_BS_ENVIRONMENT

@@ -7,6 +7,7 @@
 #include "maplesu_storage_private.h"
 #include "maplesu_storage_worker_private.h"
 #include "maplesu_module_environment_private.h"
+#include "module_base_kernel_request.h"
 #include "maplesu_sdk/maplesu_installer.h"
 
 #include <algorithm>
@@ -73,11 +74,10 @@ void setup(const std::string& directory, const char* id) {
     }
     if (!found) setenv("PATH", (component + (path.empty() ? "" : ":" + path)).c_str(), 1);
 }
-Result validate(const module::Descriptor& desc, const char* key,
-                const module::SdkVersion& current) {
+Result validate(const module::Descriptor& desc, const module::SdkVersion& current) {
     if (!memchr(desc.id32, 0, sizeof(desc.id32)) || !desc.id32[0])
         return {KModErr::ERR_MODULE_PARAM, 0, false};
-    const std::string directory = private_directory(key, desc.id32);
+    const std::string directory = private_directory(desc.id32);
     if (directory.empty()) return {KModErr::ERR_MODULE_PARAM, 0, false};
     if (maplesu_skip_disabled(directory.c_str()))
         return {static_cast<KModErr>(-20150), 0, true};
@@ -94,14 +94,12 @@ KModErr publish(const std::string& id, const Result& result) {
 }
 }
 
-std::string system_directory(const char* key) {
-    if (!kernel_module::maplesu_request_owner_mode())
-        return compat::legacy_module_directory(key, true, MAPLESU_MODULE_DATA_ROOT);
+std::string system_directory() {
     std::string directory;
     return is_ok(storage::current_system_directory(directory)) ? directory : std::string();
 }
-std::string private_directory(const char* key, const char* id) {
-    const std::string root = system_directory(key);
+std::string private_directory(const char* id) {
+    const std::string root = system_directory();
     if (root.empty() || !id || !*id) return {};
     return root + "modules/" + id + "/";
 }
@@ -124,9 +122,7 @@ struct Outcome {
     ExecutionIdentity identity;
     KModErr bootstrap_error = KModErr::OK;
 };
-std::string kernel_directory(const char* key) {
-    if (!kernel_module::maplesu_request_owner_mode())
-        return compat::legacy_module_directory(key, false, MAPLESU_MODULE_DATA_ROOT);
+std::string kernel_directory() {
     std::string directory;
     return is_ok(storage::current_kernel_directory(directory)) ? directory : std::string();
 }
@@ -143,8 +139,8 @@ bool same(const FileStamp& a, const FileStamp& b) {
         a.size == b.size && a.modified == b.modified && a.modified_ns == b.modified_ns &&
         a.changed == b.changed && a.changed_ns == b.changed_ns && a.mode == b.mode;
 }
-bool identify(const char* key, const char* id, ExecutionIdentity& out) {
-    const std::string directory = private_directory(key, id);
+bool identify(const char* id, ExecutionIdentity& out) {
+    const std::string directory = private_directory(id);
     if (directory.empty() || !stamp(directory + id, out.image, true) || !out.image.present) return false;
     for (int n = 0; n < 3; ++n) {
         const std::string state = module_state::path(static_cast<List>(n));
@@ -152,9 +148,9 @@ bool identify(const char* key, const char* id, ExecutionIdentity& out) {
     }
     return true;
 }
-bool announce(int fd, const char* key, const char* id, bool& announced) {
+bool announce(int fd, const char* id, bool& announced) {
     ExecutionIdentity identity;
-    uint8_t present = identify(key, id, identity) ? 1 : 0;
+    uint8_t present = identify(id, identity) ? 1 : 0;
     announced = true;
     return transfer(fd, &present, sizeof(present), true) &&
         (!present || transfer(fd, &identity, sizeof(identity), true));
@@ -181,11 +177,11 @@ Outcome pending_removal_state(const char* id, bool boot, bool& removed) {
     if (is_failed(outcome.state)) outcome.value.loader = outcome.state;
     return outcome;
 }
-Result execute_owned(const module::Descriptor& desc, const char* key) {
-    const std::string directory = private_directory(key, desc.id32);
+Result execute_owned(const module::Descriptor& desc) {
+    const std::string directory = private_directory(desc.id32);
     Result result;
     if (directory.empty()) return {KModErr::ERR_MODULE_PARAM, 0, false};
-    const std::string system = system_directory(key);
+    const std::string system = system_directory();
     if (system.empty()) return {KModErr::ERR_MODULE_PARAM, 0, false};
     module_environment::Environment environment;
     const auto version = sdk::get_sdk_version();
@@ -205,22 +201,39 @@ Result execute_owned(const module::Descriptor& desc, const char* key) {
         if (!image) result.loader = KModErr::ERR_MODULE_DLOPEN;
     }
     if (image) {
-        void* entry = dlsym(image, compat::kModuleEntrySymbol);
+        const auto entry = compat::native_module::resolve_export(
+            [image](const char* symbol) { return dlsym(image, symbol); },
+            compat::native_module::kModuleEntrySymbol, compat::native_module::kLegacyModuleEntrySymbol);
         if (!entry) result.loader = KModErr::ERR_MODULE_DLSYM;
-        else result.loader = compat::invoke_legacy_module_entry(entry, key, directory.c_str(), result.entry);
+        else result.loader = compat::invoke_module_entry(entry, kernel_module::current_module_root_key(),
+                                                        directory.c_str(), result.entry);
         dlclose(image);
     }
     return result;
 }
+// This runs only in the existing module child. Retire its restricted helper
+// session before entering a separately authenticated real-Root operation scope.
+KModErr select_module_worker_identity() {
+    if (!kernel_module::maplesu_request_helper_mode()) return KModErr::OK;
+    {
+        storage::WorkerScope helper_worker;
+        RETURN_IF_ERROR(helper_worker.root());
+        if (getuid() != 0 || geteuid() != 0) return KModErr::ERR_MODULE_NO_ROOT;
+        RETURN_IF_ERROR(helper_worker.close_checked());
+    }
+    RETURN_IF_ERROR(kernel_module::maplesu_request_owner_close());
+    return kernel_module::maplesu_request_set_auth_mode(kernel_module::RequestAuthMode::ManagerOwner);
+}
+
 template <typename Action>
-Outcome worker(const char* key, const char* id, Action action) {
+Outcome worker(const char* id, Action action) {
     auto unavailable = [](KModErr error) {
         Outcome outcome{{error, 0, false}, error};
         outcome.bootstrap_error = error;
         return outcome;
     };
-    if (!kernel_module::maplesu_request_owner_mode() && kernel_directory(key).empty())
-        return unavailable(KModErr::ERR_MODULE_PARAM);
+    const auto admission = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(admission)) return unavailable(admission);
     int pipe_fds[2];
     if (pipe2(pipe_fds, O_CLOEXEC) != 0) return unavailable(KModErr::ERR_MODULE_OPEN_FILE);
     fflush(nullptr);
@@ -234,11 +247,12 @@ Outcome worker(const char* key, const char* id, Action action) {
         signal(SIGPIPE, SIG_IGN);
         Outcome outcome;
         bool announced = false, action_started = false;
+        std::optional<storage::WorkerScope> storage_worker;
         try {
-            storage::WorkerScope storage_worker(id);
-            const auto storage_error = kernel_module::maplesu_request_owner_mode() ?
-                storage_worker.root() : KModErr::OK;
-            const std::string directory = kernel_directory(key);
+            const auto selected = select_module_worker_identity();
+            storage_worker.emplace(id);
+            const auto storage_error = is_failed(selected) ? selected : storage_worker->root();
+            const std::string directory = kernel_directory();
             if (is_failed(storage_error) || directory.empty()) {
                 outcome.state = outcome.value.loader = is_failed(storage_error) ?
                     storage_error : KModErr::ERR_MODULE_ROOT_KEY;
@@ -248,7 +262,7 @@ Outcome worker(const char* key, const char* id, Action action) {
                 outcome.value.loader = mutation.error();
                 if (is_ok(outcome.value.loader)) {
                     action_started = true;
-                    outcome = action(pipe_fds[1], announced, storage_worker);
+                    outcome = action(pipe_fds[1], announced, *storage_worker);
                 } else {
                     outcome.state = outcome.value.loader;
                     if (outcome.state != static_cast<KModErr>(MODULE_CONTROL_BUSY))
@@ -258,6 +272,15 @@ Outcome worker(const char* key, const char* id, Action action) {
         } catch (...) {
             outcome.value.loader = KModErr::ERR_MODULE_DLOPEN;
             if (!action_started) outcome.bootstrap_error = outcome.state = outcome.value.loader;
+        }
+        if (storage_worker) {
+            const auto closed = storage_worker->close_checked();
+            storage_worker.reset();
+            if (is_failed(closed)) {
+                if (is_ok(outcome.value.loader)) outcome.value.loader = closed;
+                if (is_ok(outcome.state)) outcome.state = closed;
+                if (!action_started && is_ok(outcome.bootstrap_error)) outcome.bootstrap_error = closed;
+            }
         }
         uint8_t no_identity = 0, skipped = outcome.value.skipped ? 1 : 0;
         int64_t loader = static_cast<int64_t>(outcome.value.loader), state = static_cast<int64_t>(outcome.state);
@@ -311,7 +334,7 @@ Outcome worker(const char* key, const char* id, Action action) {
         outcome.bootstrap_error = outcome.state = outcome.value.loader;
     return outcome;
 }
-Outcome run_owned(const char* key, const char* id, const module::SdkVersion& version,
+Outcome run_owned(const char* id, const module::SdkVersion& version,
                   bool reset, int fd, bool& announced, storage::WorkerScope& storage_worker) {
     bool removed = false;
     Outcome outcome = pending_removal_state(id, reset, removed);
@@ -320,7 +343,7 @@ Outcome run_owned(const char* key, const char* id, const module::SdkVersion& ver
         outcome.state = clear_states(id);
         if (is_failed(outcome.state)) { outcome.value.loader = outcome.state; return outcome; }
     }
-    const std::string directory = private_directory(key, id);
+    const std::string directory = private_directory(id);
     if (directory.empty()) {
         outcome.bootstrap_error = outcome.state = outcome.value.loader = KModErr::ERR_MODULE_ROOT_KEY;
         return outcome;
@@ -335,7 +358,7 @@ Outcome run_owned(const char* key, const char* id, const module::SdkVersion& ver
     if (!memchr(desc.id32, 0, sizeof(desc.id32)) || strcmp(desc.id32, id) != 0) {
         outcome.value.loader = KModErr::ERR_MODULE_PARAM; return outcome;
     }
-    outcome.value = validate(desc, key, version);
+    outcome.value = validate(desc, version);
     if (is_failed(outcome.value.loader)) {
         if (reset && !outcome.value.skipped) outcome.state = publish(id, outcome.value);
         return outcome;
@@ -349,10 +372,10 @@ Outcome run_owned(const char* key, const char* id, const module::SdkVersion& ver
     if (is_ok(outcome.state)) outcome.state = module_state::remove(List::PendingRunOnce, id);
     if (is_failed(outcome.state)) { outcome.value.loader = outcome.state; return outcome; }
     if (contains(finished, id)) { outcome.value.skipped = true; return outcome; }
-    if (!announce(fd, key, id, announced)) {
+    if (!announce(fd, id, announced)) {
         outcome.value.loader = KModErr::ERR_READ_CHILD_DATA; return outcome;
     }
-    try { outcome.value = execute_owned(desc, key); }
+    try { outcome.value = execute_owned(desc); }
     catch (...) { outcome.value.loader = KModErr::ERR_MODULE_DLOPEN; }
     if (storage_worker.owner_mode()) {
         const kernel_module::CleanupReceiptScope diagnostic;
@@ -365,20 +388,20 @@ Outcome run_owned(const char* key, const char* id, const module::SdkVersion& ver
     outcome.state = publish(id, outcome.value);
     return outcome;
 }
-Outcome run_module(const char* key, const char* id,
+Outcome run_module(const char* id,
                    const module::SdkVersion& version, bool reset) {
-    Outcome outcome = worker(key, id, [&](int fd, bool& announced, storage::WorkerScope& storage_worker) {
-        return run_owned(key, id, version, reset, fd, announced, storage_worker);
+    Outcome outcome = worker(id, [&](int fd, bool& announced, storage::WorkerScope& storage_worker) {
+        return run_owned(id, version, reset, fd, announced, storage_worker);
     });
     // A module may _exit or signal before publishing. Only repair that exact
     // failed generation; a later installer/runtime must retain its own state.
     if (!outcome.complete && outcome.has_identity) {
-        const Outcome repaired = worker(key, id, [&](int, bool&, storage::WorkerScope&) -> Outcome {
+        const Outcome repaired = worker(id, [&](int, bool&, storage::WorkerScope&) -> Outcome {
             bool removed = false;
             Outcome cleanup = pending_removal_state(id, false, removed);
             if (removed || is_failed(cleanup.state)) return cleanup;
             ExecutionIdentity current;
-            bool unchanged = identify(key, id, current) && same(current.image, outcome.identity.image);
+            bool unchanged = identify(id, current) && same(current.image, outcome.identity.image);
             for (int n = 0; unchanged && n < 3; ++n)
                 unchanged = same(current.states[n], outcome.identity.states[n]);
             return {{}, unchanged ? publish(id, outcome.value) : KModErr::OK};
@@ -392,18 +415,18 @@ Outcome run_module(const char* key, const char* id,
 }
 }  // namespace
 
-Result execute(const module::Descriptor& desc, const char* key) {
+Result execute(const module::Descriptor& desc) {
     if (!memchr(desc.id32, 0, sizeof(desc.id32))) return {KModErr::ERR_MODULE_PARAM, 0, false};
-    return worker(key, desc.id32, [&](int fd, bool& announced, storage::WorkerScope&) -> Outcome {
+    return worker(desc.id32, [&](int fd, bool& announced, storage::WorkerScope&) -> Outcome {
         bool removed = false;
         Outcome outcome = pending_removal_state(desc.id32, false, removed);
         if (removed || is_failed(outcome.state)) return outcome;
-        if (!announce(fd, key, desc.id32, announced)) return {{KModErr::ERR_READ_CHILD_DATA, 0, false}};
-        return {execute_owned(desc, key)};
+        if (!announce(fd, desc.id32, announced)) return {{KModErr::ERR_READ_CHILD_DATA, 0, false}};
+        return {execute_owned(desc)};
     }).value;
 }
 
-BatchResult run_boot_batch(const char* key, const module::SdkVersion& version,
+BatchResult run_boot_batch(const module::SdkVersion& version,
                            std::vector<Record>& results) {
     results.clear();
     BatchResult batch;
@@ -417,13 +440,13 @@ BatchResult run_boot_batch(const char* key, const module::SdkVersion& version,
         const auto rooted = storage_worker.root();
         if (is_failed(rooted)) return global_failure(rooted);
     }
-    if (system_directory(key).empty()) return global_failure(KModErr::ERR_MODULE_PARAM);
+    if (system_directory().empty()) return global_failure(KModErr::ERR_MODULE_PARAM);
     std::vector<std::string> interrupted_installs;
     const KModErr pending = module_install::pending_installations(interrupted_installs);
     if (is_failed(pending)) return global_failure(pending);
     std::vector<std::string> excluded;
     for (const auto& id : interrupted_installs) {
-        const Outcome restored = worker(key, id.c_str(), [&](int, bool&, storage::WorkerScope&) -> Outcome {
+        const Outcome restored = worker(id.c_str(), [&](int, bool&, storage::WorkerScope&) -> Outcome {
             bool found = false;
             const auto error = module_install::recover_installation(id.c_str(), found);
             return {{error, 0, false}, error};
@@ -441,7 +464,7 @@ BatchResult run_boot_batch(const char* key, const module::SdkVersion& version,
     std::vector<module::Record> modules;
     KModErr enumerated = module::unsafe_get_boot_modules(modules, excluded);
     if (enumerated == KModErr::ERR_MODULE_OPEN_DIR) {
-        const std::string directory = system_directory(key);
+        const std::string directory = system_directory();
         if (directory.empty()) return global_failure(enumerated);
         if (access((directory + "modules").c_str(), F_OK) != 0 && errno == ENOENT)
             enumerated = KModErr::OK;
@@ -462,7 +485,7 @@ BatchResult run_boot_batch(const char* key, const module::SdkVersion& version,
         }
         const std::string id = module.desc.id32;
         discovered.push_back(id);
-        const Outcome outcome = run_module(key, id.c_str(), version, true);
+        const Outcome outcome = run_module(id.c_str(), version, true);
         if (!outcome.value.skipped) {
             remember(outcome.value.loader, batch.first_error);
             // Keep the raw entry result in Record; batch status is only a summary.
@@ -475,12 +498,12 @@ BatchResult run_boot_batch(const char* key, const module::SdkVersion& version,
         results.push_back({id, outcome.value});
     }
     for (const auto& id : stale) if (!contains(discovered, id) && !contains(excluded, id)) {
-        const Outcome outcome = worker(key, id.c_str(), [&](int, bool&, storage::WorkerScope&) -> Outcome {
+        const Outcome outcome = worker(id.c_str(), [&](int, bool&, storage::WorkerScope&) -> Outcome {
             bool removed = false;
             Outcome cleanup = pending_removal_state(id.c_str(), true, removed);
             if (removed || is_failed(cleanup.state)) return cleanup;
             // A concurrent installation may have appeared since discovery.
-            const std::string directory = private_directory(key, id.c_str());
+            const std::string directory = private_directory(id.c_str());
             if (directory.empty()) {
                 cleanup.bootstrap_error = cleanup.state = cleanup.value.loader = KModErr::ERR_MODULE_ROOT_KEY;
                 return cleanup;
@@ -497,14 +520,14 @@ BatchResult run_boot_batch(const char* key, const module::SdkVersion& version,
     return batch;
 }
 
-KModErr run_batch(const char* key, const module::SdkVersion& version,
+KModErr run_batch(const module::SdkVersion& version,
                  std::vector<Record>& results) {
-    return run_boot_batch(key, version, results).first_error;
+    return run_boot_batch(version, results).first_error;
 }
 
-Result run_single(const char* key, const char* id,
+Result run_single(const char* id,
                   const module::SdkVersion& version) {
-    Outcome outcome = run_module(key, id, version, false);
+    Outcome outcome = run_module(id, version, false);
     if (is_ok(outcome.value.loader) && is_failed(outcome.state)) outcome.value.loader = outcome.state;
     return outcome.value;
 }

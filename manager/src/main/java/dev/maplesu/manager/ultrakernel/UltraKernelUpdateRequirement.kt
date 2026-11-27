@@ -2,8 +2,9 @@ package dev.maplesu.manager.ultrakernel
 
 /** Retired executors are recognized only inside a completely verified installed spec. */
 internal object UltraKernelUpdateRequirement {
-    fun required(spec: UltraKernelSpec?, credential: UltraKernelCredential): Boolean {
-        if (spec == null || !credential.sdkMetadataValid || spec.key != secretText(credential)) return false
+    fun required(spec: UltraKernelSpec?): Boolean {
+        if (spec == null) return false
+        if (spec.key.isNotEmpty()) return true
         return spec.patches.count { patch ->
             val body = patch.replacement
             val call = when (body.size) { 140 -> 0x40; 180 -> 0x68; else -> return@count false }
@@ -16,12 +17,4 @@ internal object UltraKernelUpdateRequirement {
         } == 1
     }
 
-    fun requirePreserved(expected: UltraKernelCredential?, candidate: UltraKernelCredential?) {
-        check(expected == null || expected == candidate) { "ULTRA_KERNEL_UPGRADE_IDENTITY_CHANGED" }
-    }
-
-    private fun secretText(credential: UltraKernelCredential): String {
-        val bytes = credential.copySecret()
-        return try { bytes.toString(Charsets.US_ASCII) } finally { bytes.fill(0) }
-    }
 }

@@ -5,6 +5,15 @@ import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
 import com.maplesu.core.ui.UiMode
 
+internal fun installedUltraUpgradeVisible(
+    mode: dev.maplesu.manager.workmode.WorkMode?,
+    installed: Boolean,
+    updateRequired: Boolean,
+    hidden: Boolean,
+    pending: Boolean,
+): Boolean = mode != dev.maplesu.manager.workmode.WorkMode.KSU &&
+    installed && updateRequired && !hidden && !pending
+
 @Immutable
 data class SettingsUiState(
     val uiMode: String = UiMode.DEFAULT_VALUE,
@@ -99,6 +108,9 @@ data class SettingsUiState(
      * 还没算出来时不露出任何带模式字样的卡片（不变量 §2.1）。
      */
     val hiddenMasked: Boolean = true,
+
+    /** A current protected carrier observation requires an upgrade; this grants no runtime capability. */
+    val installedKernelUpdateRequired: Boolean = false,
 
     /** 工作模式行可见性（04-ui-contract §3.4/§3.5）：页面只消费结果。 */
     val workModeEntry: dev.maplesu.manager.workmode.ui.WorkModeEntryPolicy =

@@ -320,6 +320,23 @@
       ],
       "runner": "plant-66127",
       "payloadKey": "plant-66127-d489d4ad2a70"
+    },
+    {
+      "id": "plant-66118-a812a1946391",
+      "engine": "plant",
+      "releases": [
+        "6.6.118-android15-8-ga812a1946391-abogki576098434-4k"
+      ],
+      "variant": "CVE-2026-98260-6.6.118",
+      "kmi": "android15-6.6",
+      "kernelUapi": 6,
+      "pageSize": "4k",
+      "models": [
+        "AAK-AN00",
+        "HONOR WIN RT"
+      ],
+      "runner": "plant-66118",
+      "payloadKey": "plant-66118-a812a1946391"
     }
   ],
   "declared": []

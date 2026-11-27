@@ -28,7 +28,15 @@ def build(out, library):
 #include <algorithm>
 #include <cerrno>
 using uid_t = unsigned;
+using gid_t = unsigned;
 inline uid_t getuid(){return 0;}
+inline int getresuid(uid_t* real,uid_t* effective,uid_t* saved){*real=*effective=*saved=0;return 0;}
+inline int getresgid(gid_t* real,gid_t* effective,gid_t* saved){*real=*effective=*saved=0;return 0;}
+#define LOCK_EX 2
+#define LOCK_UN 8
+#define O_CLOEXEC 0
+#define O_NOFOLLOW 0
+inline int flock(int,int){errno=EOPNOTSUPP;return -1;}
 #ifndef ESTALE
 #define ESTALE 116
 #endif
@@ -48,6 +56,7 @@ KModErr execute_kernel_asm_func(const std::vector<uint8_t>&,uint64_t&);
 KModErr icache_invalidate_all_cpus();
 namespace export_symbol {
 inline void fixture_call(asmjit::a64::Assembler* a,uint64_t address){aarch64_asm_mov_x(a,asmjit::a64::x16,address);a->blr(asmjit::a64::x16);}
+inline void aarch64_insn_patch_text(asmjit::a64::Assembler* a,KModErr&,asmjit::a64::GpX,asmjit::a64::GpX,asmjit::a64::GpW){fixture_call(a,0x980000);}
 inline void get_kprobe(asmjit::a64::Assembler* a,KModErr&,asmjit::a64::GpX arg){a->mov(asmjit::a64::x0,arg);fixture_call(a,0x910000);}
 inline void mutex_lock(asmjit::a64::Assembler* a,KModErr&,asmjit::a64::GpX arg){a->mov(asmjit::a64::x0,arg);fixture_call(a,0x930000);}
 inline void mutex_unlock(asmjit::a64::Assembler* a,KModErr&,asmjit::a64::GpX arg){a->mov(asmjit::a64::x0,arg);fixture_call(a,0x940000);}
@@ -87,8 +96,8 @@ def main():
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     sources = [SDK / 'src/func_hook' / name for name in (
-        'module_base_kernel_func_hook.cpp', 'owner_hook_publication.h', 'owner_hook_codegen.h', 'owner_publication_gate.h', 'legacy_hook_publication.h')]
-    sources.extend([Path(__file__), SDK / 'tests/p5_owner_gate_probe.cpp', REPO / 'runtime/ultra/authorization/publication_return_private.h'])
+        'module_base_kernel_func_hook.cpp', 'owner_hook_publication.h', 'owner_hook_codegen.h', 'owner_publication_gate.h', 'legacy_hook_publication.h', 'legacy_boot_hook_publication.h')]
+    sources.extend([SDK / 'include/maplesu_hook_private.h', SDK / 'include/maplesu_request_private.h', SDK / 'include/maplesu_request_identity.h', Path(__file__), SDK / 'tests/p5_owner_gate_probe.cpp', REPO / 'runtime/ultra/authorization/publication_return_private.h'])
     inputs = [dict(path=str(p), sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for p in sources]
 
     def finish_report(report):
@@ -169,7 +178,9 @@ def main():
         finish_report(report)
         return 0
 
-    installer_cases = ['alloc-lost-gate', 'alloc-lost-payload', 'prepare-lost', 'control-lost',
+    installer_cases = ['select-provider', 'select-boot', 'select-corrupt', 'select-unsupported',
+            'select-metadata-failure', 'select-overflow', 'select-read-failure',
+            'before-switch-protocol-uninstall', 'alloc-lost-gate', 'alloc-lost-payload', 'prepare-lost', 'control-lost',
             'publish-lost', 'pending-null', 'after-tail-id', 'after-tail-length',
             'before-shared', 'after-shared', 'before-shared-max', 'after-shared-max',
             'before-shared-invalid-duplicate', 'after-shared-invalid-duplicate',

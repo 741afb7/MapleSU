@@ -10,8 +10,6 @@
 #include <unistd.h>
 #include <vector>
 
-extern "C" void __real___set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
-extern "C" const char* __real___get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
 
 extern "C" pid_t __real_fork();
 extern "C" int __real_pipe2(int*, int);
@@ -21,8 +19,7 @@ extern "C" __attribute__((weak, visibility("hidden"))) void maplesu_hook_fork_pr
 extern "C" __attribute__((weak, visibility("hidden"))) void maplesu_hook_fork_complete() noexcept;
 
 namespace {
-thread_local maplesu::SdkKeyContext* current_key = nullptr;
-thread_local maplesu::SdkKeyContext* current_call = nullptr;
+thread_local maplesu::SdkCallContext* current_call = nullptr;
 void record_process_error(int error) {
     if (current_call && !current_call->process_error) current_call->process_error = error;
 }
@@ -36,7 +33,7 @@ constexpr unsigned resource_count = 10;
 struct CallPolicy {
     maplesu::SdkCallAccess access;
     unsigned reads = 0, writes = 0;
-    bool private_key = true;
+    bool owned_transport = true;
 };
 bool named(const char* operation, std::initializer_list<const char*> names) {
     if (!operation) return false;
@@ -48,7 +45,7 @@ CallPolicy call_policy(const char* operation) {
     if (named(operation, {"probe_manager_owner_root", "read_installed_helper"}))
         return {Access::Isolated};
     if (named(operation, {"get_sdk_version", "get_sdk_build_identity", "get_system_status",
-                          "recover_image_credentials", "claim_manager_identity", "query_manager_owner_identity"}))
+                          "query_manager_owner_identity"}))
         return {Access::Local};
     if (named(operation, {"install_maplesu_environment", "uninstall_maplesu_environment", "restart_zygote64"}))
         return {Access::Exclusive, 0, All};
@@ -105,7 +102,7 @@ struct Admission {
 Admission& admission() { static Admission value; return value; }
 struct QueryPipe {
     int input = -1, output = -1;
-    maplesu::SdkKeyContext* owner = nullptr;
+    maplesu::SdkCallContext* owner = nullptr;
 };
 struct QueryPipes {
     std::mutex mutex;
@@ -123,7 +120,8 @@ SdkCallScope::SdkCallScope(const char* operation) {
     access_ = policy.access;
     read_mask_ = policy.reads & ~policy.writes;
     write_mask_ = policy.writes;
-    request_key_ = policy.private_key;
+    owned_transport_ = policy.owned_transport;
+    context_.owns_transport = owned_transport_;
     context_.owner_pid = getpid();
     if (access_ == SdkCallAccess::Local) { acquired_ = true; return; }
     if (access_ == SdkCallAccess::Isolated) {
@@ -150,8 +148,6 @@ SdkCallScope::SdkCallScope(const char* operation) {
     }
     previous_call_ = current_call;
     current_call = &context_;
-    previous_ = current_key;
-    current_key = request_key_ ? &context_ : nullptr;
     acquired_ = true;
 }
 
@@ -164,14 +160,13 @@ SdkCallScope::~SdkCallScope() {
         std::lock_guard lock(pipes.mutex);
         for (auto& entry : pipes.entries) if (entry.owner == &context_) {
             // Only unknown legacy calls can retain asynchronous FD ownership.
-            if (request_key_) {
+            if (owned_transport_) {
                 if (entry.input >= 0) __real_close(entry.input);
                 if (entry.output >= 0) __real_close(entry.output);
             }
             entry = {};
         }
     }
-    current_key = previous_;
     current_call = previous_call_;
     if (access_ == SdkCallAccess::Isolated) return;
     auto& state = admission();
@@ -183,22 +178,6 @@ SdkCallScope::~SdkCallScope() {
     }
     state.changed.notify_all();
 }
-}
-
-extern "C" void __wrap___set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char* key) {
-    if (!current_key) {
-        __real___set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
-        return;
-    }
-    char snapshot[sizeof(current_key->key)]{};
-    if (key) std::strncpy(snapshot, key, sizeof(snapshot) - 1);
-    std::memcpy(current_key->key, snapshot, sizeof(snapshot));
-    current_key->assigned = true;
-}
-extern "C" const char* __wrap___get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW() {
-    // A new audited request never borrows a previous process identity.
-    return current_key ? current_key->key
-        : __real___get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
 }
 
 // These are link-time wrappers inside this bridge only. Failed SDK setup leaves
@@ -274,7 +253,7 @@ extern "C" pid_t __wrap_waitpid(pid_t child, int* status, int flags) {
     // Reads only wait for their own child. Preserve legacy group waits in
     // exclusive calls unless failed setup left the SDK's child PID at zero.
     if (child <= 0) {
-        if (!current_key && !current_call->process_error) return __real_waitpid(child, status, flags);
+        if (!current_call->owns_transport && !current_call->process_error) return __real_waitpid(child, status, flags);
         record_process_error(ECHILD);
         errno = ECHILD;
         return -1;

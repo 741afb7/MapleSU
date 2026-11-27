@@ -21,7 +21,8 @@ $coroutines = Jar 'org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm' '1.11.0'
 $junit = Jar 'junit/junit' '4.13.2'
 $hamcrest = Jar 'org.hamcrest/hamcrest-core' '1.3'
 $java = (Get-Command java).Source
-$sources = @($SourcePath, (Join-Path $root 'manager/src/test/java/com/maplesu/core/ui/util/SELinuxCheckerTest.kt')) +
+$sources = @($SourcePath, (Join-Path $root 'manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraLegacyCredential.kt'),
+    (Join-Path $root 'manager/src/test/java/com/maplesu/core/ui/util/SELinuxCheckerTest.kt')) +
     @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.kt' | ForEach-Object FullName)
 $classes = Join-Path $OutputDirectory 'classes'
 $compile = @('-Xmx512m', '-cp', ($compiler,$stdlib,$annotations,$coroutines -join ';'),

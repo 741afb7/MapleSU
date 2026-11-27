@@ -270,7 +270,7 @@ class RootScriptInstallConfigMoverShellTest {
     fun populatedModuleConfigMetadataAndPrivateTreesRoundTripThroughProductionScripts() {
         val fixture = Fixture()
         val paths = ModeSwitchDataPaths.fromLocal(
-            rootKey = "a1b2c3d4e5f60718" + "9".repeat(32), credential = "7".repeat(48).toByteArray(),
+            ultraDirectory = "/data/a1b2c3d4e5f60718", previousPublication = "/data/7777777777777777",
         )
         fixture.write("/data/adb/maplesu/installer/install.lock", "held-lock")
         fixture.write("/data/adb/maplesu/settings.json", "ultra-config")

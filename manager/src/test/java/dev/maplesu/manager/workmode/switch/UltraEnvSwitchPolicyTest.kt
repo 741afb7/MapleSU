@@ -13,7 +13,7 @@ import org.junit.Test
  * 新语义（2026-11-01 / wave4）：
  * - A→B：RUNNING/FAULT/UNKNOWN/NOT_INSTALLED 全部 `Allowed`（写回 stock boot 即停 Ultra 内核）；
  * - B→A：缺 Ultra 资产不阻断，改走安装/修补流程（actions 仅说明性）；
- * - Ultra 源环境缺 key 仍阻断；Normal 源环境缺 Ultra key 应进入首次准备 + 同模式输入错误；
+ * - 旧 NO_KEY 观测按未知处理；实际根通道由 preflight 核实；
  * - `beforeSwitch` 不再调 `suspend()`；
  * - `afterVerified`（S-2）改成**方向感知 + 新鲜探针**：A→B 期望 Ultra 已停、B→A 期望 Ultra 可用，
  *   不再"恒 OK"（那是 fail-open），也不再依赖恒失败的 `restore()`。见下方 afterVerified 用例。
@@ -57,11 +57,9 @@ class UltraEnvSwitchPolicyTest {
     }
 
     @Test
-    fun aToBWithNoKeyStillBlocks() {
+    fun retiredNoKeyObservationUsesTheUnknownPolicy() {
         val decision = UltraEnvSwitchPolicy.evaluate(WorkMode.LITE, WorkMode.KSU, UltraState.NO_KEY)
-        assertTrue("NO_KEY 是真实硬前提（无 rootKey ⇒ 无根通道）: $decision",
-            decision is UltraSwitchDecision.Block)
-        assertEquals(UltraSwitchCodes.ULTRA_ENV_NO_KEY, code(decision))
+        assertEquals(UltraEnvSwitchPolicy.evaluate(WorkMode.LITE, WorkMode.KSU, UltraState.UNKNOWN), decision)
     }
 
     @Test
@@ -98,22 +96,11 @@ class UltraEnvSwitchPolicyTest {
             code(UltraEnvSwitchPolicy.evaluate(WorkMode.KSU, WorkMode.KSU, UltraState.NOT_INSTALLED)))
     }
 
-    /**
-     * 守卫测试：2×5 全矩阵仅 Ultra 源环境的 `NO_KEY` 会 Block（同模式另计）。
-     * 谁再把 FAULT/UNKNOWN/RUNNING 加回阻断，这条就红。
-     */
     @Test
-    fun onlySourceUltraNoKeyBlocksTheSwitchMatrix() {
+    fun allCrossModeObservationsDelegateToTheRealPreflight() {
         for ((from, to) in listOf(WorkMode.LITE to WorkMode.KSU, WorkMode.KSU to WorkMode.LITE)) {
             for (state in UltraState.entries) {
-                val decision = UltraEnvSwitchPolicy.evaluate(from, to, state)
-                if (from == WorkMode.LITE && state == UltraState.NO_KEY) {
-                    assertTrue("$from→$to $state 必须 Block: $decision", decision is UltraSwitchDecision.Block)
-                    assertEquals(UltraSwitchCodes.ULTRA_ENV_NO_KEY, code(decision))
-                } else {
-                    assertTrue("$from→$to $state 不得 Block: $decision",
-                        decision is UltraSwitchDecision.Allowed)
-                }
+                assertTrue("$from→$to $state", UltraEnvSwitchPolicy.evaluate(from, to, state) is UltraSwitchDecision.Allowed)
             }
         }
     }
@@ -153,12 +140,7 @@ class UltraEnvSwitchPolicyTest {
             val port = FakePort(state)
             val result = UltraEnvSwitchCoordinator(port).beforeSwitch(WorkMode.LITE, WorkMode.KSU)
             assertTrue("$state 不得再调 suspend(): ${port.calls}", port.calls.isEmpty())
-            if (state == UltraState.NO_KEY) {
-                assertFalse("$state 必须仍阻断", result.ok)
-                assertEquals(UltraSwitchCodes.ULTRA_ENV_NO_KEY, result.code)
-            } else {
-                assertTrue("$state 必须放行: $result", result.ok)
-            }
+            assertTrue("$state delegates to the real preflight: $result", result.ok)
         }
     }
 

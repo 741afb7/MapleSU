@@ -28,9 +28,6 @@ static char diagnostic[512];
 static size_t steps, diagnostic_size;
 static pid_t pid;
 static int rename_error, open_error, load_error, close_error, exec_error, exec_interrupt;
-static const char *credential;
-static size_t credential_size, credential_at, read_piece;
-static int credential_open_error, read_error, read_interrupt, credential_close_error, unlink_error;
 static const unsigned char *deployment;
 static size_t deployment_size, deployment_at, deployment_piece;
 static int deployment_open_error, deployment_read_error, deployment_interrupt, deployment_close_error, deployment_unlink_error;
@@ -180,13 +177,6 @@ int __wrap_open(const char *path, int flags, ...) {
         errno = deployment_open_error;
         return deployment_open_error ? -1 : 9;
     }
-    if (strcmp(path, "/.maplesu_ultra/credential") == 0) {
-        assert(flags == (O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
-        if (!credential && !credential_open_error) { errno = ENOENT; return -1; }
-        note('K');
-        errno = credential_open_error;
-        return credential_open_error ? -1 : 8;
-    }
     note('O');
     assert(strcmp(path, "/.maplesu_ultra/bridge.ko") == 0);
     assert(flags == (O_RDONLY | O_CLOEXEC));
@@ -210,16 +200,8 @@ ssize_t __wrap_read(int fd, void *buffer, size_t bytes) {
         deployment_at += count;
         return count;
     }
-    assert(fd == 8);
-    note('D');
-    if (read_interrupt) { read_interrupt = 0; errno = EINTR; return -1; }
-    if (read_error) { errno = read_error; return -1; }
-    size_t count = credential_size - credential_at;
-    if (count > bytes) count = bytes;
-    if (count > read_piece) count = read_piece;
-    memcpy(buffer, credential + credential_at, count);
-    credential_at += count;
-    return count;
+    assert(!"unexpected read descriptor");
+    return -1;
 }
 
 int __wrap_unlink(const char *path) {
@@ -228,10 +210,8 @@ int __wrap_unlink(const char *path) {
         errno = deployment_unlink_error;
         return deployment_unlink_error ? -1 : 0;
     }
-    assert(strcmp(path, "/.maplesu_ultra/credential") == 0);
-    note('U');
-    errno = unlink_error;
-    return unlink_error ? -1 : 0;
+    assert(!"unexpected unlink path");
+    return -1;
 }
 
 long __wrap_syscall(long number, ...) {
@@ -256,10 +236,6 @@ long __wrap_syscall(long number, ...) {
     } else assert(va_arg(args, int) == 7);
     loaded_parameters = va_arg(args, const char *);
     char expected[128] = {0};
-    if (credential) {
-        memcpy(expected, "credential=", 11);
-        memcpy(expected + 11, credential, 48);
-    }
     if (deployment) {
         const size_t used = strlen(expected);
         snprintf(expected + used, sizeof(expected) - used, "%sdeployment_namespace=%.*s",
@@ -278,11 +254,6 @@ int __wrap_close(int fd) {
         note('n');
         errno = deployment_close_error;
         return deployment_close_error ? -1 : 0;
-    }
-    if (fd == 8) {
-        note('k');
-        errno = credential_close_error;
-        return credential_close_error ? -1 : 0;
     }
     note('C');
     assert(fd == 7);
@@ -328,6 +299,13 @@ ssize_t __wrap_write(int fd, const void *bytes, size_t size) {
     return size;
 }
 
+static const struct msu_deployment_namespace_record default_deployment = {
+    .magic = MSU_DEPLOYMENT_NAMESPACE_MAGIC,
+    .schema = MSU_DEPLOYMENT_NAMESPACE_SCHEMA,
+    .bytes = sizeof(struct msu_deployment_namespace_record),
+    .name = "ABCD2345EFGH6789",
+};
+
 static void reset(void) {
     make_bridge(0); bridge_piece=sizeof(bridge_image); bridge_reads=0;
     stat_error=bridge_read_error=bridge_eof=bridge_interrupt=allocation_error=0;
@@ -338,12 +316,9 @@ static void reset(void) {
     steps = diagnostic_size = 0;
     pid = 1;
     rename_error = open_error = load_error = close_error = exec_error = exec_interrupt = 0;
-    credential = loaded_parameters = NULL;
-    credential_size = credential_at = 0;
-    read_piece = 49;
-    credential_open_error = read_error = read_interrupt = credential_close_error = unlink_error = 0;
-    deployment = NULL;
-    deployment_size = deployment_at = 0;
+    loaded_parameters = NULL;
+    deployment = (const unsigned char *)&default_deployment;
+    deployment_size = sizeof(default_deployment); deployment_at = 0;
     deployment_piece = 25;
     deployment_open_error = deployment_read_error = deployment_interrupt = deployment_close_error = deployment_unlink_error = 0;
 }
@@ -353,6 +328,7 @@ static void expect_handoff(const char *sequence) {
         (void)maplesu_ultra_first_stage(expected_argv, expected_envp);
         assert(!"original init was not executed");
     }
+    if (strcmp(trace, sequence)) fprintf(stderr, "trace got=%s expected=%s\n", trace, sequence);
     assert(strcmp(trace, sequence) == 0);
 }
 
@@ -363,79 +339,47 @@ int main(void) {
     expected_argv = argv;
     expected_envp = envp;
 
+    reset(); deployment = NULL; deployment_size = 0;
+    expect_handoff("ROWCE");
+    assert(!init_calls && !finit_calls && strstr(diagnostic, "open /.maplesu_ultra/deployment failed errno=2"));
     reset();
-    expect_handoff("ROLCE");
+    expect_handoff("RONddnuLCE");
     reset(); open_error = ENOENT;
-    expect_handoff("ROWE");
+    expect_handoff("ROWNddnuE");
     assert(strstr(diagnostic, "open /.maplesu_ultra/bridge.ko failed errno=2") != NULL);
     reset(); load_error = ENOEXEC;
-    expect_handoff("ROLCWE");
+    expect_handoff("RONddnuLCWE");
     assert(strstr(diagnostic, "load_module /.maplesu_ultra/bridge.ko failed errno=8") != NULL);
     reset(); close_error = EIO;
-    expect_handoff("ROLCWE");
+    expect_handoff("RONddnuLCWE");
     assert(strstr(diagnostic, "close /.maplesu_ultra/bridge.ko failed errno=5") != NULL);
     reset(); load_error = ENOEXEC; close_error = EIO;
-    expect_handoff("ROLCWWE");
+    expect_handoff("RONddnuLCWWE");
     const char *load_message = strstr(diagnostic, "load_module /.maplesu_ultra/bridge.ko failed errno=8");
     const char *close_message = strstr(diagnostic, "close /.maplesu_ultra/bridge.ko failed errno=5");
     assert(load_message && close_message && load_message < close_message);
     reset(); rename_error = EROFS;
-    expect_handoff("RWOLCE");
+    expect_handoff("RWONddnuLCE");
     assert(strstr(diagnostic, "rename /init.maplesu.orig failed errno=30") != NULL);
     reset(); rename_error = EROFS; load_error = ENOEXEC; close_error = EIO;
-    expect_handoff("RWOLCWWE");
+    expect_handoff("RWONddnuLCWWE");
     const char *rename_message = strstr(diagnostic, "rename /init.maplesu.orig failed errno=30");
     load_message = strstr(diagnostic, "load_module /.maplesu_ultra/bridge.ko failed errno=8");
     close_message = strstr(diagnostic, "close /.maplesu_ultra/bridge.ko failed errno=5");
     assert(rename_message && load_message && close_message &&
            rename_message < load_message && load_message < close_message);
     reset(); exec_interrupt = 1;
-    expect_handoff("ROLCEE");
+    expect_handoff("RONddnuLCEE");
     reset(); exec_error = EACCES;
-    assert(maplesu_ultra_first_stage(argv, envp) == 126 && strcmp(trace, "ROLCEW") == 0);
+    assert(maplesu_ultra_first_stage(argv, envp) == 126 && strcmp(trace, "RONddnuLCEW") == 0);
     assert(strstr(diagnostic, "execve /init failed errno=13") != NULL);
     reset(); rename_error = EROFS; exec_error = ENOENT;
-    assert(maplesu_ultra_first_stage(argv, envp) == 126 && strcmp(trace, "RWOLCEW") == 0);
+    assert(maplesu_ultra_first_stage(argv, envp) == 126 && strcmp(trace, "RWONddnuLCEW") == 0);
     assert(strstr(diagnostic, "execve /init.maplesu.orig failed errno=2") != NULL);
     reset(); pid = 123;
     assert(maplesu_ultra_first_stage(argv, envp) == 64 && steps == 0);
     assert(strcmp(name, "/init") == 0 && strcmp(argument, "first_stage") == 0);
     assert(strcmp(environment, "INIT_ENV=kept value") == 0);
-
-    const char key[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL";
-    assert(sizeof(key) == 49);
-    reset(); credential = key; credential_size = 48;
-    expect_handoff("ROKDDkULCE");
-    assert(diagnostic_size == 0);
-    reset(); credential = key; credential_size = 48; read_piece = 17; read_interrupt = 1;
-    expect_handoff("ROKDDDDDkULCE");
-    reset(); credential = key; credential_size = 47;
-    expect_handoff("ROKDDWkUCE");
-    assert(strstr(diagnostic, "read /.maplesu_ultra/credential failed errno=22"));
-    reset(); credential = key; credential_size = 49;
-    expect_handoff("ROKDWkUCE");
-    reset(); credential = "bad\n"; credential_size = 4;
-    expect_handoff("ROKDDWkUCE");
-    reset(); credential = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJK/"; credential_size = 48;
-    expect_handoff("ROKDDWkUCE");
-    reset(); credential = "";
-    expect_handoff("ROKDWkUCE");
-    reset(); credential = key; credential_size = 48; read_error = EIO;
-    expect_handoff("ROKDWkUCE");
-    assert(strstr(diagnostic, "read /.maplesu_ultra/credential failed errno=5"));
-    reset(); credential = key; credential_size = 48; credential_close_error = EIO;
-    expect_handoff("ROKDDkWUCE");
-    reset(); credential_open_error = ELOOP;
-    expect_handoff("ROKWCE");
-    reset(); credential = key; credential_size = 48; unlink_error = EROFS;
-    expect_handoff("ROKDDkUWLCE");
-    assert(strstr(diagnostic, "unlink /.maplesu_ultra/credential failed errno=30"));
-    reset(); credential = key; credential_size = 48; load_error = ENOEXEC;
-    expect_handoff("ROKDDkULCWE");
-    assert(strstr(diagnostic, key) == NULL);
-    reset(); credential = key; credential_size = 48; open_error = ENOENT;
-    expect_handoff("ROWKDDkUE");
-    assert(credential_at == 48 && strstr(diagnostic, key) == NULL);
 
     struct msu_deployment_namespace_record record = {
         .magic = MSU_DEPLOYMENT_NAMESPACE_MAGIC,
@@ -448,8 +392,6 @@ int main(void) {
     reset(); deployment = namespace_bytes; deployment_size = sizeof(record);
     expect_handoff("RONddnuLCE");
     assert(diagnostic_size == 0);
-    reset(); credential = key; credential_size = 48; deployment = namespace_bytes; deployment_size = sizeof(record);
-    expect_handoff("ROKDDkUNddnuLCE");
     reset(); deployment = namespace_bytes; deployment_size = sizeof(record); deployment_piece = 7; deployment_interrupt = 1;
     expect_handoff("RONddddddnuLCE");
     reset(); deployment = namespace_bytes; deployment_size = sizeof(record) - 1;
@@ -475,55 +417,50 @@ int main(void) {
     reset(); deployment = namespace_bytes; deployment_size = sizeof(record); open_error = ENOENT;
     expect_handoff("ROWNddnuE");
     assert(deployment_at == sizeof(record));
-    reset(); deployment = namespace_bytes; deployment_size = sizeof(record); credential = key; credential_size = 47;
-    expect_handoff("ROKDDWkUNddnuCE");
-    assert(deployment_at == sizeof(record));
     reset(); deployment = namespace_bytes; deployment_size = sizeof(record); load_error = ENOEXEC;
     expect_handoff("RONddnuLCWE");
     reset(); deployment = namespace_bytes; deployment_size = sizeof(record); rename_error = EROFS;
     expect_handoff("RWONddnuLCE");
 
     reset(); stat_error=EIO;
-    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && !bridge_reads);
+    expect_handoff("RONddnuCWE"); assert(!init_calls && !finit_calls && !bridge_reads);
     assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=5"));
     reset(); bridge_bytes=0;
-    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls);
+    expect_handoff("RONddnuCWE"); assert(!init_calls && !finit_calls);
     assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=22"));
     reset(); allocation_error=1;
-    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && !bridge_reads);
+    expect_handoff("RONddnuCWE"); assert(!init_calls && !finit_calls && !bridge_reads);
     assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=12"));
     reset(); bridge_piece=17; bridge_interrupt=1;
-    expect_handoff("ROLCE"); assert(finit_calls == 1 && !init_calls && bridge_reads > 2);
+    expect_handoff("RONddnuLCE"); assert(finit_calls == 1 && !init_calls && bridge_reads > 2);
     assert(!proc_mounts && !proc_unmounts);
     reset(); bridge_eof=1;
-    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls);
+    expect_handoff("RONddnuCWE"); assert(!init_calls && !finit_calls);
     assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=5"));
     reset(); bridge_read_error=EACCES; close_error=EIO;
-    expect_handoff("ROCWWE"); assert(!init_calls && !finit_calls);
+    expect_handoff("RONddnuCWWE"); assert(!init_calls && !finit_calls);
     load_message=strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=13");
     close_message=strstr(diagnostic,"close /.maplesu_ultra/bridge.ko failed errno=5");
     assert(load_message && close_message && load_message < close_message);
     reset(); bridge_image[0]='X';
-    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && !proc_mounts);
+    expect_handoff("RONddnuCWE"); assert(!init_calls && !finit_calls && !proc_mounts);
     reset(); make_bridge(1);
-    expect_handoff("ROLCE"); assert(init_calls == 1 && !finit_calls);
+    expect_handoff("RONddnuLCE"); assert(init_calls == 1 && !finit_calls);
     assert(proc_mounts == 1 && proc_unmounts == 1 && !strcmp(setting_value,"2\n"));
-    reset(); make_bridge(1); credential=key; credential_size=48; deployment=namespace_bytes; deployment_size=sizeof(record);
-    expect_handoff("ROKDDkUNddnuLCE"); assert(init_calls == 1 && !finit_calls && !diagnostic_size);
     reset(); make_bridge(1); load_error=ENOEXEC;
-    expect_handoff("ROLCWE"); assert(init_calls == 1 && !finit_calls && !strcmp(setting_value,"2\n"));
+    expect_handoff("RONddnuLCWE"); assert(init_calls == 1 && !finit_calls && !strcmp(setting_value,"2\n"));
     assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=8"));
     reset(); make_bridge(1); lookup_error=EACCES;
-    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1 && !strcmp(setting_value,"2\n"));
+    expect_handoff("RONddnuCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1 && !strcmp(setting_value,"2\n"));
     reset(); make_bridge(1); restore_error=EROFS;
-    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1 && !strcmp(setting_value,"1"));
+    expect_handoff("RONddnuCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1 && !strcmp(setting_value,"1"));
     assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=30"));
     reset(); make_bridge(1); lookup_error=EACCES; restore_error=EROFS;
-    expect_handoff("ROCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1);
+    expect_handoff("RONddnuCWE"); assert(!init_calls && !finit_calls && proc_unmounts == 1);
     assert(strstr(diagnostic,"load_module /.maplesu_ultra/bridge.ko failed errno=13"));
     reset(); make_bridge(1); rename_error=EROFS; load_error=ENOEXEC; close_error=EIO;
-    expect_handoff("RWOLCWWE"); assert(init_calls == 1 && !finit_calls);
-    puts("HANDOFF_DIRECT_NEW_CASES=14 original handoff cases retained; actual loader+file-read+binder linked");
+    expect_handoff("RWONddnuLCWWE"); assert(init_calls == 1 && !finit_calls);
+    puts("HANDOFF_KEYLESS: namespace validation, init handoff, loader+file-read+binder linked");
 
     puts("PASS isolated first-stage handoff seam");
     return 0;

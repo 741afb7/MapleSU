@@ -79,6 +79,9 @@ class UltraEnvironmentPanelSchedulingTest {
         val body = text.substringAfter("private fun apply(facts: UltraEnvFacts)").substringBefore("private fun toast")
         assertTrue(body.contains("mergeCompletedReadback(facts, currentScope"))
         assertTrue(text.contains("generation != readGeneration || request != readRequests.get() || !foreground"))
-        assertTrue(text.contains("if (!foreground || reading?.isActive == true) return"))
+        val refreshGate = text.substringAfter("fun refresh()").substringBefore("val generation")
+        assertTrue(refreshGate.contains("!foreground"))
+        assertTrue(refreshGate.contains("reading?.isActive == true"))
+        assertTrue(refreshGate.contains("ModeRuntime.active != WorkMode.LITE"))
     }
 }

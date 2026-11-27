@@ -5,7 +5,7 @@ import java.io.File
 import java.net.URLDecoder
 import org.json.JSONObject
 
-/** Uses the SDK key channel even when the separate no-key su / legacy Shell channel is broken. */
+/** Uses the current-task SDK channel independently of the standard SU shell channel. */
 internal object UltraBugreportDiagnostics {
     interface Port {
         fun sdkBuildIdentity(): NativeReceipt
@@ -170,7 +170,7 @@ internal object UltraBugreportDiagnostics {
         case "${'$'}H" in 0|1) echo "${'$'}H";; *) echo UNREADABLE;; esac
         STAGE=${'$'}(sed -nE 's/^(pending|confirmed):[a-f0-9-]{36}${'$'}/\1/p' "${'$'}R/manager-restore.ticket" 2>/dev/null)
         case "${'$'}STAGE" in pending|confirmed) echo "handover=${'$'}STAGE";; *) echo 'handover=MISSING_OR_INVALID';; esac
-        for name in manager.apk manifest.json rootkey identity.json webui.conf parasite-start.sh liteweb.pid webui.paused; do
+        for name in manager.apk manifest.json identity.json webui.conf parasite-start.sh liteweb.pid webui.paused; do
             echo "file:${'$'}name:"
             stat -c 'uid=%u mode=%a size=%s' "${'$'}R/${'$'}name" 2>/dev/null || echo MISSING_OR_UNREADABLE
         done

@@ -33,8 +33,10 @@ class BootSdkTransportTest(unittest.TestCase):
 
     def test_page_rounded_execution_rw_state_and_sdk_free_lifecycle(self):
         source = (HERE.parent / "module/maplesu_boot_sdk.c").read_text(encoding="utf-8")
-        ledger = re.search(r"struct stage \{[^}]+\};\s*static struct stage stages\[64\];", source)
+        ledger = re.search(r"struct stage \{[^}]+\};", source)
+        stages = re.search(r"static struct stage stages\[64\];", source)
         self.assertIsNotNone(ledger)
+        self.assertIsNotNone(stages)
         names = ("zero", "owned", "discard", "sdk_module_free", "legacy_scope_begin", "legacy_scope_end",
                  "same_name", "sdk_lookup", "sdk_current_task", "sdk_current_cred", "execute", "dispatch")
         functions = [definition(source, name) for name in names]
@@ -44,7 +46,7 @@ class BootSdkTransportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="maplesu-boot-sdk-") as directory:
             temporary = Path(directory)
             (temporary / "boot_sdk_stage.inc").write_text(
-                ledger.group() + "\nstruct sdk_legacy_scope { const struct maplesu_legacy_hook_provider *provider; void *lease; u64 scope; };\n"
+                ledger.group() + "\n" + stages.group() + "\nstruct sdk_legacy_scope { const struct maplesu_legacy_hook_provider *provider; void *lease; u64 scope; };\n"
                 "extern unsigned char msu_boot_sdk_legacy_scope_start[], msu_boot_sdk_legacy_scope_end[];\n"
                 "static int (*legacy_provider_get)(const struct maplesu_legacy_hook_provider **, void **);\n"
                 "static void (*legacy_provider_put)(void *);\n" + "\n".join(functions), encoding="utf-8")

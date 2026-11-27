@@ -7,14 +7,13 @@ import dev.maplesu.manager.installer.InstallerRootSourceRegistry
 import dev.maplesu.manager.modules.ModuleToolDeployment
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
 import dev.maplesu.manager.runtime.ultra.UltraSdkCredentials
-import dev.maplesu.manager.runtime.ultra.bridge.NativeBridge
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
 
 /**
  * Manager-side privileged operations. Normal uses its registered KSU channel;
- * paired SDK and current Ultra Hook environments use the existing streaming root task,
- * released when the shell closes. Only credential-backed environments read a credential.
+ * current Ultra identity and Hook environments use the existing streaming root task,
+ * released when the shell closes. Unknown mode preserves its unresolved state.
  */
 object RootManagement {
     fun start(context: Context, argv: List<String>, globalMnt: Boolean = false): Process {
@@ -24,7 +23,6 @@ object RootManagement {
             usesSdk = UltraEnvironmentProbe.usesUltraBackend(context),
             usesHook = HookRootExecutor.production(context).available(),
             openSdk = { SdkRootShellClient.start(context, argv, globalMnt) },
-            openCredential = { startCredential(context, argv, globalMnt) },
             openKsu = { SdkRootShellClient.start(context, argv, globalMnt, RootBackend.KSU) },
             openHook = { SdkRootShellClient.start(context, argv, globalMnt, RootBackend.HOOK) },
         )
@@ -34,15 +32,15 @@ object RootManagement {
     internal fun startModule(context: Context, argv: List<String>): Process {
         check(Looper.myLooper() != Looper.getMainLooper()) { "MANAGEMENT_BACKGROUND_THREAD_REQUIRED" }
         if (ModeRuntime.active == WorkMode.KSU) return start(context, argv)
-        if (UltraEnvironmentProbe.usesUltraBackend(context)) {
-            val environment = NativeBridge.captureModuleEnvironment(UltraSdkCredentials.read(context))
+        if (UltraEnvironmentProbe.usesUltraBackend(context) || ModeRuntime.active == WorkMode.LITE) {
+            val environment = UltraSdkCredentials.client(context).captureModuleEnvironment()
             return SdkRootShellClient.startModule(context, argv, environment)
         }
         if (HookRootExecutor.production(context).available()) {
             return SdkRootShellClient.startModule(context, argv,
                 ModuleTaskEnvironment.captureNonSdk(hook = true), RootBackend.HOOK)
         }
-        return startCredential(context, argv, false, ModuleTaskEnvironment.captureNonSdk(hook = false))
+        error("MANAGEMENT_MODE_UNRESOLVED")
     }
 
     /** Streaming module tasks use the same verified root source as management shells. */
@@ -50,7 +48,6 @@ object RootManagement {
         mode: WorkMode?,
         usesSdk: Boolean,
         openSdk: () -> Process,
-        openCredential: () -> Process,
         openKsu: () -> Process = { error("MANAGEMENT_KSU_UNAVAILABLE") },
         usesHook: Boolean = false,
         openHook: () -> Process = { error("MANAGEMENT_HOOK_UNAVAILABLE") },
@@ -58,21 +55,8 @@ object RootManagement {
         mode == WorkMode.KSU -> openKsu()
         usesSdk -> openSdk()
         usesHook -> openHook()
-        else -> openCredential()
-    }
-
-    private fun startCredential(context: Context, argv: List<String>, globalMnt: Boolean,
-        moduleEnvironment: Array<String>? = null): Process {
-        val credential = MapleSuCredentialStore(context).load()
-            ?: throw IllegalStateException("MANAGEMENT_CREDENTIAL_UNAVAILABLE")
-        try {
-            val executor = MapleSuCommandExecutor(context)
-            return if (moduleEnvironment == null) executor.start(credential, argv, globalMnt = globalMnt)
-                else executor.startModule(credential, argv, moduleEnvironment)
-        } finally {
-            // start() writes the frame synchronously, so the buffer is spent here.
-            credential.fill(0)
-        }
+        mode == WorkMode.LITE -> openSdk()
+        else -> error("MANAGEMENT_MODE_UNRESOLVED")
     }
 
     fun openShell(context: Context, globalMnt: Boolean = false): Shell {
@@ -84,7 +68,6 @@ object RootManagement {
             openSdk = { openProcessShell(context,
                 SdkRootShellClient.start(context, listOf("/system/bin/sh"), globalMnt), globalMnt) },
             openKsu = { openKsuShell(context.applicationContext, globalMnt) },
-            openCredential = { openCredentialShell(context, globalMnt) },
             openHook = { openProcessShell(context,
                 SdkRootShellClient.start(context, listOf("/system/bin/sh"), globalMnt, RootBackend.HOOK), globalMnt) },
         )
@@ -93,38 +76,26 @@ object RootManagement {
     /**
      * Root-channel routing (host-testable; no Android calls here).
      *
-     * KSU retains its credential fallback. SDK and Hook failures propagate directly:
-     * neither identity is a legacy credential, and a submitted task is never replayed.
+     * Every backend failure propagates directly. A submitted task is never replayed.
      */
     internal fun openShellRouted(
         mode: WorkMode?,
         usesSdk: Boolean,
         openSdk: () -> Shell,
         openKsu: () -> Shell,
-        openCredential: () -> Shell,
         usesHook: Boolean = false,
         openHook: () -> Shell = { error("MANAGEMENT_HOOK_UNAVAILABLE") },
     ): Shell {
         if (mode != WorkMode.KSU) return when {
             usesSdk -> openSdk()
             usesHook -> openHook()
-            else -> openCredential()
+            mode == WorkMode.LITE -> openSdk()
+            else -> error("MANAGEMENT_MODE_UNRESOLVED")
         }
-        val ksuFailure: Throwable
-        try {
-            return openKsu()
-        } catch (error: Exception) {
-            ksuFailure = error
-        }
-        try {
-            return openCredential()
-        } catch (error: Exception) {
-            error.addSuppressed(ksuFailure)
-            throw error
-        }
+        return openKsu()
     }
 
-    /** Mode B (KernelSU) shell; any failure propagates so [openShellRouted] can fall back. */
+    /** Mode B (KernelSU) shell; any failure propagates through the same route. */
     private fun openKsuShell(context: Context, globalMnt: Boolean): Shell {
         val shell = InstallerRootSourceRegistry.require().openShell(context, globalMnt)
         try {
@@ -134,11 +105,6 @@ object RootManagement {
             runCatching { shell.close() }
             throw error
         }
-    }
-
-    /** Direct credential transport for environments without SDK pairing. */
-    private fun openCredentialShell(context: Context, globalMnt: Boolean): Shell {
-        return openProcessShell(context, start(context, listOf("/system/bin/sh"), globalMnt), globalMnt)
     }
 
     private fun openProcessShell(context: Context, process: Process, globalMnt: Boolean): Shell {

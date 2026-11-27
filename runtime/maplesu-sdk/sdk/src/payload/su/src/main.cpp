@@ -1,12 +1,9 @@
 // su -- switch to another user identity and run a shell.
 //
 // This is the userland half of the SDK's su delivery: the installer publishes it
-// inside the root-key directory, the module kit starts it from the shell context,
-// and the program consumes the applied kernel Profile's session receipt (or the
-// legacy root-key handshake) before running the requested shell. The CLI and exec
-// shape are a
-// port of the vendor's open-edition su client; the privileged steps use the same
-// handshake the SDK runtime uses.
+// inside the deployment directory, the kernel execution gate applies the authorized
+// Profile, and the program consumes its one-shot session receipt before running
+// the requested shell. The CLI and exec shape retain the reference su contract.
 //
 #include <cerrno>
 #include <climits>
@@ -22,7 +19,6 @@
 #include "cli_contract.h"
 #include "payload_support.h"
 #include "root_grant.h"
-#include "root_key.h"
 
 namespace {
 
@@ -90,7 +86,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (!maplesu::payload::su::acquire_root(maplesu::payload::su::feature_key())) {
+    if (!maplesu::payload::su::acquire_root()) {
         const int error = errno;
         maplesu::payload::err_printf("su: root handshake failed (errno=%d): %s\n",
                                     error, std::strerror(error));

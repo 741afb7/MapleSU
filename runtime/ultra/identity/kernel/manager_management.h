@@ -72,6 +72,11 @@ u64 msu_management_capabilities(void);
  * remains the original Manager UID after this session commits new credentials.
  * Atomic/IRQ-disabled contexts return -EWOULDBLOCK before session locking. */
 int msu_management_authorize(u32 *principal_uid, u32 *epoch);
+/* Same current-task protocol, with a bounded operation list for real init-user-
+ * namespace root. Root may synchronize/read the existing durable factory mirror
+ * (UID_COMMIT/READBACK handle=0), never create UID policy or control installation.
+ * Stale sessions retain their failure instead of reopening through UID0. */
+int msu_management_authorize_request(u32 command, u32 *principal_uid, u32 *epoch);
 /* Dialect only, after authorize. Helper has its own installation-held session
  * and is never an APK Manager claim or an unrestricted mutation principal. */
 bool msu_management_current_helper(void);

@@ -42,6 +42,49 @@ def native_type(btf, name):
     return dict(signature=signature, bytes=size)
 
 
+def native_layout(definitions):
+    """Actual module-header layouts, separate from target Image BTF facts."""
+    selected = {
+        "task_struct": ("thread_info", "tasks", "thread_node"),
+        "thread_info": ("flags",), "signal_struct": ("thread_head",),
+        "pt_regs": ("regs", "syscallno"), "tracepoint": ("funcs", "iterator"),
+        "tracepoint_func": ("func", "data"),
+        "kretprobe": ("handler", "entry_handler", "kp", "maxactive", "nmissed"),
+        "kprobe": ("addr",), "list_head": ("next", "prev"),
+    }
+    layouts = {owner: definitions.named_structure_selected(owner, names)
+               for owner, names in selected.items()}
+    try:
+        work = definitions.named_structure_selected("thread_info", ("syscall_work",))
+    except ValueError as error:
+        if str(error) != "Missing required BTF structure members: thread_info":
+            raise
+    else:
+        if work["bytes"] != layouts["thread_info"]["bytes"]:
+            raise ValueError("ULTRA_BRIDGE_TASK_PROFILE_NATIVE_LAYOUT_THREAD_INFO")
+        layouts["thread_info"]["members"]["syscall_work"] = work["members"]["syscall_work"]
+    fields = {}
+    sized = {"task_struct", "pt_regs", "tracepoint", "tracepoint_func", "kretprobe", "list_head"}
+    for owner, layout in layouts.items():
+        if owner in sized:
+            fields[owner + ".__size"] = dict(offsetBytes=0, widthBytes=layout["bytes"],
+                ownerSizeBytes=layout["bytes"])
+        for name, member in layout["members"].items():
+            if owner == "kprobe" or (owner == "kretprobe" and name == "kp"):
+                continue
+            fields[owner + "." + name] = dict(offsetBytes=member["offset"],
+                widthBytes=member["bytes"], ownerSizeBytes=layout["bytes"], signature=member["signature"])
+    probe = layouts["kprobe"]
+    embedded = layouts["kretprobe"]["members"]["kp"]
+    address = probe["members"]["addr"]
+    if embedded["bytes"] != probe["bytes"] or embedded["signature"] != probe["signature"]:
+        raise ValueError("ULTRA_BRIDGE_TASK_PROFILE_NATIVE_LAYOUT_KPROBE")
+    fields["kretprobe.kp.addr"] = dict(offsetBytes=embedded["offset"] + address["offset"],
+        widthBytes=address["bytes"], ownerSizeBytes=layouts["kretprobe"]["bytes"], signature=address["signature"])
+    return dict(schema="maplesu-task-profile-native-layout/1", origin="module-dwarf-derived-btf",
+        targetImageBtf=False, fields=fields)
+
+
 def model_location(model, address):
     matches = [(index, address - base) for index, base in model.bases.items()
         if base <= address < base + len(model.sections[index])]
@@ -81,6 +124,18 @@ def callback(api, elf, btf, model, name, signature):
     return dict(symbol=pointer, signature=signature, section=section.name,
         offset=entry["st_value"], fileOffset=section["sh_offset"] + at,
         relocation=rows[0], canonical=model_location(model, canonical))
+
+
+def function_signature(api, definitions, name):
+    if name not in api.CALLBACKS:
+        return "*" + definitions.function(name)
+    # LTO may omit a FUNC record while retaining the typed callback VAR.
+    # callback() binds that exact 8B VAR to the real canonical code entry.
+    signature = definitions.variable(name + "_type")
+    if (not signature.startswith("*f") or definitions.functions.get(name) and
+            signature != "*" + definitions.function(name)):
+        api.fail("CALLBACK_FUNCTION_ABI:" + name)
+    return signature
 
 
 def trace_registration(api, model, name, canonical):
@@ -256,6 +311,18 @@ def verify_module(api, data, report):
     return True
 
 
+def verify_native_layout(api, report, bridge):
+    if "nativeLayout" not in report:
+        return
+    provenance = report["provenance"]
+    builder = api.retained_path(provenance["claimBuilder"], report, bridge)
+    sys.path.insert(0, str(builder.parent))
+    compiler = api.load_api("task_profile_legacy_verify_btf", builder)
+    derived = api.retained_path(provenance["derivedObject"], report, bridge)
+    if native_layout(compiler.object_btf(derived)) != report["nativeLayout"]:
+        api.fail("NATIVE_LAYOUT_FACTS")
+
+
 def verify_provenance(api, report, bridge, selection, build, config):
     provenance = report.get("provenance", {})
     for name, path in (("bridge", bridge), ("sourceSelection", selection), ("strictBuild", build), ("targetConfig", config)):
@@ -299,6 +366,7 @@ def verify_provenance(api, report, bridge, selection, build, config):
             any(target_config.get(key, "n") != build_config.get(key, "n") for key in LOCK_CONFIG)):
         api.fail("LEGACY_ACTUAL_CFI_POLICY")
     api.package.verify_module_debug_source(provenance, bridge, build)
+    verify_native_layout(api, report, bridge)
     verify_module(api, bridge.read_bytes(), report)
 
 
@@ -430,7 +498,7 @@ def main(api):
     if types != {name: native_type(native_definitions, name) for name in types} or \
             values[::2] != [types["list_head"]["bytes"], types["rwlock_t"]["bytes"]]:
         api.fail("NATIVE_PROBE_BY_VALUE_TYPE")
-    functions = {name: api.function_record(elf, name, "*" + definitions.function(name),
+    functions = {name: api.function_record(elf, name, function_signature(api, definitions, name),
         {"mode": "legacy-lto-cfi"}, {}) for name in api.FUNCTIONS}
     callbacks = {name: callback(api, elf, definitions, model, name, functions[name]["signature"]) for name in api.CALLBACKS}
     if any(callbacks[name]["signature"] != definitions.typedef_function("kretprobe_handler_t") for name in api.CALLBACKS[1:]):
@@ -444,6 +512,7 @@ def main(api):
             lockConfig={key: config.get(key, "n") for key in LOCK_CONFIG}),
         nativeAlignment=dict(independentlyMeasuredFromBridgeBuild=True, values=values,
             listHeadAlignment=values[1], rwlockAlignment=values[3]),
+        nativeLayout=native_layout(definitions),
         cfiPolicy=dict(mode="legacy-lto-cfi", normalizeIntegers=normalize), functions=functions,
         tables={name: api.table_record(elf, name) for name in api.TABLES}, callbacks=callbacks,
         legacyTarget=target, legacyCfi=legacy_proof(api, bridge.read_bytes(), target, functions),

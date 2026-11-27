@@ -4,13 +4,13 @@
 
 #include <cstdint>
 #include <cstring>
+
 #include <exception>
 #include <limits>
 #include <functional>
 #include <string>
 #include <vector>
 
-#include "private_maple_runtime.h"
 #include "private_module_base_kernel_func_executor.h"
 #include "maplesu_request_identity.h"
 #include "../../../../ultra/authorization/kernel_read_metadata.h"
@@ -77,15 +77,12 @@ static bool from_base62(const std::string& text, uint64_t& value) {
 
 namespace kernel_module {
 
-// Filled by the kernel-side parser that the emitter below runs.
 struct ExecveParam {
     uint32_t offset;
     char filename_reg;
     uint8_t is_single_char_ptr;
 };
 
-// Wire layout of one appended symbol pair: start offset plus a signed
-// instruction delta.
 struct SymPack {
     uint32_t start_offset;
     int16_t ret_delta;
@@ -157,8 +154,8 @@ static KModErr run_legacy_kernel_u64_emitter(
     return err;
 }
 
-// The negotiated descriptor supplies the append address. An untouched QUERY
-// retains the old Key/return-address locator as the compatibility boundary.
+// The negotiated descriptor supplies the append address. Explicit legacy
+// selection retains the original Key/return-address locator after untouched QUERY.
 static KModErr get_append_package_addr(
     uint64_t& out_addr, uint32_t required_bytes = MAPLESU_LEGACY_METADATA_V2_BYTES) {
     RequestIdentity operation;
@@ -174,7 +171,9 @@ static KModErr get_append_package_addr(
         out_addr = facts.append;
         return KModErr::OK;
     }
-    if (operation.auth_state & 1) return KModErr::ERR_MODULE_TEST_CHANNEL;
+    if (!maplesu_request_auth_legacy(operation.auth_state)) return KModErr::ERR_MODULE_TEST_CHANNEL;
+    if (required_bytes > MAPLESU_LEGACY_METADATA_V2_BYTES)
+        return KModErr::ERR_MODULE_INTERNAL_APPEND;
     struct LegacyLocator {
         pid_t pid = 0;
         uint64_t auth_state = 0;
@@ -244,7 +243,7 @@ static KModErr read_append_field(uint32_t displacement, void* value, uint32_t si
                                 uint32_t required_bytes = MAPLESU_LEGACY_METADATA_V2_BYTES) {
     RequestIdentity identity;
     if (!identity.capture()) return KModErr::ERR_MODULE_ROOT_KEY;
-    if (identity.auth_state & 1) {
+    if (!maplesu_request_auth_legacy(identity.auth_state)) {
         RequestMetadataFacts facts{};
         bool supported = false;
         auto error = maplesu_kernel_metadata_facts(facts, supported);

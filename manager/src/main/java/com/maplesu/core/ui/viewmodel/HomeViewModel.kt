@@ -51,7 +51,6 @@ import com.maplesu.core.ui.security.HiddenStartupConfirm
 import com.maplesu.core.ui.security.LiteHiddenRuntime
 import com.maplesu.core.ui.util.checkNewVersion
 import com.maplesu.core.ui.util.getSELinuxStatusRaw
-import com.maplesu.core.ui.util.peekCachedSELinuxStatus
 import com.maplesu.core.ui.util.module.LatestVersionInfo
 import com.maplesu.core.ui.util.resolveDeviceName
 import dev.maplesu.manager.litehidden.HomeLiteHintUpdate
@@ -73,7 +72,6 @@ import dev.maplesu.manager.workmode.storage.SettingsPrefsPolicy
 import com.maplesu.core.ui.util.KsuCli
 import dev.maplesu.manager.runtime.MapleSuRuntime
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
-import dev.maplesu.manager.runtime.ultra.UltraKeyPairedStore
 
 /*
  * P0（Lite 模式启动状态）两个时序常量：
@@ -140,9 +138,11 @@ class HomeViewModel(
     private var informationOwner = 0L
     private var deviceNameInformationJob: Job? = null
     private var selinuxInformationJob: Job? = null
+    private var selinuxInformationOwner = 0L
+    private var selinuxInformationBootId: String? = null
     private var informationContext: HomeInformationOwner? = null
 
-    private data class HomeStateRead(val state: HomeUiState, val readSELinux: Boolean)
+    private data class HomeStateRead(val state: HomeUiState)
     private data class HomeInformationOwner(
         val id: Long,
         val revision: Long,
@@ -195,11 +195,9 @@ class HomeViewModel(
                     reuseCompletedDetection = true)
             }
         }
-        // Ordinary information can start when the backend activates; it does not
-        // wait for a queued Root/environment refresh or for detection to settle.
+        // Ordinary system facts do not wait for backend activation.
         viewModelScope.launch {
-            if (ModeRuntime.active == null) ModeRuntime.awaitActivated(LITE_MODE_SETTLE_TIMEOUT_MS)
-            refreshInformation()
+            refreshInformation(forceSELinuxRead = true)
         }
         // 后台补上 root / SELinux / Ultra 探测(IO 线程,不再堵主线程)。
         // 算不出来就保持首帧的默认值,绝不让异常冒出去。
@@ -242,7 +240,6 @@ class HomeViewModel(
         val revision = ModeRuntime.detectionRevision.value
         if (reuseCompletedDetection && publishedDetectionRevision == revision &&
             ModeRuntime.detectionComplete) return@withLock _uiState.value
-        val local = buildState(probeRoot = false, rootProbeSettled = false, modeSettled = modeSettled)
         val bootId = runCatching { ProcBootIdSource.read() }.getOrDefault("")
         val owner = publishMutex.withLock {
             HomeInformationOwner(++environmentOwner, revision, ModeRuntime.active, bootId).also {
@@ -287,50 +284,39 @@ class HomeViewModel(
             }
         }
         publishState(state, owner)
-        if (!local.readSELinux && checked is EnvironmentProbeResult.Completed && checked.value.readSELinux) {
-            refreshInformation(confirmedSELinuxOwner = owner)
-        }
         if (checked is EnvironmentProbeResult.Completed && ModeRuntime.detectionComplete &&
             owner.isCurrent(environmentOwner)) publishedDetectionRevision = revision
         _uiState.value
     } }
 
-    private suspend fun refreshInformation(confirmedSELinuxOwner: HomeInformationOwner? = null) {
-        if (ModeRuntime.active == null) return
+    private suspend fun refreshInformation(forceSELinuxRead: Boolean = false) {
         val revision = ModeRuntime.detectionRevision.value
         val activation = ModeRuntime.active
         val bootId = runCatching { ProcBootIdSource.read() }.getOrDefault("")
-        val local = buildState(probeRoot = false, rootProbeSettled = false,
-            modeSettled = ModeRuntime.detectionComplete)
-        val shouldReadSELinux = local.readSELinux || confirmedSELinuxOwner?.let {
-            it.revision == revision && it.activation == activation && it.bootId == bootId
-        } == true
         publishMutex.withLock {
-            // A redundant Root refresh must not retire the still-running SELinux
-            // read, publish Busy as Unknown, and discard the original completion.
+            refreshSELinuxInformation(bootId, forceSELinuxRead)
             val currentOwner = informationContext
             val sameContext = currentOwner?.let {
                 it.revision == revision && it.activation == activation && it.bootId == bootId
             } == true
-            if (currentOwner != null && sameContext &&
-                (deviceNameInformationJob?.isActive == true || selinuxInformationJob?.isActive == true)) {
-                // A completed environment read can make SELinux readable while
-                // the device-name read is still active. Add only that producer.
-                if (shouldReadSELinux && selinuxInformationJob == null) {
-                    selinuxInformationJob = viewModelScope.launch { readSELinux(currentOwner) }
-                }
-                return
-            }
-            if (!sameContext) {
-                val cached = runCatching { peekCachedSELinuxStatus() }.getOrNull() ?: "Unknown"
-                _uiState.update { it.copy(systemInfo = it.systemInfo.copy(selinuxStatus = cached)) }
-            }
+            if (currentOwner != null && sameContext && deviceNameInformationJob?.isActive == true) return
             val owner = HomeInformationOwner(++informationOwner, revision, activation, bootId)
             informationContext = owner
             deviceNameInformationJob = viewModelScope.launch { readDeviceName(owner) }
-            selinuxInformationJob = if (shouldReadSELinux) {
-                viewModelScope.launch { readSELinux(owner) }
-            } else null
+        }
+    }
+
+    private fun refreshSELinuxInformation(bootId: String, forceRead: Boolean) {
+        val previous = selinuxInformationJob
+        val sameBoot = selinuxInformationBootId == bootId
+        if (sameBoot && (previous?.isActive == true || (!forceRead && previous != null))) return
+        val owner = ++selinuxInformationOwner
+        selinuxInformationBootId = bootId
+        if (!sameBoot) _uiState.update { it.copy(systemInfo = it.systemInfo.copy(selinuxStatus = "Unknown")) }
+        selinuxInformationJob = viewModelScope.launch {
+            previous?.join()
+            if (owner != selinuxInformationOwner || bootId.isBlank()) return@launch
+            readSELinux(bootId, owner)
         }
     }
 
@@ -340,17 +326,23 @@ class HomeViewModel(
         publishInformation(owner) { it.copy(deviceModel = name) }
     }
 
-    private suspend fun readSELinux(owner: HomeInformationOwner) {
-        val ultra = runCatching {
-            UltraEnvironmentProbe.usesUltraBackend(ksuApp) || UltraEnvironmentProbe.isRunning()
-        }.getOrDefault(false)
-        val result = homeSELinuxProbeRunner.run(HOME_ENVIRONMENT_PROBE_TIMEOUT_MS) { getSELinuxStatusRaw() }
-        val raw = (result as? EnvironmentProbeResult.Completed)?.value ?: "Unknown"
-        // A Ultra reply is reusable only while the Checker's own identity/boot cache is current.
-        val status = if (ultra && raw != "Unknown") {
-            runCatching { peekCachedSELinuxStatus() }.getOrNull() ?: "Unknown"
-        } else raw
-        publishInformation(owner) { it.copy(selinuxStatus = status) }
+    private suspend fun readSELinux(bootId: String, owner: Long) {
+        val result = homeSELinuxProbeRunner.run(HOME_ENVIRONMENT_PROBE_TIMEOUT_MS) {
+            getSELinuxStatusRaw()
+        }
+        val status = (result as? EnvironmentProbeResult.Completed)?.value ?: return
+        if (status !in setOf("Enforcing", "Permissive", "Disabled")) return
+        publishSELinuxInformation(bootId, owner, status)
+    }
+
+    private suspend fun publishSELinuxInformation(bootId: String, owner: Long, status: String) {
+        currentCoroutineContext().ensureActive()
+        val sameBoot = runCatching { ProcBootIdSource.read() == bootId }.getOrDefault(false)
+        publishMutex.withLock {
+            if (sameBoot && owner == selinuxInformationOwner && bootId == selinuxInformationBootId) {
+                _uiState.update { it.copy(systemInfo = it.systemInfo.copy(selinuxStatus = status)) }
+            }
+        }
     }
 
     private suspend fun publishInformation(
@@ -482,9 +474,28 @@ class HomeViewModel(
         }
     }
 
+    private var installedKernelCheck: Job? = null
+
+    /** Protected carrier inspection is reserved for the user's explicit retry. */
+    fun checkEnvironmentManually() {
+        if (installedKernelCheck?.isActive == true) return
+        installedKernelCheck = viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.checkInstalledKernel(ksuApp)
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "Manual carrier inspection failed", error)
+            }
+            refresh()
+        }
+    }
+
     fun refresh() {
         refreshFlight.launch(viewModelScope) {
-            refreshInformation()
+            refreshInformation(forceSELinuxRead = true)
             ksuApp.requestUltraRecovery()
             // P0：刷新也要守"模式未判定"这条时序 —— 未判定窗口内 root 探测被启动门控挡住，
             // 那一次失败不是 Lite 启动失败（否则健康设备每次冷启动都会先闪一行失败提示）。
@@ -573,9 +584,13 @@ class HomeViewModel(
         // 本次 SDK 已确认运行时，启动早期的未安装快照不再是当前结论。
         val ultraSafeMode = UltraEnvironmentProbe.isSafeMode(ksuApp)
         val ultraKernelVerified = UltraEnvironmentProbe.isKernelRootVerified(ksuApp)
-        val environmentMode = if (ultraEnvironmentRunning || ultraSafeMode || ultraKernelVerified) WorkMode.LITE
+        val installedKernelKnown = dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelKnown(ksuApp)
+        val installedKernelUnbound = installedKernelKnown && ModeRuntime.active == null &&
+            !ultraEnvironmentRunning && !ultraSafeMode && !ultraKernelVerified
+        val environmentMode = if (ultraEnvironmentRunning || ultraSafeMode || ultraKernelVerified || installedKernelKnown) WorkMode.LITE
             else ModeRuntime.active ?: projection.cachedMode
-        val confirmedNotInstalled = projection.confirmedNotInstalled && !ultraEnvironmentRunning && !ultraSafeMode && !ultraKernelVerified
+        val confirmedNotInstalled = projection.confirmedNotInstalled && !ultraEnvironmentRunning &&
+            !ultraSafeMode && !ultraKernelVerified && !installedKernelKnown
         // ⚠️ 2026-09-19 修:下面每一个 runCatching 都是"防闪退" ——
         //    Natives 是 JNI(可能 UnsatisfiedLinkError),读设置走磁盘,Os.uname 也可能抛。
         //    以前任何一个抛了,HomeViewModel 的构造 / 刷新协程就炸;现在各自兜底,
@@ -637,13 +652,8 @@ class HomeViewModel(
         } else {
             false
         }
-        // Ultra「配对」标记是 prefs 读 → 只在 IO 线程取。主线程首帧的 Ultra 缓存本来还是 Unknown
-        //（UltraEnvironmentProbe 首帧只读缓存、不碰 JNI），这个值也用不上。
-        val ultraPaired = if (probeRoot) {
-            runCatching { UltraKeyPairedStore.isPaired(ksuApp) }.getOrDefault(false)
-        } else {
-            false
-        }
+        // Reuse the current boot's observed channel; no persisted pairing secret is required.
+        val ultraPaired = ultraEnvironmentRunning || isRootAvailable
         val liteFacts = LiteStartupFacts(
             liteMode = liteMode,
             liteEvidence = liteEvidence,
@@ -717,7 +727,7 @@ class HomeViewModel(
 
         // P0：Lite 已安装 → 追加"已安装/正常"语义（首帧即可）；root 失败只置提示行，
         // **绝不**把已安装回退成未安装（KSU/未判定保持原判定）。
-        val liteForced = if (liteStatus.liteInstalled) {
+        val liteForced = if (liteStatus.liteInstalled && !installedKernelUnbound) {
             state.copy(
                 isManager = true,
                 managerNotRecognized = false,
@@ -766,7 +776,7 @@ class HomeViewModel(
         } else {
             effectiveState
         }
-        return HomeStateRead(projected, readSELinux = !confirmedNotInstalled)
+        return HomeStateRead(projected)
     }
 
     /**

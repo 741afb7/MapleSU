@@ -88,7 +88,7 @@ internal fun rememberThemeWallpaperStyle(dark: Boolean, frame: ThemeWallpaperFra
     val luminance = frame.photo?.luminance ?: -1f
     if (selection.image != null && luminance < 0f && selection.video == null) return null
     val dim = if (j.optBoolean("isDualBackgroundDimEnabled")) j.optDouble(if (dark) "backgroundNightDim" else "backgroundDayDim",.2).toFloat()
-        else AppearancePreferences.prefs(context).getFloat("wallpaper_dim",.2f)
+        else if (j.has("sukisu.original")) j.optDouble("backgroundDim",0.0).toFloat() else AppearancePreferences.prefs(context).getFloat("wallpaper_dim",.2f)
     val opacity = if (AppearancePreferences.prefs(context).getBoolean("ui_translucent",true))
         j.optDouble("backgroundOpacity",.5).toFloat().coerceIn(0f,1f) else 1f
     return ThemeWallpaperStyle(opacity,

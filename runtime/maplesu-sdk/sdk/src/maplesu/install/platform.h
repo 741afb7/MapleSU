@@ -42,6 +42,45 @@ inline bool create_empty_file(const char* path) {
     return out.good();
 }
 
+inline KModErr preserve_or_initialize_log(const char* path, const char* initial) {
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    const bool created = fd >= 0;
+    if (fd < 0) {
+        if (errno != EEXIST) return KModErr::ERR_MODULE_OPEN_FILE;
+        fd = ::open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) return KModErr::ERR_MODULE_OPEN_FILE;
+    }
+    const auto finish = [&](KModErr result, int error) {
+        if (::close(fd) != 0 && result == KModErr::OK) {
+            result = created ? KModErr::ERR_MODULE_WRITE_FILE : KModErr::ERR_MODULE_READ_FILE;
+            error = errno;
+        }
+        errno = error;
+        return result;
+    };
+    struct stat info {};
+    if (::fstat(fd, &info) != 0) return finish(KModErr::ERR_MODULE_READ_FILE, errno);
+    if (!S_ISREG(info.st_mode)) return finish(KModErr::ERR_MODULE_OPEN_FILE, EINVAL);
+    if (info.st_uid != ::geteuid()) return finish(KModErr::ERR_MODULE_OPEN_FILE, EPERM);
+    if (info.st_nlink != 1) return finish(KModErr::ERR_MODULE_OPEN_FILE, EMLINK);
+    // Existing logs, including empty ones, belong to the previous attempt.
+    // Keep their inode and bytes while an in-flight helper may still append.
+    if (!created) return finish(KModErr::OK, 0);
+    std::size_t offset = 0;
+    const std::size_t size = std::strlen(initial);
+    while (offset < size) {
+        const ssize_t count = ::write(fd, initial + offset, size - offset);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) return finish(KModErr::ERR_MODULE_WRITE_FILE, count < 0 ? errno : EIO);
+        offset += static_cast<std::size_t>(count);
+    }
+    if (::fchmod(fd, core::kExecMode0777) != 0 ||
+        ::fsetxattr(fd, core::kSelinuxXattr, core::kSelinuxKernel,
+                    sizeof(core::kSelinuxKernel), 0) != 0)
+        return finish(KModErr::ERR_SET_FILE_SELINUX, errno);
+    return finish(KModErr::OK, 0);
+}
+
 inline bool set_file_selinux_access_mode(const char* path, const char* context) {
     if (::chmod(path, core::kExecMode0777) != 0) return false;
     if (context == nullptr) return false;
@@ -67,43 +106,5 @@ inline bool make_dir(const char* path) {
 }
 
 inline int last_errno() { return errno; }
-
-// --- hooks for core::install_blob -----------------------------------------
-// These are the four foreign calls the install step makes.  Passing them as a
-// table lets the host install-core test run the *same*
-// install step on the host with recording stubs instead of a real filesystem.
-inline void* payload_alloc(unsigned long size) {
-    return new (std::nothrow) char[size];
-}
-
-inline void payload_release(void* p) {
-    delete[] static_cast<char*>(p);
-}
-
-inline long long payload_publish(void* /*ctx*/, const char* path, const void* data,
-                                unsigned long size, const char* selinux_ctx) {
-    return static_cast<long long>(
-        maplesu_publish_executable(path, data, size, selinux_ctx));
-}
-
-inline bool payload_set_selinux(void* /*ctx*/, const char* path, const char* selinux_ctx) {
-    return set_file_selinux_access_mode(path, selinux_ctx);
-}
-
-inline core::install_ops install_ops_table() {
-    return core::install_ops{&payload_alloc, &payload_release, &payload_publish,
-                             &payload_set_selinux};
-}
-
-// Convenience wrapper: run the shared install step with the production hooks.
-inline core::err_t install_payload(const char* path, const unsigned char* blob,
-                                  unsigned long size, const char* token,
-                                  unsigned long token_size, const char* root_key,
-                                  const char* selinux_ctx, unsigned int selinux_calls,
-                                  core::err_t token_missing_error) {
-    core::install_request req{path, blob, size, token, token_size, root_key, selinux_ctx,
-                              selinux_calls, token_missing_error};
-    return core::install_blob(install_ops_table(), nullptr, req);
-}
 
 }  // namespace maplesu::install::platform

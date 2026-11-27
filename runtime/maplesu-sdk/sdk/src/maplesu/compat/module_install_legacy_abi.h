@@ -8,8 +8,6 @@
 #include <cstddef>
 #include <sys/wait.h>
 
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
 namespace default_modules::module_root { KModErr set_current_root(bool); }
 
 namespace maplesu::sdk {

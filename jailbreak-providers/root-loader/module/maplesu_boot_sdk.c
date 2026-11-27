@@ -5,7 +5,6 @@
 #include "native_sdk.h"
 #include "preinit.h"
 #include "manager_resident_host.h"
-#include "manager_claim_abi.h"
 #if MSU_INIT_BRIDGE_CFI_LEGACY
 #include "native_legacy_cfi.h"
 #endif
@@ -88,6 +87,7 @@ static noinline void msu_sdk_legacy_invoke(uptr target, const void *packet, void
     msu_sdk_call_template(target, packet, reply);
 }
 static void (*volatile msu_sdk_legacy_call)(uptr, const void *, void *) = msu_sdk_legacy_invoke;
+__ADDRESSABLE(msu_sdk_legacy_call);
 #endif
 
 static uptr (*lookup_name)(const char *);
@@ -140,11 +140,15 @@ static uptr native_execve, kernel_base, arena, avc_result;
 static uptr native_avc;
 #endif
 static unsigned char probe[MSU_BOOT_SDK_PROBE_BYTES] __attribute__((aligned(8)));
+#ifndef MSU_BOOT_SDK_NATIVE
+/* L3's separately selected historical control protocol. Native Ultra never
+ * generates, binds, compares or delivers this credential. */
 static char root_key[MSU_BOOT_SDK_KEY_BYTES + 1];
 static char original_root_key[MSU_BOOT_SDK_KEY_BYTES + 1];
-static u32 state, control_busy, stage_busy;
+static u32 stage_busy;
+#endif
+static u32 state, control_busy;
 #ifdef MSU_BOOT_SDK_NATIVE
-static char native_credential[MSU_BOOT_SDK_KEY_BYTES + 1];
 static int native_host_started;
 #endif
 static struct {
@@ -204,7 +208,9 @@ static u32 sdk_execve_offset, sdk_filldir_offset, sdk_audit_offset, sdk_seccomp_
 #define MSU_BS_KP_ADDR sdk_layout.kp_addr
 #define MSU_BS_REGS_PC sdk_layout.regs_pc
 struct stage { uptr address; u32 bytes, pages, written, quarantined; };
+#if MSU_BS_ENVIRONMENT || !defined(MSU_BOOT_SDK_NATIVE)
 static struct stage stages[64];
+#endif
 #if MSU_BS_ENVIRONMENT
 static void (*release_module)(const void *);
 static MSU_PH_NOCFI void sdk_module_free(const void *);
@@ -220,6 +226,7 @@ static uptr sdk_current_task(void)
     return task;
 #endif
 }
+#ifndef MSU_BOOT_SDK_NATIVE
 static uptr sdk_current_cred(void)
 {
 #ifdef MSU_BOOT_SDK_NATIVE
@@ -228,6 +235,7 @@ static uptr sdk_current_cred(void)
     return *(const volatile uptr *)(sdk_current_task() + MSU_BS_TASK_CRED);
 #endif
 }
+#endif
 static void zero(void *at, unsigned long bytes)
 {
     unsigned char *p = at;
@@ -300,6 +308,7 @@ int msu_boot_sdk_avc_redirect(struct pt_regs *regs)
 }
 /* Every request receives a fresh task cred before saved-ID replies are written.
  * The SDK also prepares its thread; this covers helper and fork boundaries. */
+#ifndef MSU_BOOT_SDK_NATIVE
 static MSU_PH_NOCFI int private_cred(void)
 {
     void *cred = prepare_cred();
@@ -317,6 +326,8 @@ static void reply(u64 value)
 {
     msu_sdk_store((unsigned char *)sdk_current_cred() + MSU_BS_CRED_SUID, value, 8);
 }
+#endif
+#if MSU_BS_ENVIRONMENT || !defined(MSU_BOOT_SDK_NATIVE)
 static struct stage *owned(uptr address)
 {
     unsigned int n;
@@ -334,6 +345,7 @@ static MSU_PH_NOCFI int discard(struct stage *s)
     zero(s, sizeof *s);
     return 0;
 }
+#endif
 #if MSU_BS_ENVIRONMENT
 /* SDK free_kernel_mem() calls module_memfree or execmem_free through a JIT,
  * not command 0x35. Retire gateway allocations here, so the ledger never holds a
@@ -348,6 +360,7 @@ static MSU_PH_NOCFI void sdk_module_free(const void *address)
     release_module(address);
 }
 #endif
+#ifndef MSU_BOOT_SDK_NATIVE
 struct sdk_legacy_scope {
     const struct maplesu_legacy_hook_provider *provider;
     void *lease;
@@ -655,7 +668,7 @@ delivery_failed:
     if (scope.lease) legacy_provider_put(scope.lease);
     return MAPLESU_REQUEST_STATUS_FAULT;
 }
-
+#endif
 #ifdef MSU_BOOT_SDK_NATIVE
 static long preinit_original_execve(const void *args)
 {
@@ -667,12 +680,12 @@ static MSU_PH_NOCFI __attribute__((__noinline__)) long sdk_execve(const void *ar
 {
     const uptr *syscall = args;
     uptr filename = syscall[0];
+#ifndef MSU_BOOT_SDK_NATIVE
     unsigned char packet[MSU_BOOT_SDK_PACKET_BYTES];
     unsigned int n, bound_difference = 0, original_difference = 0;
     const char *packet_key;
     u64 result;
     int matched;
-#ifndef MSU_BOOT_SDK_NATIVE
     int error;
 #endif
 #ifdef MSU_BOOT_SDK_NATIVE
@@ -685,7 +698,7 @@ static MSU_PH_NOCFI __attribute__((__noinline__)) long sdk_execve(const void *ar
      * Never turn a bit-55 kernel address into a user address. */
     if (!(filename & (1ULL << 55))) filename &= 0x00ffffffffffffffULL;
 #ifdef MSU_BOOT_SDK_NATIVE
-    /* Same host for Manager identity and owner-v3; short native names do not
+    /* Current-task v3 only; short native names do not
      * require an 86-byte readable user mapping. */
     if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) == MSU_BOOT_SDK_READY) {
         unsigned int length;
@@ -694,19 +707,18 @@ static MSU_PH_NOCFI __attribute__((__noinline__)) long sdk_execve(const void *ar
             if (!owner_name[length]) {
                 int owner_request = length == 84 &&
                     !memcmp(owner_name, MAPLESU_OWNER_ENVELOPE_PREFIX, MAPLESU_OWNER_ENVELOPE_PREFIX_BYTES);
-                int identity_request = msu_manager_claim_address(owner_name, length) != 0;
-                if (owner_request || identity_request) {
+                if (owner_request) {
                     int result = msu_manager_resident_dispatch(owner_name);
                     zero(owner_name, sizeof owner_name);
-                    if (owner_request) return result;
-                    return msu_sdk_call_original(native_execve, args);
+                    return result;
                 }
                 break;
             }
         }
         zero(owner_name, sizeof owner_name);
     }
-#endif
+    return msu_sdk_call_original(native_execve, args);
+#else
     if (__atomic_load_n(&state, __ATOMIC_ACQUIRE) != MSU_BOOT_SDK_READY ||
         copy_in(packet, (const void *)filename, MSU_BOOT_SDK_KEY_BYTES))
         return msu_sdk_call_original(native_execve, args);
@@ -729,19 +741,14 @@ static MSU_PH_NOCFI __attribute__((__noinline__)) long sdk_execve(const void *ar
     if (private_cred()) return -12;
     if (!take(&stage_busy)) { reply((u64)-19999); return -16; }
     result = dispatch(packet);
-#ifndef MSU_BOOT_SDK_NATIVE
     /* Only L3 has a private marker to hand over; the native bridge does not
      * claim or emulate that provider. Legacy JIT result remains unchanged. */
     error = root_handover();
     if (error) result = (u64)-19999;
-#endif
     reply(result);
     __atomic_store_n(&stage_busy, 0, __ATOMIC_RELEASE);
     zero(packet, sizeof packet);
-#ifndef MSU_BOOT_SDK_NATIVE
     return error ? error : -2;
-#else
-    return -2;
 #endif
 }
 __attribute__((__noinline__)) int msu_boot_sdk_pre(struct kprobe *p, struct pt_regs *regs)
@@ -957,7 +964,9 @@ static MSU_PH_NOCFI int bootstrap(void)
 #else
     uptr legacy_carrier;
 #endif
+#ifndef MSU_BOOT_SDK_NATIVE
     long delta;
+#endif
     int error = -34, audit_published = 0;
     /* No replacement key or second allocation is issued after uncertain work. */
     if (state != MSU_BOOT_SDK_EMPTY) return bootstrap_error;
@@ -1015,20 +1024,13 @@ static MSU_PH_NOCFI int bootstrap(void)
 #else
     if (msu_sdk_metadata_offset(kernel_base, (uptr)metadata, &offset)) goto failed;
 #endif
+#ifndef MSU_BOOT_SDK_NATIVE
     delta = (long)((uptr)metadata - (arena + ((uptr)msu_sdk_call_blr - (uptr)MSU_SDK_CODE_START)));
-#ifdef MSU_BOOT_SDK_NATIVE
-    for (n = 0; n < sizeof native_credential; ++n) root_key[n] = native_credential[n];
-#else
     random_bytes(random, sizeof random);
     for (n = 0; n < sizeof random; ++n) root_key[n] = alphabet[random[n] % 62];
     zero(random, sizeof random);
-#endif
     for (n = 0; n < sizeof original_root_key; ++n) original_root_key[n] = root_key[n];
     if (msu_sdk_bind_key(root_key, delta)) { error = -22; goto failed; }
-#ifdef MSU_BOOT_SDK_NATIVE
-    if (memcmp(original_root_key, native_credential, MSU_BOOT_SDK_KEY_BYTES)) {
-        error = -22; goto failed;
-    }
 #endif
 #if defined(MSU_BOOT_SDK_NATIVE) && MSU_INIT_BRIDGE_CFI_LEGACY
     /* Keep the linked code/checker identities. Only owned data pages clear. */
@@ -1046,7 +1048,12 @@ static MSU_PH_NOCFI int bootstrap(void)
     msu_sdk_store(metadata + MAPLESU_APPEND64_LOOKUP, sdk_kallsyms, 8);
 #endif
     for (n = 0; n < 6; ++n) metadata[8 + n] = (const unsigned char[]){'/','d','a','t','a','/'}[n];
+#ifdef MSU_BOOT_SDK_NATIVE
+    error = msu_init_bridge_deployment_namespace((char *)metadata + 14);
+    if (error && error != -EOPNOTSUPP) goto failed;
+#else
     for (n = 0; n < 16; ++n) metadata[14 + n] = root_key[n];
+#endif
     for (n = 0; n < 5; ++n) metadata[30 + n] = (const unsigned char[]){'/','i','n','i','t'}[n];
 #if MSU_BS_ENVIRONMENT
     if (sdk_layout.environment) {
@@ -1118,11 +1125,10 @@ static MSU_PH_NOCFI int bootstrap(void)
     native_host_started = 1;
     error = msu_init_bridge_host_start(kernel_base, metadata,
 #if MSU_INIT_BRIDGE_CFI_LEGACY
-        MAPLESU_APPEND64_BYTES,
+        MAPLESU_APPEND64_BYTES);
 #else
-        audit_published ? MAPLESU_LEGACY_METADATA_AUDIT_BYTES : MAPLESU_LEGACY_METADATA_V2_BYTES,
+        audit_published ? MAPLESU_LEGACY_METADATA_AUDIT_BYTES : MAPLESU_LEGACY_METADATA_V2_BYTES);
 #endif
-        root_key);
     if (error) goto failed;
 #endif
     *(const char **)(probe + MSU_BS_KP_NAME) = "__arm64_sys_execve";
@@ -1175,8 +1181,10 @@ failed:
         arena = 0;
     }
     avc_result = 0;
+#ifndef MSU_BOOT_SDK_NATIVE
     zero(root_key, sizeof root_key);
     zero(original_root_key, sizeof original_root_key);
+#endif
     bootstrap_error = error;
     __atomic_store_n(&state, MSU_BOOT_SDK_FAILED, __ATOMIC_RELEASE);
     return error;
@@ -1219,8 +1227,10 @@ MSU_PH_NOCFI long msu_boot_sdk_control(uptr user)
     request.padding[4] = 1; /* qualified inner allocator variant selection */
     request.padding[5] = 1; /* qualified vmalloc_user sampler selection */
     request.padding[6] = MSU_BOOT_SDK_SEGMENTED_OBSERVER | MSU_BOOT_SDK_SEGMENTED_CALLABLE;
+#ifndef MSU_BOOT_SDK_NATIVE
     if (!error && request.state == MSU_BOOT_SDK_READY)
         for (n = 0; n < sizeof root_key; ++n) request.key[n] = root_key[n];
+#endif
     error = copy_out((void *)user, &request, sizeof request) ? -14 : 0;
     zero(&request, sizeof request);
 out:
@@ -1303,24 +1313,21 @@ MSU_PH_NOCFI int msu_boot_sdk_init(uptr (*lookup)(const char *), int (*subject)(
     return 0;
 }
 #ifdef MSU_BOOT_SDK_NATIVE
-int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout,
-    const char credential[MSU_BOOT_SDK_KEY_BYTES])
+int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout)
 {
-    unsigned int n;
     int error;
+#if MSU_INIT_BRIDGE_CFI_KCFI
+    u32 hash;
+#endif
 
     if (!in_task() || in_atomic() || irqs_disabled()) return -EWOULDBLOCK;
     if (state != MSU_BOOT_SDK_EMPTY || sdk_dynamic_ready) return -EBUSY;
-    if (!layout || !credential) return -EINVAL;
-    for (n = 0; n < MSU_BOOT_SDK_KEY_BYTES; ++n) {
-        unsigned char c = credential[n];
-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
-            return -EINVAL;
-    }
+    if (!layout) return -EINVAL;
 #if MSU_INIT_BRIDGE_CFI_KCFI
-    /* Keep the compiler-owned hash and reject other prefix placements. */
-    if (MSU_SDK_CODE_ENTRY != 4 || cfi_get_offset() != 4 ||
-        !cfi_get_func_hash((void *)msu_sdk_call_template)) return -EOPNOTSUPP;
+    /* Read the compiler-owned ARM64 type word without newer cfi.h helpers. */
+    if (MSU_SDK_CODE_ENTRY != sizeof(hash) ||
+        copy_from_kernel_nofault(&hash, MSU_SDK_CODE_START, sizeof(hash)) ||
+        !hash) return -EOPNOTSUPP;
 #elif MSU_INIT_BRIDGE_CFI_NONE
     /* A naturally uninstrumented target has no copied CFI prefix. */
     if (MSU_SDK_CODE_ENTRY != 0) return -EOPNOTSUPP;
@@ -1333,11 +1340,8 @@ int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout,
 #endif
     error = msu_boot_sdk_init(msu_init_bridge_checked_lookup, NULL, NULL);
     if (error) return error;
-    memcpy(native_credential, credential, MSU_BOOT_SDK_KEY_BYTES);
-    native_credential[MSU_BOOT_SDK_KEY_BYTES] = 0;
     error = configure(layout);
     if (!error) error = bootstrap();
-    memzero_explicit(native_credential, sizeof native_credential);
     return error;
 }
 

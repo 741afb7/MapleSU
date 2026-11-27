@@ -44,8 +44,8 @@ bool matches(int dir, const std::string& name, const unsigned char* bytes, size_
     }
     return true;
 }
-int64_t execute(const char* key, const char* digest, const unsigned char* bytes, size_t size) {
-    auto root = maplesu::sdk::get_root(key);
+int64_t execute(const char* digest, const unsigned char* bytes, size_t size) {
+    auto root = maplesu::sdk::get_root();
     if (is_failed(root)) return static_cast<int64_t>(root);
     if (getuid() || geteuid()) return static_cast<int64_t>(KModErr::ERR_MODULE_ROOT_KEY);
     Fd dir{open(MAPLESU_POLICY_DIRECTORY, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
@@ -71,18 +71,18 @@ int64_t execute(const char* key, const char* digest, const unsigned char* bytes,
     return matches(dir.value, name, bytes, size) ? 0 : static_cast<int64_t>(KModErr::ERR_MODULE_WRITE_FILE);
 }
 }
-int64_t publish_backend(const char* key, const char* digest, const unsigned char* bytes, size_t size) {
+int64_t publish_backend(const char* digest, const unsigned char* bytes, size_t size) {
     constexpr auto invalid = static_cast<int64_t>(KModErr::ERR_MODULE_PARAM);
     constexpr auto io_error = static_cast<int64_t>(KModErr::ERR_MODULE_WRITE_FILE);
     const auto auth = kernel_module::maplesu_request_auth_state();
     if (!kernel_module::maplesu_request_auth_usable(auth) ||
         kernel_module::maplesu_request_auth_helper(auth) ||
-        (key ? strnlen(key, 1024) < 16 || strnlen(key, 1024) == 1024 :
-            !kernel_module::maplesu_request_auth_manager(auth)) ||
         !digest || strnlen(digest, 65) != 64 || !bytes || size < 64 || size > 32 * 1024 * 1024) return invalid;
     for (unsigned i = 0; i < 64; ++i)
         if (!((digest[i] >= '0' && digest[i] <= '9') || (digest[i] >= 'a' && digest[i] <= 'f'))) return invalid;
     if (memcmp(bytes, "\177ELF\2\1", 6) || bytes[16] != 3 || bytes[17] || bytes[18] != 183 || bytes[19]) return invalid;
+    const auto admission = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(admission)) return static_cast<int64_t>(admission);
     int pipes[2];
     if (pipe2(pipes, O_CLOEXEC)) return io_error;
     const pid_t child = fork();
@@ -91,12 +91,12 @@ int64_t publish_backend(const char* key, const char* digest, const unsigned char
         close(pipes[0]);
         int64_t result = io_error;
         try {
-            const auto selected = kernel_module::maplesu_request_set_auth_mode(key
-                ? kernel_module::RequestAuthMode::LegacyKey : kernel_module::RequestAuthMode::ManagerOwner);
+            const auto selected = kernel_module::maplesu_request_auth_legacy(auth) ? KModErr::OK :
+                kernel_module::maplesu_request_set_auth_mode(kernel_module::RequestAuthMode::ManagerOwner);
             result = static_cast<int64_t>(selected);
-            if (!is_failed(selected)) result = execute(key, digest, bytes, size);
+            if (!is_failed(selected)) result = execute(digest, bytes, size);
         } catch (...) { result = io_error; }
-        if (!key) {
+        if (!kernel_module::maplesu_request_auth_legacy(auth)) {
             kernel_module::CleanupReceiptScope diagnostic;
             try {
                 const auto closed = kernel_module::maplesu_request_owner_close();

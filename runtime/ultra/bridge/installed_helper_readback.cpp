@@ -1,4 +1,5 @@
 #include "installed_helper_readback.h"
+#include "manager_owner_identity.h"
 #include "../../maplesu-sdk/sdk/include/maplesu_request_private.h"
 #include "../../maplesu-sdk/sdk/include/maplesu_root_private.h"
 
@@ -19,7 +20,6 @@
 #include <type_traits>
 #include <unistd.h>
 
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
 extern "C" __attribute__((visibility("hidden"))) void maplesu_request_fork_prepare() noexcept;
 extern "C" __attribute__((visibility("hidden"))) void maplesu_hook_fork_prepare() noexcept;
 extern "C" __attribute__((visibility("hidden"))) void maplesu_hook_fork_complete() noexcept;
@@ -53,7 +53,6 @@ struct LayoutForkGuard {
 };
 constexpr uint32_t kMagic = 0x31524248;
 constexpr uint32_t kVersion = 1;
-constexpr uint64_t kSlotBytes = 4096;
 enum : uint32_t { kRoot = 1, kHeader, kChunk, kEnd, kFinal, kProgress };
 struct Frame { uint32_t magic = kMagic, version = kVersion, kind = 0, bytes = 0; };
 struct Header { uint64_t actual_size = 0, offset = 0; };
@@ -267,11 +266,6 @@ bool valid_path(const char* path) {
     for (size_t index = 6; index < 22; ++index) if (!alphanumeric(path[index])) return false;
     return true;
 }
-bool valid_key(const char* key) {
-    if (!key || strnlen(key, 49) != 48) return false;
-    for (size_t index = 0; index < 48; ++index) if (!alphanumeric(key[index])) return false;
-    return true;
-}
 void copy_reply(ManagerOwnerRootCommand& out, const RequestManagementReply& reply) {
     out.reply_observed = reply.command != 0;
     out.command = reply.command; out.status = reply.status;
@@ -320,100 +314,61 @@ bool valid_snapshot_path(const Result& out, const char* requested) {
         !out.root_verified && !out.read_attempted;
     return out.owner_bound && valid_path(out.helper_path) && deployment_ok(out.deployment);
 }
-void authenticate(Result& out, const char* key, const char* path, int output, const timespec& deadline) {
+void authenticate(Result& out, const char* path, int output, const timespec& deadline) {
     if (path) std::memcpy(out.helper_path, path, sizeof(out.helper_path));
     if (!progress(out, "auth-mode", output, deadline)) return;
     out.mode_error = static_cast<int64_t>(maplesu_request_set_auth_mode(
-        out.owner_mode ? RequestAuthMode::ManagerOwner : RequestAuthMode::LegacyKey));
+        RequestAuthMode::ManagerOwner));
     out.mode_selected = !out.mode_error;
     if (!out.mode_selected) { out.sdk_error = out.mode_error; return; }
-    if (out.owner_mode) {
-        out.credentials_managed = true;
-        maplesu_metadata_owner_v3 metadata{};
-        uint64_t descriptor = 0;
-        RequestOwnerBinding binding{};
-        if (!progress(out, "owner-channel", output, deadline)) return;
-        out.channel_error = static_cast<int64_t>(maplesu_request_owner_channel(metadata, descriptor, binding));
-        out.owner_bound = !out.channel_error;
-        if (!out.owner_bound) { out.sdk_error = out.channel_error; return; }
-        out.owner_full_uid = metadata.owner_full_uid; out.owner_epoch = metadata.owner_epoch;
-        out.host_low = metadata.host.low; out.host_high = metadata.host.high;
-        if (out.namespace_requested) {
-            RequestDeploymentNamespace deployment{};
-            out.deployment.attempted = true;
-            if (!progress(out, "deployment-namespace", output, deadline)) return;
-            out.deployment.error = static_cast<int64_t>(maplesu_request_owner_deployment(deployment));
-            copy_reply(out.deployment, maplesu_request_management_reply());
-            if (out.deployment.error) { out.sdk_error = out.deployment.error; return; }
-            if (!deployment_ok(out.deployment)) {
-                out.sdk_error = static_cast<int64_t>(KModErr::ERR_MODULE_TEST_CHANNEL);
-                return;
-            }
-            const auto& actual = deployment.binding;
-            if (!maplesu_request_owner_binding_matches(actual) ||
-                actual.process != static_cast<uint64_t>(getpid()) || actual.actual_uid != getuid() ||
-                actual.auth_state != binding.auth_state || actual.process != binding.process ||
-                actual.actual_uid != binding.actual_uid || actual.full_uid != out.owner_full_uid ||
-                actual.epoch != out.owner_epoch || actual.host.low != out.host_low || actual.host.high != out.host_high) {
-                out.sdk_error = static_cast<int64_t>(KModErr::ERR_MODULE_ROOT_KEY);
-                return;
-            }
-            std::memcpy(out.helper_path, "/data/", 6);
-            std::memcpy(out.helper_path + 6, deployment.record.name, MAPLESU_DEPLOYMENT_NAMESPACE_BYTES);
-            std::memcpy(out.helper_path + 22, "/init", 6);
-            if (!valid_path(out.helper_path)) {
-                std::memset(out.helper_path, 0, sizeof(out.helper_path));
-                out.sdk_error = static_cast<int64_t>(KModErr::ERR_MODULE_TEST_CHANNEL);
-                return;
-            }
-            out.namespace_resolved = true;
+    out.credentials_managed = true;
+    maplesu_metadata_owner_v3 metadata{};
+    uint64_t descriptor = 0;
+    RequestOwnerBinding binding{};
+    if (!progress(out, "owner-channel", output, deadline)) return;
+    out.channel_error = static_cast<int64_t>(maplesu_request_owner_channel(metadata, descriptor, binding));
+    out.owner_bound = !out.channel_error;
+    if (!out.owner_bound) { out.sdk_error = out.channel_error; return; }
+    out.owner_full_uid = metadata.owner_full_uid; out.owner_epoch = metadata.owner_epoch;
+    out.host_low = metadata.host.low; out.host_high = metadata.host.high;
+    if (out.namespace_requested) {
+        RequestDeploymentNamespace deployment{};
+        out.deployment.attempted = true;
+        if (!progress(out, "deployment-namespace", output, deadline)) return;
+        out.deployment.error = static_cast<int64_t>(maplesu_request_owner_deployment(deployment));
+        copy_reply(out.deployment, maplesu_request_management_reply());
+        if (out.deployment.error) { out.sdk_error = out.deployment.error; return; }
+        if (!deployment_ok(out.deployment)) {
+            out.sdk_error = static_cast<int64_t>(KModErr::ERR_MODULE_TEST_CHANNEL);
+            return;
         }
-        out.root.attempted = true;
-        if (!progress(out, "root-transition", output, deadline)) return;
-        out.root.error = static_cast<int64_t>(maplesu_request_owner_root());
-        copy_reply(out.root, maplesu_request_management_reply());
-        out.credentials_error = out.root.error;
-        std::memcpy(out.root_phase, "credentials", sizeof("credentials"));
-        out.root_committed = out.root.completed && out.root.command == MAPLESU_REQUEST_CRED_ROOT &&
-            (out.root.effects & MAPLESU_EFFECT_COMMITTED);
-    } else {
-        if (!progress(out, "legacy-key", output, deadline)) return;
-        __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
-        uint64_t capabilities = 0;
-        if (!progress(out, "credential-channel", output, deadline)) return;
-        out.channel_error = static_cast<int64_t>(maplesu_request_credential_channel(out.credentials_managed, capabilities));
-        if (out.channel_error) { out.sdk_error = out.channel_error; return; }
-        if (!progress(out, "root-transition", output, deadline)) return;
-        if (out.credentials_managed) {
-            // Key remains LegacyKey. Use the same authenticated credential command
-            // as the composite SDK Root path, without preparing an su environment.
-            if (!(capabilities & MAPLESU_CAP_CREDENTIAL)) {
-                out.root.error = static_cast<int64_t>(KModErr::ERR_MODULE_TEST_CHANNEL);
-            } else {
-                out.root.attempted = true;
-                errno = 0;
-                out.root.error = static_cast<int64_t>(maplesu_request_owner_root());
-                out.root_system_error = errno;
-                copy_reply(out.root, maplesu_request_management_reply());
-            }
-            out.credentials_error = out.root.error;
-            std::memcpy(out.root_phase, "credentials", sizeof("credentials"));
-            out.root_committed = out.root.completed && out.root.command == MAPLESU_REQUEST_CRED_ROOT &&
-                (out.root.effects & MAPLESU_EFFECT_COMMITTED);
-        } else {
-            out.root.attempted = true;
-            out.root.error = static_cast<int64_t>(default_modules::module_root::set_current_root(false));
-            const auto transition = default_modules::module_root::current_root_transition();
-            out.credentials_error = static_cast<int64_t>(transition.credentials_error);
-            out.root_system_error = transition.system_error;
-            out.legacy_environment_completed = transition.environment_completed;
-            out.transition_observed = transition.phase != nullptr;
-            out.task_state.attempted = transition.task_state_attempted;
-            out.task_state.error = static_cast<int64_t>(transition.task_state_error);
-            copy_reply(out.task_state, transition.task_state);
-            if (transition.phase) std::strncpy(out.root_phase, transition.phase, sizeof(out.root_phase) - 1);
+        const auto& actual = deployment.binding;
+        if (!maplesu_request_owner_binding_matches(actual) ||
+            actual.process != static_cast<uint64_t>(getpid()) || actual.actual_uid != getuid() ||
+            actual.auth_state != binding.auth_state || actual.process != binding.process ||
+            actual.actual_uid != binding.actual_uid || actual.full_uid != out.owner_full_uid ||
+            actual.epoch != out.owner_epoch || actual.host.low != out.host_low || actual.host.high != out.host_high) {
+            out.sdk_error = static_cast<int64_t>(KModErr::ERR_MODULE_ROOT_KEY);
+            return;
         }
+        std::memcpy(out.helper_path, "/data/", 6);
+        std::memcpy(out.helper_path + 6, deployment.record.name, MAPLESU_DEPLOYMENT_NAMESPACE_BYTES);
+        std::memcpy(out.helper_path + 22, "/init", 6);
+        if (!valid_path(out.helper_path)) {
+            std::memset(out.helper_path, 0, sizeof(out.helper_path));
+            out.sdk_error = static_cast<int64_t>(KModErr::ERR_MODULE_TEST_CHANNEL);
+            return;
+        }
+        out.namespace_resolved = true;
     }
+    out.root.attempted = true;
+    if (!progress(out, "root-transition", output, deadline)) return;
+    out.root.error = static_cast<int64_t>(maplesu_request_owner_root());
+    copy_reply(out.root, maplesu_request_management_reply());
+    out.credentials_error = out.root.error;
+    std::memcpy(out.root_phase, "credentials", sizeof("credentials"));
+    out.root_committed = out.root.completed && out.root.command == MAPLESU_REQUEST_CRED_ROOT &&
+        (out.root.effects & MAPLESU_EFFECT_COMMITTED);
     out.sdk_error = out.root.error;
     uid_t ruid, euid, suid;
     if (getresuid(&ruid, &euid, &suid)) out.uid_error = errno;
@@ -445,8 +400,6 @@ int produce(int output, const char* path, Result& out, const timespec& deadline)
     if (!S_ISREG(before.st_mode) || before.st_size <= 0) return EINVAL;
     out.actual_size = static_cast<uint64_t>(before.st_size);
     if (out.actual_size > kInstalledHelperReadbackMaxBytes) return EOVERFLOW;
-    if (out.normalized_offset > out.actual_size || kSlotBytes > out.actual_size - out.normalized_offset)
-        return EINVAL;
     const Header header{out.actual_size, out.normalized_offset};
     if (const int error = write_frame(output, kHeader, &header, sizeof(header), deadline)) {
         out.child_io_error = error; return error;
@@ -459,13 +412,7 @@ int produce(int output, const char* path, Result& out, const timespec& deadline)
         const ssize_t count = read(source.value, buffer.bytes, wanted);
         if (count < 0 && errno == EINTR) continue;
         if (count <= 0) return count ? errno : EIO;
-        const uint64_t start = out.source_bytes;
         out.source_bytes += static_cast<uint64_t>(count);
-        if (out.normalized_offset) {
-            const uint64_t first = std::max(start, out.normalized_offset);
-            const uint64_t last = std::min(out.source_bytes, out.normalized_offset + kSlotBytes);
-            if (last > first) std::memset(buffer.bytes + (first - start), 0, static_cast<size_t>(last - first));
-        }
         const int error = write_frame(output, kChunk, buffer.bytes, static_cast<uint32_t>(count), deadline);
         wipe(buffer.bytes, static_cast<size_t>(count));
         if (error) { out.child_io_error = error; return error; }
@@ -489,10 +436,10 @@ int produce(int output, const char* path, Result& out, const timespec& deadline)
     out.path_stable = true;
     return source.finish();
 }
-[[noreturn]] void child_run(int input, int output, const char* key, const char* path,
+[[noreturn]] void child_run(int input, int output, const char* path,
     uint64_t offset, const timespec& deadline) {
     Result out;
-    out.owner_mode = key == nullptr;
+    out.owner_mode = true;
     out.namespace_requested = out.owner_mode && path == nullptr;
     if (path) std::memcpy(out.helper_path, path, sizeof(out.helper_path));
     out.normalized_offset = offset;
@@ -503,7 +450,7 @@ int produce(int output, const char* path, Result& out, const timespec& deadline)
     if (close(input)) out.child_io_error = errno;
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR && !out.child_io_error) out.child_io_error = errno;
     const auto authentication_started = Clock::now();
-    if (out.watchdog_armed && !out.child_io_error) try { authenticate(out, key, path, output, deadline); }
+    if (out.watchdog_armed && !out.child_io_error) try { authenticate(out, path, output, deadline); }
     catch (...) {
         out.child_exception = true;
         if (out.deployment.attempted && !out.root.attempted) {
@@ -585,8 +532,8 @@ int receive(int input, pid_t child, bool owner, const char* path, uint64_t offse
         if (frame.kind == kHeader) {
             if (header_seen || frame.bytes != sizeof(Header) || !out.root_verified) return EPROTO;
             if (const int error = read_exact(input, &header, sizeof(header), deadline)) return error;
-            if (header.actual_size > kInstalledHelperReadbackMaxBytes || header.offset != offset ||
-                header.offset > header.actual_size || kSlotBytes > header.actual_size - header.offset) return EPROTO;
+            if (!header.actual_size || header.actual_size > kInstalledHelperReadbackMaxBytes ||
+                header.offset != 0 || header.offset != offset) return EPROTO;
             out.actual_size = header.actual_size; out.header_received = header_seen = true;
         } else if (frame.kind == kChunk) {
             if (!header_seen || !frame.bytes || frame.bytes > sizeof(buffer.bytes) ||
@@ -654,16 +601,18 @@ int finish_wait(pid_t child, Result& out, const timespec& deadline, uint64_t lea
 }
 } // namespace
 
-InstalledHelperReadbackResult read_installed_helper(const char* key, const char* path,
-    int64_t slot_offset, InstalledHelperChunkConsumer consume, void* context, uint32_t timeout_ms) {
+InstalledHelperReadbackResult read_installed_helper(const char* path,
+    InstalledHelperChunkConsumer consume, void* context, uint32_t timeout_ms) {
     Result out;
-    out.owner_mode = key == nullptr;
+    out.owner_mode = true;
     out.namespace_requested = out.owner_mode && path == nullptr;
     const auto start = Clock::now();
-    out.normalized_offset = slot_offset > 0 ? static_cast<uint64_t>(slot_offset) : 0;
+    out.normalized_offset = 0;
     timespec deadline{};
-    if ((path ? !valid_path(path) : !out.owner_mode) || (key && !valid_key(key)) || !consume ||
+    if ((path && !valid_path(path)) || !consume ||
         !timeout_ms || timeout_ms > 5000) out.system_error = EINVAL;
+    else if (const auto admission = manager_worker_admission(); is_failed(admission))
+        out.channel_error = out.sdk_error = static_cast<int64_t>(admission);
     else if (clock_gettime(CLOCK_MONOTONIC, &deadline)) out.system_error = errno;
     else {
         const timespec began = deadline;
@@ -697,7 +646,7 @@ InstalledHelperReadbackResult read_installed_helper(const char* key, const char*
                 const auto fork_us = elapsed_us(fork_started);
                 out.admission_us = admission_us;
                 out.fork_us = fork_us;
-                if (!child) child_run(fds[0], fds[1], key, path, out.normalized_offset, deadline);
+                if (!child) child_run(fds[0], fds[1], path, out.normalized_offset, deadline);
                 if (child < 0) {
                     if (!out.admission_error) out.transport_error = fork_error;
                     close(fds[0]); close(fds[1]);

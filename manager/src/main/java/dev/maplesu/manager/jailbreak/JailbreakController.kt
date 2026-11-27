@@ -176,24 +176,12 @@ object JailbreakController {
                 null
             }
             val observed = prepared ?: JailbreakStatus.read(context)
-            if (rootBackend == JailbreakRequest.BACKEND_HOOK) {
-                return completed(context, preparedJailbreakOutcome(request, observed))
-            }
             // The trusted process writes DAEMON_READY only after the lease of this
             // attempt produced the endpoint. Anything else is reported as what it
             // is instead of being relabelled here.
-            if (observed == null || observed.attemptId != request.attemptId) {
-                Outcome(JailbreakStatus.STAGE_FAILED, "attempt produced no status record",
-                    "JAILBREAK_ATTEMPT_NOT_CONFIRMED")
-            } else if (observed.failure != null || observed.stage != JailbreakStatus.STAGE_DAEMON_READY) {
-                Outcome(if (observed.stage == JailbreakStatus.STAGE_CANCELLED)
-                    JailbreakStatus.STAGE_CANCELLED else JailbreakStatus.STAGE_FAILED, observed.message,
-                    observed.failure ?: "JAILBREAK_ATTEMPT_NOT_CONFIRMED:" + observed.stage)
-            } else {
-                completed(context, Outcome(JailbreakStatus.STAGE_DAEMON_READY, observed.message, null, request.attemptId))
-            }
+            completed(context, preparedJailbreakOutcome(request, observed))
         } catch (error: Exception) {
-            val observed = JailbreakStatus.read(context)
+            val observed = matchingJailbreakStatus(request, JailbreakStatus.read(context))
             val reason = observed?.failure
                 ?: error.cause?.message
                 ?: error.message

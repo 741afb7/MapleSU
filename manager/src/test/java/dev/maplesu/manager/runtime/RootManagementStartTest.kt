@@ -15,7 +15,7 @@ class RootManagementStartTest {
             val process = RootManagement.startRouted(
                 mode = mode, usesSdk = false, usesHook = true,
                 openSdk = { error("Unexpected SDK launch") },
-                openCredential = { error("MANAGEMENT_CREDENTIAL_UNAVAILABLE") },
+
                 openHook = { FinishedProcess(0, "0\n") },
             )
             assertEquals(0, process.waitFor())
@@ -29,7 +29,7 @@ class RootManagementStartTest {
             RootManagement.startRouted(
                 mode = WorkMode.LITE, usesSdk = false, usesHook = true,
                 openSdk = { error("Unexpected SDK launch") },
-                openCredential = { error("MANAGEMENT_CREDENTIAL_UNAVAILABLE") },
+
                 openHook = { throw expected },
             )
         }
@@ -37,19 +37,13 @@ class RootManagementStartTest {
     }
     @Test fun ultraCustomizeStartsThroughSdkInsteadOfExiting69() {
         for (mode in listOf(WorkMode.LITE, null)) {
-            var legacyCalls = 0
-            val process = RootManagement.startRouted(
+                        val process = RootManagement.startRouted(
                 mode = mode,
                 usesSdk = true,
                 openSdk = { FinishedProcess(0, "CUSTOMIZE_ENTERED\n") },
-                openCredential = {
-                    legacyCalls++
-                    FinishedProcess(69, "", "MapleSU credential was not accepted")
-                },
             )
-            assertEquals("mode=$mode must use the paired Pro SDK", 0, process.waitFor())
+            assertEquals("mode=$mode must use the current SDK", 0, process.waitFor())
             assertEquals("CUSTOMIZE_ENTERED\n", process.inputStream.bufferedReader().readText())
-            assertEquals(0, legacyCalls)
         }
     }
 
@@ -60,22 +54,19 @@ class RootManagementStartTest {
                 mode = WorkMode.LITE,
                 usesSdk = true,
                 openSdk = { throw expected },
-                openCredential = { FinishedProcess(0) },
+
             )
         }
         assertSame(expected, actual)
     }
 
-    @Test fun unpairedEnvironmentsKeepTheirCredentialTransport() {
-        for ((mode, usesSdk) in listOf(WorkMode.LITE to false, null to false)) {
-            val credential = FinishedProcess(0)
-            assertSame(credential, RootManagement.startRouted(
-                mode = mode,
-                usesSdk = usesSdk,
-                openSdk = { throw AssertionError("Unexpected SDK launch: $mode/$usesSdk") },
-                openCredential = { credential },
-            ))
+    @Test fun pendingLiteUsesCurrentSdkAndUnknownModeRemainsUnresolved() {
+        val sdk = FinishedProcess(0)
+        assertSame(sdk, RootManagement.startRouted(WorkMode.LITE, false, openSdk = { sdk }))
+        val error = assertThrows(IllegalStateException::class.java) {
+            RootManagement.startRouted(null, false, openSdk = { error("unexpected SDK") })
         }
+        assertEquals("MANAGEMENT_MODE_UNRESOLVED", error.message)
     }
 
     @Test fun normalStartsThroughKsuWithoutLegacyCredentialsOrSdk() {
@@ -84,7 +75,7 @@ class RootManagementStartTest {
             val process = RootManagement.startRouted(
                 mode = WorkMode.KSU, usesSdk = usesSdk, usesHook = true,
                 openSdk = { error("Unexpected SDK launch") },
-                openCredential = { error("MANAGEMENT_CREDENTIAL_UNAVAILABLE") },
+
                 openKsu = { ksu },
                 openHook = { error("Unexpected Hook launch") },
             )
@@ -102,7 +93,7 @@ class RootManagementStartTest {
                 mode = WorkMode.KSU, usesSdk = true, usesHook = true,
                 openKsu = { throw expected },
                 openSdk = { error("Unexpected SDK retry") },
-                openCredential = { error("Unexpected credential retry") },
+
                 openHook = { error("Unexpected Hook retry") },
             )
         }
@@ -115,7 +106,7 @@ class RootManagementStartTest {
             mode = WorkMode.LITE,
             usesSdk = true,
             openSdk = { sdkCalls++; FinishedProcess(69, "CUSTOMIZE_ENTERED\n", "module error") },
-            openCredential = { throw AssertionError("A module exit code is not a launch failure") },
+
         )
         assertEquals(69, process.waitFor())
         assertEquals("module error", process.errorStream.bufferedReader().readText())

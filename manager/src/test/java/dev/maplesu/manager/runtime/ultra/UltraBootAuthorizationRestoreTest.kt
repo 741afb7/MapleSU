@@ -4,62 +4,44 @@ import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import dev.maplesu.manager.runtime.authorization.ApplicationIdentity
 import org.junit.Assert.*
 import org.junit.Test
+import org.json.JSONObject
 
 class UltraBootAuthorizationRestoreTest {
-    @Test fun brokerBackgroundRetryRestoresIdentityAfterPackageManagerBecomesReadable() {
-        val name = "dev.maplesu.manager"
-        val trust = UltraReinstallTrust(name, 0, setOf("a".repeat(64)))
-        var identity: ApplicationIdentity? = null
-        var packages = listOf(name, "other.app")
-        var grants = 0
-        var revokes = 0
-        var refreshes = 0
-        val pauses = mutableListOf<Long>()
-        val state = UltraBootAuthorizationRestore {
-            pauses += it
-            if (pauses.size == 3) identity = ApplicationIdentity(10999, name, listOf(name),
-                setOf("a".repeat(64)), 10, 11, "/data/app/reinstalled/base.apk")
-        }
-        assertEquals("OK", state.ensureWhenIdentityAvailable("boot", "key", { false }) {
-            UltraManagerSignatureAuthorization.refresh(trust, { identity }, { packages },
-                { grants++; packages = (packages + name).distinct(); "OK" },
-                { revokes++; packages = packages - name; "OK" }, { refreshes++; "OK" })
-        })
-        assertEquals(List(3) { 1_000L }, pauses)
-        assertEquals(1, grants)
-        assertEquals(1, revokes)
-        assertEquals(0, refreshes)
-        assertEquals("OK", state.ensure("boot", "key") { error("already restored") })
+    private fun unsubmitted(error: String): UltraAuthorizationRestoreResult {
+        val detail = JSONObject().put("schemaVersion", 1).put("operationResultAvailable", true)
+            .put("operation", 4).put("resultCode", "-19999").put("primaryErrorCode", "-19999")
+            .put("primaryPhase", 43).put("diagnosticsComplete", true)
+            .put("commitState", 1).put("restoreState", 2).put("deliveryState", 1)
+            .put("recoveryCount", 0).put("recoveryTotal", 0).put("recovery", org.json.JSONArray())
+            .put("transport", JSONObject().put("status", 1).put("errno", 0)
+                .put("childWaitStatus", 0).put("valid", true))
+        val receipt = NativeReceipt.parse(JSONObject().put("backend", "maplesu_ultra")
+            .put("ok", false).put("sdkError", error).put("sdkErrorCode", -19999)
+            .put("data", JSONObject().put("authorizationResult", detail)).toString())!!
+        return UltraAuthorizationRestoreResult.refresh(UltraAuthorizationAttempt.from(receipt)).withStatus(error)
     }
 
-    @Test fun longIdentityUnavailabilityDoesNotRepeatedlyPublishSuTables() {
-        val name = "dev.maplesu.manager"
-        val trust = UltraReinstallTrust(name, 0, setOf("a".repeat(64)))
-        var packages = listOf(name, "other.app")
-        var pauses = 0
-        var revokes = 0
-        var reads = 0
-        val state = UltraBootAuthorizationRestore { pauses++ }
-        assertEquals("SUSPENDED", state.ensureWhenIdentityAvailable("boot", "key", { pauses == 2_000 }) {
-            UltraManagerSignatureAuthorization.refresh(trust, { null }, { reads++; packages },
-                { error("unknown identity must not grant") },
-                { revokes++; packages = packages - name; "OK" },
-                { error("unknown identity must not rebuild") })
-        })
-        assertEquals(2_000, pauses)
-        assertEquals(2_001, reads)
-        assertEquals(1, revokes)
+    @Test fun unstructuredTransientErrorsNeverReplayAMutation() {
+        for (error in listOf("MAPLESU_SDK_BUSY", "ERR_MODULE_SU_LIST_NOT_FOUND")) {
+            var calls = 0
+            val state = UltraBootAuthorizationRestore { error("no receipt proves pre-commit") }
+            assertEquals(error, state.ensure("boot", "owner") { calls++; error })
+            assertEquals(1, calls)
+        }
     }
+
+
+
+
 
     @Test fun disabledBrokerStopsBeforeStartingOrAfterItsPendingPause() {
         for (disabledAtStart in listOf(true, false)) {
             var disabled = disabledAtStart
             var calls = 0
             val state = UltraBootAuthorizationRestore { disabled = true }
-            assertEquals("SUSPENDED", state.ensureWhenIdentityAvailable("boot", "key", { disabled }) {
+            assertEquals("SUSPENDED", state.ensureWhenIdentityAvailable("boot", "owner-fingerprint", { disabled }) {
                 calls++; "MANAGER_IDENTITY_PENDING"
             })
             assertEquals(if (disabledAtStart) 0 else 1, calls)
@@ -70,13 +52,13 @@ class UltraBootAuthorizationRestoreTest {
         val state = UltraBootAuthorizationRestore { throw InterruptedException() }
         var calls = 0
         try {
-            assertEquals("MAPLESU_SDK_INTERRUPTED", state.ensureWhenIdentityAvailable("boot", "key", { false }) {
+            assertEquals("MAPLESU_SDK_INTERRUPTED", state.ensureWhenIdentityAvailable("boot", "owner-fingerprint", { false }) {
                 calls++; "MANAGER_IDENTITY_PENDING"
             })
             assertEquals(1, calls)
             assertTrue(Thread.currentThread().isInterrupted)
         } finally { Thread.interrupted() }
-        assertEquals("OK", state.ensure("boot", "key") { calls++; "OK" })
+        assertEquals("OK", state.ensure("boot", "owner-fingerprint") { calls++; "OK" })
         assertEquals(2, calls)
     }
 
@@ -84,7 +66,7 @@ class UltraBootAuthorizationRestoreTest {
         val state = UltraBootAuthorizationRestore { error("unexpected pause") }
         try {
             Thread.currentThread().interrupt()
-            assertEquals("MAPLESU_SDK_INTERRUPTED", state.ensureWhenIdentityAvailable("boot", "key",
+            assertEquals("MAPLESU_SDK_INTERRUPTED", state.ensureWhenIdentityAvailable("boot", "owner-fingerprint",
                 { error("interrupted scope") }) { error("interrupted write") })
             assertTrue(Thread.currentThread().isInterrupted)
         } finally { Thread.interrupted() }
@@ -94,57 +76,34 @@ class UltraBootAuthorizationRestoreTest {
         for (result in listOf("OK", "ERR_MODULE_PARAM", "MANAGER_AUTH_REVOKE_UNVERIFIED", "SUSPENDED")) {
             var calls = 0
             val state = UltraBootAuthorizationRestore { error("unexpected identity retry") }
-            assertEquals(result, state.ensureWhenIdentityAvailable("boot", "key", { false }) { calls++; result })
+            assertEquals(result, state.ensureWhenIdentityAvailable("boot", "owner-fingerprint", { false }) { calls++; result })
             assertEquals(1, calls)
         }
     }
 
-    @Test fun unreadablePackageIdentityNeverCachesSuccessBeforePackageManagerRecovers() {
-        val name = "dev.maplesu.manager"
-        val trust = UltraReinstallTrust(name, 0, setOf("a".repeat(64)))
-        var identity: ApplicationIdentity? = null
-        var packages = listOf(name, "other.app")
-        var grants = 0
-        var revokes = 0
-        var refreshes = 0
-        fun restore() = UltraManagerSignatureAuthorization.refresh(trust, { identity }, { packages },
-            { grants++; packages = (packages + name).distinct(); "OK" },
-            { revokes++; packages = packages - name; "OK" }, { refreshes++; "OK" })
-        val state = UltraBootAuthorizationRestore { error("identity retry belongs to the background loop") }
-        repeat(3) {
-            assertEquals("MANAGER_IDENTITY_PENDING", state.ensure("boot", "key", ::restore))
-        }
-        identity = ApplicationIdentity(10999, name, listOf(name), setOf("a".repeat(64)),
-            10, 11, "/data/app/current/base.apk")
-        assertEquals("OK", state.ensure("boot", "key", ::restore))
-        assertEquals("OK", state.ensure("boot", "key") { error("already verified") })
-        assertEquals(1, grants)
-        assertEquals(1, revokes)
-        assertEquals(0, refreshes)
-        assertEquals(setOf(name, "other.app"), packages.toSet())
-    }
+
 
     @Test fun temporarilyUnavailableUidMappingsRecoverWithoutAnotherUserAction() {
         val pauses = mutableListOf<Long>()
         val state = UltraBootAuthorizationRestore { pauses += it }
         var calls = 0
-        assertEquals("OK", state.ensure("boot", "key") {
+        assertEquals("OK", state.ensureAttempt("boot", "owner-fingerprint") {
             calls++
-            if (calls == 1) "ERR_MODULE_SU_LIST_NOT_FOUND" else "OK"
-        })
+            if (calls == 1) unsubmitted("ERR_MODULE_SU_LIST_NOT_FOUND") else UltraAuthorizationRestoreResult.local()
+        }.status)
         assertEquals(2, calls)
         assertEquals(listOf(250L), pauses)
-        assertEquals("OK", state.ensure("boot", "key") { error("already restored") })
+        assertEquals("OK", state.ensure("boot", "owner-fingerprint") { error("already restored") })
     }
 
     @Test fun exhaustedTransientFailuresStayUncachedAndCanRecoverOnTheNextRequest() {
         val pauses = mutableListOf<Long>()
         val state = UltraBootAuthorizationRestore { pauses += it }
         var calls = 0
-        assertEquals("MAPLESU_SDK_BUSY", state.ensure("boot", "key") { calls++; "MAPLESU_SDK_BUSY" })
+        assertEquals("MAPLESU_SDK_BUSY", state.ensureAttempt("boot", "owner-fingerprint") { calls++; unsubmitted("MAPLESU_SDK_BUSY") }.status)
         assertEquals(3, calls)
         assertEquals(listOf(250L, 750L), pauses)
-        assertEquals("OK", state.ensure("boot", "key") { calls++; "OK" })
+        assertEquals("OK", state.ensure("boot", "owner-fingerprint") { calls++; "OK" })
         assertEquals(4, calls)
     }
 
@@ -152,7 +111,7 @@ class UltraBootAuthorizationRestoreTest {
         for (failure in listOf("SUSPENDED", "ERR_MODULE_NO_ROOT", "ERR_MODULE_PARAM", "READBACK_MISMATCH")) {
             val state = UltraBootAuthorizationRestore { error("unexpected retry") }
             var calls = 0
-            assertEquals(failure, state.ensure("boot", "key") { calls++; failure })
+            assertEquals(failure, state.ensure("boot", "owner-fingerprint") { calls++; failure })
             assertEquals(1, calls)
         }
     }
@@ -161,26 +120,41 @@ class UltraBootAuthorizationRestoreTest {
         var suspended = false
         var calls = 0
         val state = UltraBootAuthorizationRestore { suspended = true }
-        assertEquals("SUSPENDED", state.ensure("boot", "key") {
+        assertEquals("SUSPENDED", state.ensureAttempt("boot", "owner-fingerprint", { suspended }) {
             calls++
-            if (suspended) "SUSPENDED" else "ERR_MODULE_SU_LIST_NOT_FOUND"
-        })
-        assertEquals(2, calls)
+            unsubmitted("ERR_MODULE_SU_LIST_NOT_FOUND")
+        }.status)
+        assertEquals(1, calls)
     }
 
     @Test fun interruptedBackoffPreservesCancellationAndNeverCachesSuccess() {
         val state = UltraBootAuthorizationRestore { throw InterruptedException() }
         var calls = 0
         try {
-            assertEquals("MAPLESU_SDK_INTERRUPTED", state.ensure("boot", "key") { calls++; "MAPLESU_SDK_BUSY" })
+            assertEquals("MAPLESU_SDK_INTERRUPTED", state.ensureAttempt("boot", "owner-fingerprint") { calls++; unsubmitted("MAPLESU_SDK_BUSY") }.status)
             assertTrue(Thread.currentThread().isInterrupted)
             assertEquals(1, calls)
         } finally { Thread.interrupted() }
-        assertEquals("OK", state.ensure("boot", "key") { calls++; "OK" })
+        assertEquals("OK", state.ensure("boot", "owner-fingerprint") { calls++; "OK" })
         assertEquals(2, calls)
     }
 
-    @Test fun reOpeningManagerKeepsTheSuccessfulBootAndKeyRestoration() {
+    @Test fun suspensionDuringSuccessPreventsCachingAndKeepsTheOriginalAttempt() {
+        var suspended = false
+        var calls = 0
+        val state = UltraBootAuthorizationRestore { error("no retry") }
+        val result = state.ensureAttempt("boot", "owner", { suspended }) {
+            calls++; suspended = true; UltraAuthorizationRestoreResult.local()
+        }
+        assertEquals("SUSPENDED", result.status)
+        suspended = false
+        assertEquals("OK", state.ensureAttempt("boot", "owner", { suspended }) {
+            calls++; UltraAuthorizationRestoreResult.local()
+        }.status)
+        assertEquals(2, calls)
+    }
+
+    @Test fun reOpeningManagerKeepsTheSuccessfulBootAndOwnerRestoration() {
         val state = UltraBootAuthorizationRestore()
         var calls = 0
         repeat(5) { assertEquals("OK", state.ensure("boot", "fingerprint") { calls++; "OK" }) }
@@ -196,11 +170,11 @@ class UltraBootAuthorizationRestoreTest {
         assertEquals(1, calls)
     }
 
-    @Test fun unknownBootNewBootAndNewCredentialEachNeedRealRestoration() {
+    @Test fun unknownBootNewBootAndNewOwnerIdentityEachNeedRealRestoration() {
         val state = UltraBootAuthorizationRestore()
         var calls = 0
-        for ((boot, key) in listOf(null to "key", null to "key", "boot-a" to "key",
-            "boot-b" to "key", "boot-b" to "new-key")) {
+        for ((boot, key) in listOf(null to "owner-fingerprint", null to "owner-fingerprint", "boot-a" to "owner-fingerprint",
+            "boot-b" to "owner-fingerprint", "boot-b" to "new-owner")) {
             assertEquals("OK", state.ensure(boot, key) { calls++; "OK" })
         }
         assertEquals(5, calls)
@@ -212,7 +186,7 @@ class UltraBootAuthorizationRestoreTest {
         val pool = Executors.newFixedThreadPool(6)
         try {
             val results = pool.invokeAll((1..24).map {
-                Callable { state.ensure("boot", "key") { writes.incrementAndGet(); "OK" } }
+                Callable { state.ensure("boot", "owner-fingerprint") { writes.incrementAndGet(); "OK" } }
             })
             results.forEach { assertEquals("OK", it.get(2, TimeUnit.SECONDS)) }
             assertEquals(1, writes.get())

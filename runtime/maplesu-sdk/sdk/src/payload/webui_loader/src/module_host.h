@@ -23,10 +23,12 @@ inline constexpr const char* kBeforeServerExitActionSymbol =
     maplesu::compat::native_module::kBeforeServerExitActionSymbol;
 
 // Signature of the module's WebUI bootstrap:
-//   (root_key, module_private_dir, module_webroot_dir, mod_id32, port, err)
+//   (module_private_dir, module_webroot_dir, mod_id32, port, err)
 // It starts the module's CivetWeb server and reports the outcome in `err`.
-using WebUiMainFn = void (*)(const char*, const char*, const char*, const char*,
+using WebUiMainFn = void (*)(const char*, const char*, const char*,
                              int, long long&);
+using LegacyWebUiMainFn = void (*)(const char*, const char*, const char*, const char*,
+                                   int, long long&);
 // Asks the module which port its server actually listens on.
 using LastServerPortFn = void (*)(int&, long long&);
 // Asks the module what the process should do once its owner disappears:
@@ -46,9 +48,9 @@ public:
     long long load(const std::string& elf_path);
 
     // Calls the module's WebUI bootstrap and returns its error code.
-    long long start_web_ui(const char* root_key, const char* module_private_dir,
+    long long start_web_ui(const char* module_private_dir,
                            const char* module_webroot_dir, const char* mod_id32,
-                           int port);
+                           int port, const char* legacy_credential = nullptr);
 
     // Reads back the port the module's server publishes.  Returns 0 when the
     // module answers, its negative error code otherwise.
@@ -61,7 +63,7 @@ public:
 
 private:
     void* handle_ = nullptr;
-    WebUiMainFn web_ui_main_ = nullptr;
+    maplesu::compat::native_module::Export web_ui_main_;
     LastServerPortFn last_server_port_ = nullptr;
     BeforeServerExitActionFn exit_action_ = nullptr;
 };

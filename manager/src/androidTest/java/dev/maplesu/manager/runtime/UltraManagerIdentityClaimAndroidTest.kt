@@ -2,7 +2,6 @@ package dev.maplesu.manager.runtime
 
 import android.os.Process
 import androidx.test.platform.app.InstrumentationRegistry
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import dev.maplesu.manager.runtime.ultra.UltraIdentityRecovery
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import org.junit.Assert.*
@@ -15,12 +14,14 @@ class UltraManagerIdentityClaimAndroidTest {
         assumeTrue(InstrumentationRegistry.getArguments().getString("managerClaimKernel") == "true")
         val caller = Process.myUid()
         assertTrue(caller % 100_000 in 10_000..19_999)
-        val keyless = UltraRuntimeClient { null }
-        val recovered = requireNotNull(keyless.claimManagerIdentity()) { "Kernel identity reply absent" }
-        assertTrue(UltraKernelCredential.isValid(recovered))
-        assertTrue(UltraKernelCredential.of(recovered).sdkMetadataValid)
-        assertTrue("Repeated kernel identity mismatch", recovered == keyless.claimManagerIdentity())
-        assertEquals(0, UltraIdentityRecovery.uid(UltraRuntimeClient { recovered }))
+        val client = UltraRuntimeClient()
+        val recovered = requireNotNull(client.queryManagerOwnerIdentity().identity) { "Kernel owner identity reply absent" }
+        assertEquals(caller, recovered.fullUid)
+        assertTrue(recovered.epoch in 1L..0xffff_ffffL)
+        assertTrue(recovered.hostInstance.matches(Regex("[0-9a-f]{32}")))
+        assertFalse(recovered.hostInstance.all { it == '0' })
+        assertEquals("Repeated kernel identity mismatch", recovered, client.queryManagerOwnerIdentity().identity)
+        assertEquals(0, UltraIdentityRecovery.uid(client))
         assertEquals(caller, Process.myUid())
     }
 }

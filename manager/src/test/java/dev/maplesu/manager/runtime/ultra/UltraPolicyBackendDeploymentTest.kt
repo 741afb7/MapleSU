@@ -35,6 +35,29 @@ class UltraPolicyBackendDeploymentTest {
         assertEquals(1, calls)
     }
 
+    @Test fun interruptedPublicationRetainsCancellationWithoutReplaying() {
+        var calls = 0
+        try {
+            val failure = UltraPolicyBackendDeployment.prepareTools("write-once", {
+                calls++
+                throw InterruptedException("publication interrupted")
+            }, ::decode)
+            assertEquals("MAPLESU_SDK_INTERRUPTED", failure)
+            assertTrue(Thread.currentThread().isInterrupted)
+            assertEquals(1, calls)
+        } finally {
+            Thread.interrupted()
+        }
+    }
+
+    @Test fun cancelledPublicationKeepsTheOriginalCancellation() {
+        val cancelled = java.util.concurrent.CancellationException("publication cancelled")
+        val observed = assertThrows(java.util.concurrent.CancellationException::class.java) {
+            UltraPolicyBackendDeployment.prepareTools("write-once", { throw cancelled }, ::decode)
+        }
+        assertSame(cancelled, observed)
+    }
+
     @Test fun incompleteToolReportsRemainAFailureAfterAZeroExit() {
         assertEquals("MODULE_TOOLS_RECEIPT_INVALID", prepare("printf 'partial\\n'"))
     }

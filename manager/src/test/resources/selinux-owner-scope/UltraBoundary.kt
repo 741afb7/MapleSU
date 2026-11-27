@@ -1,11 +1,24 @@
 package dev.maplesu.manager.runtime.ultra
 
+import android.content.Context
+import com.maplesu.core.ksuApp
+import dev.maplesu.manager.workmode.ModeRuntime
+import java.security.MessageDigest
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Only platform/SDK boundaries are fixtures. The complete checker is compiled unchanged. */
+/** Platform and SDK seams; the checker and Legacy credential verifier are production files. */
 object SELinuxBoundary {
-    @Volatile var key: String? = null
+    var key: String?
+        get() = ksuApp.getSharedPreferences("maplesu-ultra", 0).getString("rootKey", null)
+        set(value) {
+            val prefs = ksuApp.getSharedPreferences("maplesu-ultra", 0)
+            if (value == null) { prefs.values.clear(); return }
+            val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
+                .joinToString("") { "%02x".format(it.toInt() and 255) }
+            prefs.edit().putString("rootKey", value).putBoolean("keyVerified", true)
+                .putString("keyVerifiedFor", digest).commit()
+        }
     @Volatile var boot: String? = "boot-a"
     @Volatile var owner: UltraRuntimeClient.ManagerOwnerIdentity? = null
     @Volatile var liveOwner: UltraRuntimeClient.ManagerOwnerIdentity? = null
@@ -13,6 +26,8 @@ object SELinuxBoundary {
     @Volatile var hook = false
     @Volatile var legacyCalls = 0
     @Volatile var hookCalls = 0
+    val hookChecks = AtomicInteger()
+    val environmentChecks = AtomicInteger()
     val statusCalls = AtomicInteger()
     val rootCalls = AtomicInteger()
     val ownerCalls = AtomicInteger()
@@ -34,21 +49,29 @@ class NativeReceipt(
 
 object UltraEnvironmentProbe {
     data class Snapshot(val managerOwnerIdentity: UltraRuntimeClient.ManagerOwnerIdentity?)
-    fun usesUltraBackend(context: Any) = SELinuxBoundary.ultra
+    fun usesUltraBackend(context: Any): Boolean {
+        SELinuxBoundary.environmentChecks.incrementAndGet()
+        return SELinuxBoundary.ultra
+    }
     fun isRunning() = SELinuxBoundary.ultra
-    fun currentSnapshot(context: Any) = Snapshot(SELinuxBoundary.owner)
+    fun currentSnapshot() = Snapshot(SELinuxBoundary.owner)
+    fun currentSnapshot(context: Any) = currentSnapshot()
 }
 
 object UltraEnvironmentAutoSetup { fun currentBootId() = SELinuxBoundary.boot }
 
-class UltraRuntimeClient(private val key: () -> String? = { null }) {
+class UltraRuntimeClient {
     data class ManagerOwnerIdentity(val fullUid: Int, val epoch: Long, val hostInstance: String)
     data class ManagerOwnerIdentityResult(val identity: ManagerOwnerIdentity?)
     private var identityCurrent: () -> Boolean = { true }
-    fun scoped(expectedKey: String?, isCurrent: () -> Boolean): UltraRuntimeClient =
-        UltraRuntimeClient { expectedKey?.takeIf { isCurrent() && key() == it } }.also {
-            it.identityCurrent = { identityCurrent() && isCurrent() && key() == expectedKey }
-        }
+    private var credential: UltraLegacyCredential? = null
+    internal val legacyCredentialFingerprint: String? get() = credential?.fingerprint
+    fun scoped(isCurrent: () -> Boolean): UltraRuntimeClient = UltraRuntimeClient().also {
+        it.credential = credential
+        it.identityCurrent = { identityCurrent() && isCurrent() }
+    }
+    internal fun withLegacyCredential(value: UltraLegacyCredential): UltraRuntimeClient =
+        scoped { true }.also { it.credential = value }
     // The real client's systemStatus/localCall also does not enter identityCurrent.
     fun systemStatus(): NativeReceipt {
         SELinuxBoundary.statusCalls.incrementAndGet()
@@ -61,17 +84,28 @@ class UltraRuntimeClient(private val key: () -> String? = { null }) {
     fun runRootCommand(command: String): NativeReceipt {
         check(command == "/system/bin/getenforce")
         if (!identityCurrent()) return NativeReceipt(false)
+        if (credential == null && (SELinuxBoundary.owner == null || SELinuxBoundary.owner != SELinuxBoundary.liveOwner))
+            return NativeReceipt(false)
         SELinuxBoundary.rootCalls.incrementAndGet()
-        SELinuxBoundary.submittedKeys.add(key())
+        SELinuxBoundary.submittedKeys.add(credential?.value)
         return SELinuxBoundary.root()
     }
     fun decodeText(text: String?): String? = text
 }
 
 object UltraSdkCredentials {
-    fun read(context: Any) = SELinuxBoundary.key
-    fun client(context: Any, expectedKey: String?, expectedBootId: String?): UltraRuntimeClient =
-        UltraRuntimeClient { expectedKey }.scoped(expectedKey) {
-            SELinuxBoundary.key == expectedKey && SELinuxBoundary.boot == expectedBootId
+    fun client(context: Context): UltraRuntimeClient {
+        val boot = SELinuxBoundary.boot
+        val owner = SELinuxBoundary.owner
+        val activation = ModeRuntime.activation
+        val prefs = context.getSharedPreferences("maplesu-ultra", 0)
+        val removal = prefs.getString("environmentRemoval", null)
+        val legacy = if (owner == null) UltraLegacyCredential.read(context) else null
+        val source = if (legacy == null) UltraRuntimeClient() else UltraRuntimeClient().withLegacyCredential(legacy)
+        return source.scoped {
+            SELinuxBoundary.boot == boot && SELinuxBoundary.owner == owner &&
+                ModeRuntime.activation === activation && prefs.getString("environmentRemoval", null) == removal
         }
+    }
+    fun client(context: Context, current: () -> Boolean) = client(context).scoped(current)
 }

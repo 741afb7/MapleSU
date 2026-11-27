@@ -9,7 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-// The original installer TU supplies its exact key-derived paths.
+// The installer supplies paths from the worker's authenticated deployment namespace.
 extern "C" void maplesu_environment_paths(std::string*, std::string*);
 namespace default_modules::module_root { KModErr set_current_root(bool); }
 

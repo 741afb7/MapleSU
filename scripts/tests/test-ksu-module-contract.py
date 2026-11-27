@@ -41,7 +41,8 @@ class ModuleContractTest(unittest.TestCase):
         for name in ("chown", "chcon"):
             self.write("bin/" + name, "#!/bin/bash\nexit 0\n")
         self.write("bin/chmod", '#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_ROOT/permissions"\nexec /usr/bin/chmod "$@"\n')
-        self.write("bin/getprop", "#!/bin/bash\necho 36\n")
+        self.write("bin/getprop", "#!/bin/bash\ncase \"$1\" in ro.product.cpu.abi) echo arm64-v8a ;; *) echo 36 ;; esac\n")
+        self.write("bin/dos2unix", "#!/bin/bash\ntr -d '\\r'\n")
         self.write("bin/id", '''#!/bin/bash
 if [ "$*" = -u ]; then echo 0; else exec /usr/bin/id "$@"; fi
 ''')
@@ -127,6 +128,38 @@ esac
     def trace(self):
         path = self.root / "trace"
         return path.read_text().splitlines() if path.exists() else []
+
+
+    def test_modern_declares_real_hot_install_and_records_request(self):
+        self.write("adb/modules/fixture/customize.sh", 'test "${KSU_HAS_HOT_INSTALL:-}" = true || exit 42\nMODULE_HOT_INSTALL_REQUEST=true\nMODULE_HOT_RUN_SCRIPT=service.sh\n')
+        self.install()
+        self.assertEqual("service.sh\n", (self.module / ".ksu_hot_install").read_text())
+
+    def test_legacy_declares_real_hot_install_and_records_request(self):
+        self.write("adb/modules/fixture/install.sh", 'print_modname() { :; }\non_install() { test "${KSU_HAS_HOT_INSTALL:-}" = true || exit 42; MODULE_HOT_INSTALL_REQUEST=true; MODULE_HOT_RUN_SCRIPT=service.sh; }\nset_permissions() { :; }\n')
+        self.install()
+        self.assertEqual("service.sh\n", (self.module / ".ksu_hot_install").read_text())
+
+    def test_legacy_grep_prop_uses_explicit_file(self):
+        self.write("adb/modules/fixture/common/system.prop", "fixture.external=external\n")
+        self.write("adb/modules/fixture/install.sh", 'print_modname() { :; }\non_install() { value=$(grep_prop fixture.external "$TMPDIR/system.prop"); test "$value" = external || exit 43; }\nset_permissions() { :; }\n')
+        self.install()
+
+    def test_grep_prop_matches_fixed_ksu_first_match_crlf_and_multiple_files(self):
+        self.write("adb/modules/fixture/common/first.prop", "fixture.external= first value \r\nfixture.external=second\r\n")
+        self.write("adb/modules/fixture/common/second.prop", "fixture.external=third\n")
+        self.write("adb/modules/fixture/customize.sh", 'value=$(grep_prop fixture.external "$MODPATH/common/first.prop" "$MODPATH/common/second.prop"); test "$value" = "first value" || exit 44\n')
+        self.install()
+
+    def test_installer_exposes_real_abi_and_module_facts_before_customization(self):
+        check = 'test "$API:$ARCH:$ABI:$ABI32:$IS64BIT" = "36:arm64:arm64-v8a:armeabi-v7a:true" || exit 45\ntest "$MODID:$MODNAME:$MODAUTH" = "fixture:Fixture:" || exit 46\ntest "$POSTFSDATAD:$SERVICED" = "$NVBASE/post-fs-data.d:$NVBASE/service.d" || exit 47\n'
+        self.write("adb/modules/fixture/customize.sh", check)
+        self.install()
+
+    def test_grep_get_prop_only_falls_back_when_property_is_absent(self):
+        self.write("adb/modules/fixture/common/source.prop", "fixture.external=present\n")
+        self.write("adb/modules/fixture/customize.sh", 'test "$(grep_get_prop fixture.external "$MODPATH/common/source.prop")" = present || exit 48\ntest "$(grep_get_prop fixture.missing "$MODPATH/common/source.prop")" = 36 || exit 49\n')
+        self.install()
 
     def test_legacy_bridge_sources_archive_and_flattens_common_into_tmpdir(self):
         self.write("adb/modules/fixture/install.sh", "exit 86\n")

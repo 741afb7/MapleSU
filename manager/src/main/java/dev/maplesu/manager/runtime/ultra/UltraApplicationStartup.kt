@@ -1,6 +1,6 @@
 package dev.maplesu.manager.runtime.ultra
 
-/** Only the main manager process schedules automatic Ultra startup; brokers keep their wiring. */
+/** Only the main manager process schedules automatic Ultra startup. */
 internal object UltraApplicationStartup {
     fun start(
         processName: String,

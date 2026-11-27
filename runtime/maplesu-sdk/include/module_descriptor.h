@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "third_party/____DO_NOT_EDIT____/private_desc_parser.h"
 #include "module_web_ui_http_handler.h"
 #include "module_base_install_callback.h"
@@ -9,7 +9,6 @@
  * 执行时机：本入口函数会在 Android 早期阶段执行，此时 Zygote64 尚未启动。
  * 
  * 参数：
- *   root_key            ROOT 密钥文本。
  *   module_private_dir  模块私有目录（受隐藏保护；需要隐藏的文件建议放在此目录）。
  * 
  * 返回值：
@@ -32,7 +31,7 @@
  *
  *   后台子进程应先等待约 5～10 秒，或确认系统环境已就绪后再继续执行，以免影响系统启动。
  ***************************************************************************/
-int maplesu_module_main(const char* root_key, const char* module_private_dir);
+int maplesu_module_main(const char* module_private_dir);
 
 
 /***************************************************************************

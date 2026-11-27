@@ -2,31 +2,7 @@ package dev.maplesu.manager.ultrakernel
 
 import java.io.File
 
-/**
- * On-device Ultra spec *generation*: turn "a boot image plus a 48 byte device credential" into a
- * [UltraKernelPlan] when the release catalogue has no shipped asset for that kernel.
- *
- * Why this exists. The catalogue ships one reviewed spec per release, and every one of them has a
- * single device's secret baked into three records. A kernel build that nobody has published an
- * asset for used to be a dead end (`ULTRA_KERNEL_RELEASE_UNSUPPORTED`). The recipe makes that dead end
- * removable without pretending the result is verified:
- *
- *  1. every record site is a `(symbol, delta)` pair, resolved on this kernel's own `kallsyms`;
- *  2. every address inside a blob is a relocation, recomputed for this kernel;
- *  3. the credential is written into the declared slots, so the same recipe fits any device;
- *  4. the digests the builder will later demand are *derived* here, never pinned.
- *
- * The output is always [UltraKernelPlan.Origin.GENERATED], which means
- * [UltraKernelPlan.SupportLevel.EXPERIMENTAL] - no observation made locally can change that. What is
- * reported next to it is [UltraKernelPlan.SiteEvidence]: how many of the recipe's sites still carried
- * the reference build's pristine bytes. `18/18` on 6.6.89 is what "identical to k22" means; `3/18`
- * on 6.1.25 means the addresses were relocated onto a kernel whose instruction sequences differ,
- * which is no longer reported as an experimental plan at all: [requireFullSiteCoverage] refuses it
- * (`ULTRA_KERNEL_GENERATE_SITE_COVERAGE`) before a plan exists, because a patch set whose code bodies
- * were compiled for another kernel is a half-finished candidate, not a weak one.
- *
- * Nothing here opens a partition, starts a process, or reads the credential store.
- */
+/** Generates target-specific code and public deployment metadata. No caller secret is embedded. */
 internal class UltraKernelSpecGenerator(
     private val recipe: UltraKernelRecipe = UltraKernelRecipe.k22(),
     private val vivoVrFilter: Boolean = false,
@@ -40,11 +16,11 @@ internal class UltraKernelSpecGenerator(
     private val newDeploymentNamespace by lazy { UltraKernelDeploymentNamespace.create() }
 
     /** Generate a plan from a boot image (decoded here exactly the way the builder decodes it). */
-    fun generate(boot: File, credential: UltraKernelCredential): UltraKernelPlan {
+    fun generate(boot: File): UltraKernelPlan {
         if (!boot.isFile || boot.length() == 0L) {
             throw UltraKernelGenerateException(UltraKernelGenerateCodes.BASE, "missing")
         }
-        return generate(UltraKernelPlan.readKernel(boot), credential)
+        return generate(UltraKernelPlan.readKernel(boot))
     }
 
     /**
@@ -58,7 +34,7 @@ internal class UltraKernelSpecGenerator(
      *         has no proven executable padding, and `..._APPLY` when the records do not fit the
      *         kernel they were rendered for.
      */
-    fun generate(kernel: ByteArray, credential: UltraKernelCredential): UltraKernelPlan {
+    fun generate(kernel: ByteArray): UltraKernelPlan {
         if (kernel.isEmpty()) throw UltraKernelGenerateException(UltraKernelGenerateCodes.BASE, "empty")
         require(deploymentNamespace == null || managerClaimAssets != null) { "ULTRA_KERNEL_DEPLOYMENT_SUPPORT_MISSING" }
         val release = UltraKernelSpec.releaseOf(kernel)
@@ -72,21 +48,22 @@ internal class UltraKernelSpecGenerator(
         // The release catalogue's series list does not establish any of those facts.
         val profileSymbols = UltraKernelKallsymsTable.decode(kernel)
         val symbols = UltraKernelExecveEntry.resolve(profileSymbols, kernel)
-        val rendered = recipe.renderDetailed(symbols, kernel, credential,
-            preservedMetadataDisplacement = credential.metadataDisplacement.takeIf { credential.sdkMetadataValid })
+        val rendered = recipe.renderDetailed(symbols, kernel,
+            deploymentNamespace = deploymentNamespace ?: newDeploymentNamespace)
+        val effectiveRecipe = rendered.effectiveRecipe
         // Fail closed *before* anything is offered to the builder: a frozen address renders to
         // bytes that are correct on the reference kernel only, so no later check could catch it.
-        val residue = recipe.residue(symbols, rendered.records)
+        val residue = effectiveRecipe.residue(symbols, rendered.records)
         if (residue.isNotEmpty()) {
             throw UltraKernelGenerateException(
                 UltraKernelGenerateCodes.RESIDUE,
                 residue.joinToString(" | "),
             )
         }
-        val match = recipe.generatedCoverage(rendered.records)
+        val match = effectiveRecipe.generatedCoverage(rendered.records)
         // The pristine-byte match is recorded, not gated: on 6.1.25 it is `3/18` and that is the
         // expected result once the bodies are generated here, not a defect.
-        val reference = recipe.siteMatch(rendered.records)
+        val reference = effectiveRecipe.siteMatch(rendered.records)
         val evidence = UltraKernelPlan.SiteEvidence(
             matching = match.matching,
             total = match.total,
@@ -118,38 +95,14 @@ internal class UltraKernelSpecGenerator(
                     null
                 } else deploymentNamespace ?: newDeploymentNamespace, profileSymbols)
         } ?: filteredRecords
-        val metadata = records.single { it.role == "free_initmem+0x0" }
-        val executor = records.single { it.role == "__drm_printfn_coredump+0x0" }
-        // SDK locator uses LR - 4 + parser_root_key_info(key). Find the actual BLR,
-        // after cave placement; symbol offsets or an arbitrary 48-byte key are insufficient.
-        val call = executor.replacement.indices.step(4).single { at ->
-            UltraKernelA64.le32Bits(executor.replacement, at) == UltraKernelA64.blr(10)
-        }
-        val callSite = executor.offset + call
-        val existingDelta = credential.metadataDisplacement
-        val existingEnvelope = records.firstOrNull { record ->
-            val dataOffset = when (record.role) {
-                "free_initmem+0x0" -> 4
-                "__traceiter_kvm_userspace_exit+0x70" -> 0
-                else -> return@firstOrNull false
-            }
-            record.offset + dataOffset - callSite == existingDelta?.toLong()
-        }
-        // The reference key already addresses the duplicate traceiter envelope. Keep a working
-        // key byte for byte; arbitrary device keys bind to free_initmem's final placement.
-        val metadataDelta = if (existingEnvelope != null ||
-            rendered.records.any { it.record.code == "metadata-rebase" }
-        ) requireNotNull(existingDelta) else Math.toIntExact(metadata.offset + 4 - callSite)
         val plan = UltraKernelPlan.fromRecords(
             kernelRelease = release,
             records = allRecords,
-            credential = credential,
             origin = UltraKernelPlan.Origin.GENERATED,
             evidence = evidence,
             baseKernelSha256 = sha256Hex(kernel),
-            sdkMetadataDisplacement = metadataDelta,
             layout = rendered.layout,
-        ).rebind(credential)
+        )
         val applied = try {
             plan.apply(kernel)
         } catch (error: IllegalStateException) {

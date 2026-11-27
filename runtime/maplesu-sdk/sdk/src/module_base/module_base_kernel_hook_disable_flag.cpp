@@ -3,6 +3,7 @@
 #include "kernel_module_kit_umbrella.h"
 #include "allocation_history_private.h"
 #include "maplesu_storage_private.h"
+#include "maplesu_request_private.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -17,67 +18,24 @@
 
 #include "private_maple_runtime.h"
 
-namespace maplesu::sdk {
-
-// Directory that carries the runtime-owned files: /data/<root key head>/.
-static std::string get_kernel_file_dir_name() {
-    std::string root_key(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
-    return root_key.substr(0, FOLDER_HEAD_ROOT_KEY_LEN);
-}
-
-static std::string get_kernel_file_dir_path() {
-    char path_buf[1024] = {0};
-    snprintf(path_buf, sizeof(path_buf), "/data/%s/", get_kernel_file_dir_name().c_str());
-    return std::string(path_buf);
-}
-
-}  // namespace maplesu::sdk
-
 namespace kernel_module {
 namespace detail_hook_disable_flag_history {
 
 // The history lives under the runtime data directory when it exists, otherwise
 // under /dev.
-static std::filesystem::path get_hook_disable_flag_base_dir() {
-    std::error_code err;
-    std::filesystem::path data_dir(maplesu::sdk::get_kernel_file_dir_path());
-    if (!data_dir.empty() && std::filesystem::exists(data_dir, err) &&
-        std::filesystem::is_directory(data_dir, err)) {
-        return data_dir;
-    }
-    return std::filesystem::path("/dev");
-}
-
-static std::string get_hook_disable_flag_start_path() {
-    return get_hook_disable_flag_base_dir() /
-           "khook_disable_flag_start.1c7e71a8f42f592560e28186c979004a";
-}
-
-static std::string get_hook_disable_flag_next_path() {
-    return get_hook_disable_flag_base_dir() /
-           "khook_disable_flag_next.cb1a2d24909b86dd1c7e42ee3994c3b2";
-}
-
-static std::string get_hook_disable_flag_end_path() {
-    return get_hook_disable_flag_base_dir() /
-           "khook_disable_flag_end.3b5d7957e9c7be97883a3e420dd96e46";
-}
-
-// Authenticated workers use their held deployment; Legacy retains its old fallback.
 static KModErr get_hook_disable_flag_history_paths(std::string& start, std::string& next,
                                              std::string& end) {
-    if (kernel_module::maplesu_request_owner_mode()) {
-        std::string directory;
-        const KModErr error = maplesu::storage::current_kernel_directory(directory);
-        if (error != KModErr::OK) return error;
-        start = directory + "khook_disable_flag_start.1c7e71a8f42f592560e28186c979004a";
-        next = directory + "khook_disable_flag_next.cb1a2d24909b86dd1c7e42ee3994c3b2";
-        end = directory + "khook_disable_flag_end.3b5d7957e9c7be97883a3e420dd96e46";
-    } else {
-        start = get_hook_disable_flag_start_path();
-        next = get_hook_disable_flag_next_path();
-        end = get_hook_disable_flag_end_path();
+    std::string directory;
+    const KModErr error = maplesu::storage::current_kernel_directory(directory);
+    if (error != KModErr::OK) return error;
+    if (maplesu_request_auth_legacy(maplesu_request_auth_state())) {
+        std::error_code filesystem_error;
+        if (!std::filesystem::exists(directory, filesystem_error) ||
+            !std::filesystem::is_directory(directory, filesystem_error)) directory = "/dev/";
     }
+    start = directory + "khook_disable_flag_start.1c7e71a8f42f592560e28186c979004a";
+    next = directory + "khook_disable_flag_next.cb1a2d24909b86dd1c7e42ee3994c3b2";
+    end = directory + "khook_disable_flag_end.3b5d7957e9c7be97883a3e420dd96e46";
     return KModErr::OK;
 }
 

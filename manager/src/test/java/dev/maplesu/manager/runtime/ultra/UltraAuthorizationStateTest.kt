@@ -8,28 +8,33 @@ import java.util.concurrent.TimeoutException
 import org.junit.Assert.*
 import org.junit.Test
 
+private fun stateReceipt(error: String = "OK") = NativeReceipt(
+    1, UltraRuntimeClient.BACKEND, 1, "su_auth", error == "OK", error,
+    if (error == "OK") 0 else -1, null, null, "",
+)
+
 class UltraAuthorizationStateTest {
     private class Port(var packages: List<String>? = emptyList()) : SuAuthPort {
         var error = "OK"
         var persist = true
         var writes = 0
         override fun snapshot() = packages
-        override fun add(packageName: String): String {
+        override fun add(packageName: String): NativeReceipt {
             writes++
             if (persist && error == "OK") packages = (packages.orEmpty() + packageName).distinct()
-            return error
+            return stateReceipt(error)
         }
-        override fun remove(packageName: String): String {
+        override fun remove(packageName: String): NativeReceipt {
             writes++
             if (persist && error == "OK") packages = packages.orEmpty() - packageName
-            return error
+            return stateReceipt(error)
         }
     }
 
     @Test fun okWriteWithoutReadbackMembershipDoesNotGrant() {
         val state = UltraAuthorizationState()
         val port = Port().apply { persist = false }
-        assertEquals("READBACK_MISMATCH", state.setGranted(port, "com.example.app", true))
+        assertEquals("READBACK_MISMATCH", state.setGranted(port, "com.example.app", true).error)
         assertFalse(state.snapshot.packages.contains("com.example.app"))
     }
 
@@ -37,7 +42,7 @@ class UltraAuthorizationStateTest {
         val port = Port(listOf("com.example.app")).apply { persist = false }
         val state = UltraAuthorizationState()
         assertNull(state.refresh(port))
-        assertEquals("READBACK_MISMATCH", state.setGranted(port, "com.example.app", false))
+        assertEquals("READBACK_MISMATCH", state.setGranted(port, "com.example.app", false).error)
         assertEquals(setOf("com.example.app"), state.snapshot.packages)
     }
 
@@ -47,7 +52,7 @@ class UltraAuthorizationStateTest {
         state.refresh(port)
         port.persist = false
         port.packages = null
-        assertEquals("READBACK_FAILED", state.setGranted(port, "com.example.new", true))
+        assertEquals("READBACK_FAILED", state.setGranted(port, "com.example.new", true).error)
         assertEquals(setOf("com.example.existing"), state.snapshot.packages)
         assertEquals(1, port.writes)
     }
@@ -56,7 +61,7 @@ class UltraAuthorizationStateTest {
         val port = Port(listOf("com.example.external"))
         val counts = mutableListOf<Int>()
         val state = UltraAuthorizationState { counts += it }
-        assertNull(state.setGranted(port, "com.example.new", true))
+        assertNull(state.setGranted(port, "com.example.new", true).error)
         assertEquals(setOf("com.example.external", "com.example.new"), state.snapshot.packages)
         assertEquals(listOf(2), counts)
         assertTrue(state.snapshot.loaded)
@@ -67,7 +72,7 @@ class UltraAuthorizationStateTest {
         val state = UltraAuthorizationState()
         state.refresh(port)
         port.error = "EIO"
-        assertEquals("EIO", state.setGranted(port, "com.example.new", true))
+        assertEquals("EIO", state.setGranted(port, "com.example.new", true).error)
         port.packages = null
         assertEquals("READ_FAILED", state.refresh(port))
         assertEquals(setOf("com.example.old"), state.snapshot.packages)
@@ -76,33 +81,33 @@ class UltraAuthorizationStateTest {
     @Test fun committedGrantWithDeliveryFailureReadsBackWithoutRetrying() {
         val stored = Port(listOf("com.example.old"))
         val port = object : SuAuthPort by stored {
-            override fun add(packageName: String): String {
+            override fun add(packageName: String): NativeReceipt {
                 stored.add(packageName)
-                return "ERR_SU_DELIVERY_INCOMPLETE"
+                return stateReceipt("ERR_SU_DELIVERY_INCOMPLETE")
             }
         }
         val state = UltraAuthorizationState()
-        assertEquals("ERR_SU_DELIVERY_INCOMPLETE", state.setGranted(port, "com.example.new", true))
+        assertEquals("ERR_SU_DELIVERY_INCOMPLETE", state.setGranted(port, "com.example.new", true).error)
         assertEquals(setOf("com.example.old", "com.example.new"), state.snapshot.packages)
         assertTrue(state.snapshot.deliveryIncomplete)
         assertEquals(1, stored.writes)
         assertNull(state.refresh(port))
         assertTrue("Reading membership does not prove delivery", state.snapshot.deliveryIncomplete)
-        assertNull(state.setGranted(stored, "com.example.new", true))
+        assertNull(state.setGranted(stored, "com.example.new", true).error)
         assertFalse(state.snapshot.deliveryIncomplete)
     }
 
     @Test fun committedRevocationWithDeliveryFailureShowsStoredMembership() {
         val stored = Port(listOf("com.example.old", "com.example.keep"))
         val port = object : SuAuthPort by stored {
-            override fun remove(packageName: String): String {
+            override fun remove(packageName: String): NativeReceipt {
                 stored.remove(packageName)
-                return "ERR_SU_DELIVERY_INCOMPLETE"
+                return stateReceipt("ERR_SU_DELIVERY_INCOMPLETE")
             }
         }
         val state = UltraAuthorizationState()
         assertNull(state.refresh(port))
-        assertEquals("ERR_SU_DELIVERY_INCOMPLETE", state.setGranted(port, "com.example.old", false))
+        assertEquals("ERR_SU_DELIVERY_INCOMPLETE", state.setGranted(port, "com.example.old", false).error)
         assertEquals(setOf("com.example.keep"), state.snapshot.packages)
         assertTrue(state.snapshot.deliveryIncomplete)
         assertEquals(1, stored.writes)
@@ -113,13 +118,13 @@ class UltraAuthorizationStateTest {
         val state = UltraAuthorizationState()
         assertNull(state.refresh(stored))
         val port = object : SuAuthPort by stored {
-            override fun add(packageName: String): String {
+            override fun add(packageName: String): NativeReceipt {
                 stored.add(packageName)
                 stored.packages = null
-                return "ERR_SU_DELIVERY_INCOMPLETE"
+                return stateReceipt("ERR_SU_DELIVERY_INCOMPLETE")
             }
         }
-        assertEquals("ERR_SU_DELIVERY_INCOMPLETE", state.setGranted(port, "com.example.new", true))
+        assertEquals("ERR_SU_DELIVERY_INCOMPLETE", state.setGranted(port, "com.example.new", true).error)
         assertEquals(setOf("com.example.old"), state.snapshot.packages)
         assertTrue(state.snapshot.deliveryIncomplete)
         assertEquals(1, stored.writes)
@@ -132,7 +137,7 @@ class UltraAuthorizationStateTest {
         port.packages = listOf("dev.maplesu.manager")
         port.error = "ERR_MODULE_SU_LIST_NOT_FOUND"
 
-        assertNull(state.setGranted(port, "com.autonavi.minimap", false))
+        assertNull(state.setGranted(port, "com.autonavi.minimap", false).error)
         assertEquals("a verified absence must not submit another delete", 0, port.writes)
         assertEquals(setOf("dev.maplesu.manager"), state.snapshot.packages)
         assertTrue(state.snapshot.loaded)
@@ -141,7 +146,7 @@ class UltraAuthorizationStateTest {
     @Test fun emptyCacheDoesNotSkipRemovingAHostStillInTheSdkSnapshot() {
         val state = UltraAuthorizationState()
         val port = Port(listOf("com.autonavi.minimap", "dev.maplesu.manager"))
-        assertNull(state.setGranted(port, "com.autonavi.minimap", false))
+        assertNull(state.setGranted(port, "com.autonavi.minimap", false).error)
         assertEquals(1, port.writes)
         assertEquals(setOf("dev.maplesu.manager"), state.snapshot.packages)
     }
@@ -152,7 +157,7 @@ class UltraAuthorizationStateTest {
         state.refresh(port)
         port.packages = null
 
-        assertEquals("READ_FAILED", state.setGranted(port, "com.autonavi.minimap", false))
+        assertEquals("READ_FAILED", state.setGranted(port, "com.autonavi.minimap", false).error)
         assertEquals(0, port.writes)
         assertEquals(setOf("com.autonavi.minimap"), state.snapshot.packages)
     }
@@ -163,7 +168,7 @@ class UltraAuthorizationStateTest {
         state.refresh(port)
         port.error = "EIO"
 
-        assertEquals("EIO", state.setGranted(port, "com.autonavi.minimap", false))
+        assertEquals("EIO", state.setGranted(port, "com.autonavi.minimap", false).error)
         assertEquals(1, port.writes)
         assertTrue("a real SDK failure must remain a failure", "com.autonavi.minimap" in state.snapshot.packages)
     }
@@ -173,8 +178,8 @@ class UltraAuthorizationStateTest {
         val stored = Port(listOf("com.autonavi.minimap", "dev.maplesu.manager"))
         var loseReadback = false
         val port = object : SuAuthPort by stored {
-            override fun remove(packageName: String): String {
-                if (packageName !in stored.packages.orEmpty()) return "NOT_FOUND"
+            override fun remove(packageName: String): NativeReceipt {
+                if (packageName !in stored.packages.orEmpty()) return stateReceipt("NOT_FOUND")
                 val error = stored.remove(packageName)
                 loseReadback = true
                 return error
@@ -188,8 +193,8 @@ class UltraAuthorizationStateTest {
                 return stored.snapshot()
             }
         }
-        assertEquals("READBACK_FAILED", state.setGranted(port, "com.autonavi.minimap", false))
-        assertNull(state.setGranted(port, "com.autonavi.minimap", false))
+        assertEquals("READBACK_FAILED", state.setGranted(port, "com.autonavi.minimap", false).error)
+        assertNull(state.setGranted(port, "com.autonavi.minimap", false).error)
         assertEquals(1, stored.writes)
         assertEquals(setOf("dev.maplesu.manager"), state.snapshot.packages)
     }
@@ -214,7 +219,7 @@ class UltraAuthorizationStateTest {
             val started = CountDownLatch(1)
             val write = pool.submit<String?> {
                 started.countDown()
-                state.setGranted(port, "com.example.new", true)
+                state.setGranted(port, "com.example.new", true).error
             }
             assertTrue(started.await(5, TimeUnit.SECONDS))
             try {

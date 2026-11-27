@@ -690,7 +690,7 @@ class ModeSwitchLifecycleFacadeTest {
         val calls = mutableListOf<String>()
         val warmup = UltraStartupWarmup.run(UltraStartupWarmup.Input(
             activeMode = null, detectionSettled = true, ksuResponded = false,
-            pendingInstallCredential = false, suspended = false, quiescing = false,
+            pendingInstall = false, suspended = false, quiescing = false,
             switchPending = true, conflictingRoot = false,
             postBootUltraSwitchRecovery = h.ultraRecovery() == h.id,
         ), setupEnvironment = { calls += "setup" }, pairEnvironment = { calls += "pair"; true },

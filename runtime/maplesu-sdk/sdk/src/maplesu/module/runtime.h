@@ -23,14 +23,14 @@ struct BatchResult {
     KModErr bootstrap_error = KModErr::OK;
 };
 
-std::string system_directory(const char* key);
-std::string private_directory(const char* key, const char* id);
-Result execute(const module::Descriptor& desc, const char* key);
-KModErr run_batch(const char* key, const module::SdkVersion& version,
+std::string system_directory();
+std::string private_directory(const char* id);
+Result execute(const module::Descriptor& desc);
+KModErr run_batch(const module::SdkVersion& version,
                  std::vector<Record>& results);
-BatchResult run_boot_batch(const char* key, const module::SdkVersion& version,
+BatchResult run_boot_batch(const module::SdkVersion& version,
                            std::vector<Record>& results);
-Result run_single(const char* key, const char* id,
+Result run_single(const char* id,
                   const module::SdkVersion& version);
 
 }  // namespace maplesu::module_runtime

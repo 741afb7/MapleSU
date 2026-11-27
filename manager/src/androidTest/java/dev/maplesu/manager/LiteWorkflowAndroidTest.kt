@@ -13,7 +13,6 @@ import com.maplesu.core.ui.util.LkmSelection
 import com.maplesu.core.ui.util.installBoot
 import dev.maplesu.image.BootImageInspector
 import dev.maplesu.manager.runtime.MapleSuCommandExecutor
-import dev.maplesu.manager.runtime.MapleSuCredentialStore
 import dev.maplesu.manager.runtime.MapleSuRuntime
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -29,6 +28,20 @@ class LiteWorkflowAndroidTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
 
+    private fun candidateReceipt(imageSha256: String): JSONObject? {
+        val workspace = dev.maplesu.manager.compat.UltraStateStorage.flash(context.filesDir)
+        return workspace.listFiles().orEmpty().asSequence()
+            .filter { it.isFile && it.name.startsWith("candidate-") && it.extension == "json" }
+            .mapNotNull { runCatching { JSONObject(it.readText()) }.getOrNull() }
+            .firstOrNull { it.optInt("schemaVersion") == 2 &&
+                it.optString("operation") == "ULTRA_KERNEL_GENERATE" &&
+                it.optString("candidateBootSha256") == imageSha256 }
+    }
+
+    private fun candidateImage(receipt: JSONObject): File = File(
+        dev.maplesu.manager.compat.UltraStateStorage.flash(context.filesDir),
+        "candidate-${receipt.getString("asset")}-${receipt.getString("patchedKernelSha256").take(12)}.img")
+
     @Test(timeout = 240_000) fun productionFilePatchExportsVerifiedImage() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("liteWorkflow") == "true")
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -40,30 +53,28 @@ class LiteWorkflowAndroidTest {
                     input.outputStream().use { stream.copyTo(it) }
                 }
                 val original = BootImageInspector.inspect(input)
-                val before = context.filesDir.listFiles().orEmpty().map { it.name }.toSet()
                 val output = mutableListOf<String>()
                 val result = installBoot(Uri.fromFile(input), LkmSelection.KmiNone, false, "boot",
-                    false, false, false, "", output::add, output::add)
+                    false, false, false, "", output::add, output::add,
+                    targetMode = dev.maplesu.manager.installer.InstallTargetMode.ULTRA)
                 assertEquals(output.joinToString("\n"), 0, result.code)
                 assertFalse(result.showReboot)
-                val candidate = context.filesDir.listFiles().orEmpty().single {
-                    it.name.startsWith("candidate-") && it.name !in before
-                }
-                val report = JSONObject(File(candidate, "candidate.json").readText())
-                val image = BootImageInspector.inspect(File(candidate, "maplesu-patched.img"))
-                assertEquals(original.sha256, report.getJSONObject("source").getString("sha256"))
-                assertEquals(image.sha256, report.getJSONObject("image").getString("sha256"))
+                val exported = File(requireNotNull(result.outputPath) { "Verified export path was not returned" })
+                val image = BootImageInspector.inspect(exported)
+                val report = requireNotNull(candidateReceipt(image.sha256)) { "Current Ultra candidate receipt is absent" }
+                val retained = candidateImage(report)
+                assertEquals(image.sha256, BootImageInspector.inspect(retained).sha256)
+                assertEquals(original.sha256, report.getString("baseBootSha256"))
+                assertEquals(image.sha256, report.getString("candidateBootSha256"))
                 assertNotEquals(original.sha256, image.sha256)
-                assertTrue(report.getBoolean("candidateVerified"))
-                assertTrue(report.getBoolean("credentialInitialized"))
-                assertTrue(report.getInt("patchEdits") > 0)
+                assertTrue(report.getBoolean("readbackVerified"))
+                assertTrue(report.getInt("patches") > 0)
+                assertTrue(report.getInt("differingBytes") > 0)
                 val footer = ByteArray(4)
                 RandomAccessFile(input, "r").use { it.seek(input.length() - 64); it.readFully(footer) }
                 if (footer.contentEquals("AVBf".toByteArray())) {
-                    assertTrue(report.getJSONObject("rebuild").getBoolean("avbFooterPreserved"))
-                    val rebuilt = File(candidate, "maplesu-patched.img")
-                    assertEquals(input.length(), rebuilt.length())
-                    RandomAccessFile(rebuilt, "r").use { it.seek(rebuilt.length() - 64); it.readFully(footer) }
+                    assertEquals(input.length(), exported.length())
+                    RandomAccessFile(exported, "r").use { it.seek(exported.length() - 64); it.readFully(footer) }
                     assertArrayEquals("AVBf".toByteArray(), footer)
                 }
                 InstrumentationRegistry.getArguments().getString("expectedCandidateSha256")?.let {
@@ -74,14 +85,14 @@ class LiteWorkflowAndroidTest {
                 File(context.filesDir, "lite-workflow.json").writeText(report.toString())
                 instrumentation.sendStatus(2, Bundle().apply {
                     putString("candidateSha256", image.sha256)
-                    putString("candidatePath", candidate.absolutePath)
+                    putString("candidatePath", exported.absolutePath)
                     putString("kernelRelease", report.getString("kernelRelease"))
                 })
             } finally { input.delete() }
         }
     }
 
-    @Test(timeout = 30_000) fun runningBackendUsesStoredCredential() {
+    @Test(timeout = 30_000) fun runningBackendUsesCurrentIdentityWithoutAKey() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("verifyMapleSuBoot") == "true")
         assertTrue(MapleSuRuntime.refresh(context))
         assertTrue(Natives.isManager)
@@ -102,13 +113,13 @@ class LiteWorkflowAndroidTest {
             putString("globalNamespace", if (namespace.isSuccess) "available" else "unavailable")
             putString("authenticatedRootRetained", "true")
         })
-        val wrong = requireNotNull(MapleSuCredentialStore(context).load())
-        try {
-            wrong[0] = if (wrong[0] == 'A'.code.toByte()) 'B'.code.toByte() else 'A'.code.toByte()
-            val opened = runCatching { MapleSuCommandExecutor(context).openShell(wrong) }
-            opened.getOrNull()?.close()
-            assertTrue("Incorrect credential opened a root shell", opened.isFailure)
-        } finally { wrong.fill(0) }
+    }
+
+    @Test(timeout = 30_000) fun deniedOwnerDoesNotOpenTheUltraShell() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("verifyMapleSuDenied") == "true")
+        val opened = runCatching { MapleSuCommandExecutor(context).openShell() }
+        opened.getOrNull()?.close()
+        assertTrue("Denied owner opened a root shell", opened.isFailure)
     }
 
     @Test(timeout = 300_000) fun explicitlyRequestedDirectInstallation() {
@@ -130,15 +141,14 @@ class LiteWorkflowAndroidTest {
             val status = dev.maplesu.manager.installer.InstallerServiceClient.installationStatus(context, taskId)
             assertEquals("REBOOT_REQUIRED", status.getString("state"))
             assertTrue(status.getInt("attemptedPartitionCount") > 0)
-            val credentials = context.getSharedPreferences("maplesu-ultra", android.content.Context.MODE_PRIVATE)
-            assertEquals(taskId, credentials.getString("installCredentialTaskId", null))
+            assertEquals(taskId, dev.maplesu.manager.installer.InstallerServiceClient.lastTaskId(context))
+            val fingerprint = dev.maplesu.manager.runtime.ultra.UltraInstallTransactions.fingerprint(context, taskId)
+            assertNotNull("Installed candidate observation was not retained for this task", fingerprint)
             instrumentation.sendStatus(2, Bundle().apply {
                 putString("directInstallTaskId", taskId)
                 putString("directInstallState", status.getString("state"))
                 putInt("directInstallAttemptedPartitionCount", status.getInt("attemptedPartitionCount"))
-                putBoolean("directInstallCredentialTaskMatches", true)
-                putBoolean("directInstallPendingCredential",
-                    dev.maplesu.manager.runtime.ultra.UltraInstallCredentialRecovery.hasPendingInstallCredential(context))
+                putString("directInstallCandidateFingerprint", fingerprint)
             })
         }
     }
@@ -148,7 +158,8 @@ class LiteWorkflowAndroidTest {
         val client = dev.maplesu.manager.installer.InstallerServiceClient
         val before = client.observeBootChain(context)
         val digest = before.partitions.getValue("boot").sha256
-        assertNotNull(dev.maplesu.manager.patching.LiteBootPatcher(context).findVerifiedCandidate(digest))
+        val receipt = requireNotNull(candidateReceipt(digest)) { "Current boot candidate receipt is absent" }
+        assertEquals(digest, BootImageInspector.inspect(candidateImage(receipt)).sha256)
         assertTrue(MapleSuRuntime.refresh(context))
         val previous = client.lastTaskId(context)
         val taskId = java.util.UUID.randomUUID().toString()
@@ -156,7 +167,8 @@ class LiteWorkflowAndroidTest {
         try {
             client.beginInstallation(context, taskId)
             val result = installBoot(null, LkmSelection.KmiNone, false, "boot",
-                false, false, false, "", output::add, output::add, taskId)
+                false, false, false, "", output::add, output::add, taskId,
+                targetMode = dev.maplesu.manager.installer.InstallTargetMode.ULTRA)
             assertEquals(output.joinToString("\n"), 0, result.code)
             assertFalse(result.showReboot)
             assertEquals("NONE", client.installationStatus(context, taskId).getString("state"))

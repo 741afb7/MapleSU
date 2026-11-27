@@ -14,7 +14,7 @@ struct InstallCompletion {
 };
 
 __attribute__((visibility("hidden")))
-KModErr install_with_completion(const char* root_key, const char* archive, bool run_once,
+KModErr install_with_completion(const char* archive, bool run_once,
                                std::string& reason, InstallCompletion& completion);
 
 }  // namespace maplesu::module_install

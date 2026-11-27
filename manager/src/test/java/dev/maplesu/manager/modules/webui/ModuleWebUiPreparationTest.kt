@@ -6,6 +6,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -87,12 +88,57 @@ class ModuleWebUiPreparationTest {
         assertFalse(events.contains(WebUiLifecycleStage.ENVIRONMENT_PREPARING))
     }
 
+    @Test fun absentAndExplicitSdkOpenersKeepLegacyOwnership() = runBlocking {
+        for (value in listOf(null, "sdk")) {
+            var pages = 0
+            val result = WebUiOpenCoordinator(SdkOpenRunner { SdkOpenOutcome(true, 1234,
+                pageOpener = WebUiPageOpener.fromWire(value)) }, ready, gate,
+                pageOpen = { pages++; null }).open(spec)
+            assertTrue(result.succeeded)
+            assertEquals(WebUiPageOpener.SDK, result.opener)
+            assertEquals(0, pages)
+        }
+    }
+
+    @Test fun unknownOrMalformedOpenersDoNotClaimSdkOpenedThePage() = runBlocking {
+        for (value in listOf("", "null", "future", "MANAGER", 1, false, JSONObject.NULL, Any())) {
+            var probes = 0
+            var pages = 0
+            val result = WebUiOpenCoordinator(SdkOpenRunner { SdkOpenOutcome(true, 1234,
+                pageOpener = WebUiPageOpener.fromWire(value)) },
+                HttpReadyProbe { probes++; HttpReadyResult.readyAt(it) }, gate,
+                pageOpen = { pages++; null }).open(spec)
+            assertFalse(value.toString(), result.succeeded)
+            assertEquals(WebUiFailureReason.SDK_REJECTED, result.failure?.reason)
+            assertEquals(0, probes)
+            assertEquals(0, pages)
+        }
+    }
+
     @Test fun malformedDirectoryCannotSilentlySelectBridgeFreeWebView() {
-        for (path in listOf(null, "", "/", "relative/module", "/data/../modules/native123", "/data/mod\nules/native123", "/data/modules\\native123")) {
+        for (path in listOf(null, "", "/", "relative/module", "/data/../modules/native123", "/data/./modules/native123", "/data/modules/a\u0000b")) {
             val failure = ModuleWebUiPlan.failureFromSdkOpen(SdkOpenOutcome(true, 1234,
                 pageOpener = WebUiPageOpener.MAPLESU, moduleDir = path))
             assertEquals(path, WebUiFailureReason.SDK_REJECTED, failure?.reason)
         }
         assertEquals("/data/native/modules/native123/", ModuleWebUiPlan.moduleDirectoryOrNull("/data/native/modules/native123/"))
+    }
+
+    @Test fun nativeFilenameIdsAndPosixDirectoriesReachTheSdkAndPageUnchanged() = runBlocking {
+        for (id in listOf("模块", "a b", "a\\b", "a\nb", "a..b", "x".repeat(65))) {
+            val target = ModuleWebUiPlan.moduleId32OrNull("maplesu:$id")!!
+            val directory = "/data/native/modules/$id/"
+            var pages = 0
+            val result = WebUiOpenCoordinator(SdkOpenRunner {
+                assertEquals(id, it)
+                SdkOpenOutcome(true, 23456, pageOpener = WebUiPageOpener.MAPLESU, moduleDir = directory)
+            }, ready, gate, pageOpen = {
+                assertEquals(directory, it.moduleDir)
+                pages++
+                null
+            }).open(WebUiOpenSpec(target, WebUiRoute.ULTRA_SDK))
+            assertTrue(id, result.succeeded)
+            assertEquals(1, pages)
+        }
     }
 }

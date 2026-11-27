@@ -2,7 +2,6 @@ package dev.maplesu.manager.ultra
 
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.maplesu.manager.runtime.ultra.bridge.NativeBridge
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -11,15 +10,9 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Read-only environment / root-key baseline, taken BEFORE any environment install attempt.
- *
- * It answers three separate questions and keeps them separate:
- *   1. does the SDK accept the provisioned key at all (vs ERR_MODULE_ROOT_KEY)?
- *   2. does it report an environment (vs ERR_MODULE_NO_BOOT / NotInstalled)?
- *   3. what does the root-channel report say about the key's authority?
- *
- * It never installs, uninstalls or modifies anything.
- *
+ * Read-only signed-caller, environment and Root observations before an install attempt.
+ * The historical method name is retained for existing device harness selectors.
+ * No local credential is generated or set. SDK failures remain recorded separately.
  * Opt-in: `-e verifyUltraEnv true`.
  */
 class UltraEnvironmentBaselineAndroidTest {
@@ -41,45 +34,32 @@ class UltraEnvironmentBaselineAndroidTest {
             InstrumentationRegistry.getArguments().getString("verifyUltraEnv") == "true"
         )
 
-        // The Ultra root key is a user passphrase, not a vendor-issued secret: MapleSU Ultra's own
-        // Manager asks the user to type it and stores it verbatim. When the operator has not
-        // provisioned one, this test acts as that user once and records that it did so.
-        var key = UltraRootKeyStore.read(context)
-        if (key == null) {
-            val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-            key = (1..48).map { alphabet.random() }.joinToString("")
-            UltraRootKeyStore.write(context, key)
-            evidence.put("provisionedByTest", true)
-        } else {
-            evidence.put("provisionedByTest", false)
-        }
-        assertNotNull(key)
-        evidence.put("keyLength", key.length)
-        evidence.put("keyLooksLikeAlnum", key.all { it.isLetterOrDigit() })
+        val owner = receipt(NativeBridge.queryManagerOwnerIdentity(), "query_manager_owner_identity")
+        evidence.put("ownerIdentityReceipt", owner)
 
-        // 1. environment state with a real key
-        val stateRaw = NativeBridge.getEnvironmentState(key)
+        // 1. environment state for the current signed caller
+        val stateRaw = NativeBridge.getEnvironmentState()
         val state = receipt(stateRaw, "get_maplesu_environment_state")
         evidence.put("envStateReceipt", stateRaw)
         evidence.put("envState", if (state.getBoolean("ok")) state.getJSONObject("data").getString("state") else null)
 
         // 2. installed environment version: absent environment must be an error, not "0.0.0"
-        val versionRaw = NativeBridge.getInstalledEnvironmentVersion(key)
+        val versionRaw = NativeBridge.getInstalledEnvironmentVersion()
         val version = receipt(versionRaw, "get_installed_maplesu_environment_version")
         evidence.put("installedVersionReceipt", versionRaw)
         evidence.put("installedVersionOk", version.getBoolean("ok"))
         evidence.put("installedVersionError", version.getString("sdkError"))
 
-        // 3. root channel report for this key
-        val rootRaw = NativeBridge.testRoot(key)
+        // 3. root channel report for the current caller
+        val rootRaw = NativeBridge.testRoot()
         val root = receipt(rootRaw, "get_root_status_report")
         evidence.put("rootStatusReceipt", rootRaw)
         evidence.put("rootStatusOk", root.getBoolean("ok"))
 
-        // 4. module descriptor parse with a real key: distinguishes key gate from boot gate
+        // 4. descriptor parsing preserves its real ZIP input and SDK error
         val teeZip = File(context.getExternalFilesDir(null), "tee.zip")
         if (teeZip.isFile) {
-            val descRaw = NativeBridge.parseModuleDescriptor(key, teeZip.absolutePath)
+            val descRaw = NativeBridge.parseModuleDescriptor(teeZip.absolutePath)
             val desc = receipt(descRaw, "parse_module_desc_from_zip_file")
             evidence.put("descriptorReceipt", descRaw)
             evidence.put("descriptorOk", desc.getBoolean("ok"))
@@ -88,8 +68,8 @@ class UltraEnvironmentBaselineAndroidTest {
             evidence.put("descriptorReceipt", "not-run: tee.zip absent at ${teeZip.absolutePath}")
         }
 
-        // 5. module list with a real key
-        val listRaw = NativeBridge.getModuleList(key)
+        // 5. module list under the same caller identity
+        val listRaw = NativeBridge.getModuleList()
         val list = receipt(listRaw, "get_all_modules_list")
         evidence.put("moduleListReceipt", listRaw)
         evidence.put("moduleListError", list.getString("sdkError"))

@@ -1,8 +1,8 @@
 """Build the kernel-read wrapper offline and replay its generated ARM64 callbacks."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
-import struct
 import subprocess
 
 from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
@@ -12,12 +12,35 @@ from unicorn import arm64_const as reg
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--ndk', required=True, type=Path)
 p.add_argument('--build', required=True, type=Path)
-p.add_argument('--frame', required=True, type=Path, help='Captured real SDK task-comm probe JSON')
+p.add_argument('--frame', type=Path, help='Historical caller compatibility; actual m025 now emits frames')
 p.add_argument('--baseline', type=Path, help='Replay report from the original boot command2; exits red')
 a = p.parse_args()
 root = Path(__file__).resolve().parents[2]
 out = a.build.resolve()
 out.mkdir(parents=True, exist_ok=True)
+input_paths = [Path(__file__).resolve(), root / 'runtime/tests/ultra_kernel_read_test.cpp',
+    *sorted((root/'runtime/tests/kernel_read_executor_fixture').glob('*.h')),
+    *[root / path for path in (
+        'runtime/ultra/authorization/kernel_read.cpp',
+        'runtime/ultra/authorization/kernel_read_legacy.cpp',
+        'runtime/ultra/authorization/kernel_read_metadata.h',
+        'runtime/ultra/authorization/request_protocol.h',
+        'runtime/maplesu-sdk/sdk/include/maplesu_request_private.h',
+        'runtime/maplesu-sdk/sdk/include/maplesu_request_identity.h',
+        'runtime/maplesu-sdk/sdk/src/module_base/module_base_kernel_func_executor.cpp',
+        'runtime/maplesu-sdk/sdk/include/private_module_base_kernel_func_executor.h',
+        'runtime/maplesu-sdk/sdk/include/module_base_kernel_request.h',
+        'runtime/maplesu-sdk/include/module_base_kernel_func_executor.h',
+        'runtime/ultra/authorization/execution_frame.h',
+        'runtime/maplesu-sdk/include/aarch64_asm_helper.h',
+        'runtime/maplesu-sdk/include/module_err_def.h',
+        'runtime/maplesu-sdk/include/module_base_kernel_mem.h',
+        'runtime/maplesu-sdk/include/module_base_kernel_symbol_kaddr.h')]]
+for folder in ('patch-engine/upstream/3rdparty/asmjit2-src/src/asmjit',
+               'runtime/maplesu-sdk/include/third_party/asmjit2'):
+    input_paths.extend(p for p in (root / folder).rglob('*') if p.suffix in ('.h', '.cpp'))
+input_hashes = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in input_paths}
 if a.baseline:
     report = json.loads(a.baseline.read_text(encoding='utf-8-sig'))
     fault = next(case for case in report['cases'] if not case['mapped'])
@@ -25,41 +48,35 @@ if a.baseline:
     print('FAIL original command2 dereferences the unmapped source at +0x170')
     raise SystemExit(1)
 
-frame = bytes.fromhex(json.loads(a.frame.read_text(encoding='utf-8-sig'))['generatedCodeHex'])
-decoder = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-decoded = {offset: next(decoder.disasm(frame[offset:offset + 4], offset))
-           for offset in (0x30, 0x78, 0xbc, 0xc0)}
-assert decoded[0x30].mnemonic == 'b' and decoded[0x78].mnemonic == 'b'
-assert decoded[0xbc].mnemonic == 'mov' and decoded[0xc0].mnemonic == 'ldp'
-(out / 'frame-start.bin').write_bytes(frame[:0x74])
-tail = bytearray(frame[0x78:])
-tail[0x44:0x48] = struct.pack('<I', 0xaa0003e0)  # End helper returns x0.
-(out / 'frame-end.bin').write_bytes(tail)
-
 tool = a.ndk / 'toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe'
-compiled = subprocess.run([str(tool), '--target=aarch64-linux-android31', '-std=c++17',
-    '-fsyntax-only', '-Werror', '-Wno-packed-non-pod', '-I' + str(root / 'runtime/maplesu-sdk/include'),
-    str(root / 'runtime/ultra/authorization/kernel_read.cpp')], capture_output=True, text=True)
-assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+for source in ('kernel_read.cpp', 'kernel_read_legacy.cpp'):
+    compiled = subprocess.run([str(tool), '--target=aarch64-linux-android31', '-std=c++17',
+        '-fsyntax-only', '-Werror', '-Wno-packed-non-pod',
+        '-I' + str(root / 'runtime/maplesu-sdk/sdk/include'),
+        '-I' + str(root / 'runtime/maplesu-sdk/include'),
+        str(root / 'runtime/ultra/authorization' / source)], capture_output=True, text=True)
+    (out / (source + '.syntax.log')).write_text(compiled.stdout + compiled.stderr, encoding='utf-8')
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
 
 script = r'''set -eu
 cd /case
-C=/opt/ddk/clang/clang-r510928
 S=/repo/patch-engine/upstream/3rdparty/asmjit2-src/src/asmjit
-$C/bin/clang++ -std=c++17 -stdlib=libc++ -O0 -ffunction-sections -fdata-sections \
+g++ -std=c++17 -O0 -ffunction-sections -fdata-sections \
  -DASMJIT_STATIC -DASMJIT_NO_X86 -DASMJIT_NO_COMPILER -DASMJIT_NO_BUILDER -DASMJIT_NO_JIT \
- -I/repo/runtime/maplesu-sdk/include -I$S/.. \
- /repo/runtime/ultra/authorization/kernel_read.cpp /repo/runtime/tests/pro_kernel_read_test.cpp \
- $S/core/*.cpp $S/arm/*.cpp -Wl,--gc-sections -Wl,-rpath,$C/lib/x86_64-unknown-linux-gnu \
+ -I/repo/runtime/tests/kernel_read_executor_fixture -I/repo/runtime/maplesu-sdk/sdk/include -I/repo/runtime/maplesu-sdk/include -I$S/.. \
+ /repo/runtime/ultra/authorization/kernel_read.cpp /repo/runtime/ultra/authorization/kernel_read_legacy.cpp \
+ /repo/runtime/tests/ultra_kernel_read_test.cpp \
+ /repo/runtime/maplesu-sdk/sdk/src/module_base/module_base_kernel_func_executor.cpp $S/core/*.cpp $S/arm/*.cpp -Wl,--gc-sections \
  -pthread -ldl -o kernel-read.test
 for mode in good older missing raw-only fault cross-page-fault copy-fault execute-error bootstrap-fault bad-anchor; do
- ./kernel-read.test "$mode" frame-start.bin frame-end.bin
+ ./kernel-read.test "$mode"
 done
 '''
-run = subprocess.run(['docker', 'run', '--rm', '--network', 'none', '--mount',
+run = subprocess.run(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none', '--mount',
     f'type=bind,source={root},target=/repo,readonly', '--mount',
     f'type=bind,source={out},target=/case', '--entrypoint', 'sh',
-    'ghcr.io/ylarod/ddk-min:android15-6.6-20260828', '-c', script], capture_output=True, text=True)
+    'sha256:272ada1e61c525116032246df2a790d1ccec1804b7a9e0b09203c5e650dcb78e',
+    '-c', script], capture_output=True, text=True, encoding='utf-8', errors='replace')
 (out / 'kernel-read.log').write_text(run.stdout + run.stderr, encoding='utf-8')
 assert run.returncode == 0, run.stdout + run.stderr
 
@@ -68,6 +85,7 @@ SOURCE, METADATA = 0xffff800000500ff8, 0xffff800000700010
 NOFAULT, COPY_USER = 0xffff800000900000, 0xffff800000901000
 MASK = (1 << 64) - 1
 cases = []
+decoder = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
 for line in run.stdout.splitlines():
     if not line.startswith('capture='):
         continue
@@ -170,8 +188,13 @@ for line in run.stdout.splitlines():
                 assert state['copied'] == bytes((i * 37 + 11) & 255 for i in range(index * 256, index * 256 + state['length']))
         cases.append(dict(kind=kind, mode=mode, batch=index, unmapped=fault, passed=True))
 
-report = dict(passed=True, deviceRequests=False, usesCapturedSdkFrame=True,
-              actualGeneratedArm64=True, cases=cases)
+input_drift = [name for name, digest in input_hashes.items()
+               if hashlib.sha256((root / name).read_bytes()).hexdigest() != digest]
+assert not input_drift, input_drift
+report = dict(passed=True, deviceRequests=False, usesCapturedSdkFrame=False, actualSdkExecutor=True,
+              actualGeneratedArm64=True, requestIoAndReceiptOnlyAreFixtures=True,
+              inputs=input_hashes, inputDrift=input_drift,
+              cases=cases)
 (out / 'kernel-read.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
 print('\n'.join(line for line in run.stdout.splitlines() if line.startswith('PASS ')))
 print(f'PASS generated ARM64 callbacks: {len(cases)} cases; no command2 requests')

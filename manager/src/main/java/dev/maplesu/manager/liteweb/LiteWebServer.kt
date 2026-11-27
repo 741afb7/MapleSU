@@ -9,6 +9,7 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.atomic.AtomicBoolean
@@ -45,6 +46,7 @@ class LiteWebServer(
 ) : AutoCloseable {
     private val running = AtomicBoolean(false)
     private val attempts = ArrayList<String>()
+    private val connections = ConcurrentHashMap.newKeySet<Socket>()
 
     @Volatile
     private var serverSocket: ServerSocket? = null
@@ -152,6 +154,7 @@ class LiteWebServer(
         serverSocket = null
         acceptThread?.interrupt()
         acceptThread = null
+        connections.forEach(::closeConnection)
         executor?.shutdownNow()
         executor = null
         if (boundPort >= 0) logger("liteweb stopped on $boundPort")
@@ -168,12 +171,17 @@ class LiteWebServer(
             } catch (_: IOException) {
                 continue
             }
-            val pool = executor
-            if (pool == null) {
-                runCatching { client.close() }
+            connections.add(client)
+            if (!running.get() || serverSocket !== socket) {
+                closeConnection(client)
                 return
             }
-            runCatching { pool.execute { handleConnection(client) } }
+            val pool = executor
+            if (pool == null) {
+                closeConnection(client)
+                return
+            }
+            runCatching { pool.execute { handleConnection(client) } }.onFailure { closeConnection(client) }
         }
     }
 
@@ -207,8 +215,13 @@ class LiteWebServer(
         } catch (_: IOException) {
             logger("liteweb connection error")
         } finally {
-            runCatching { client.close() }
+            closeConnection(client)
         }
+    }
+
+    private fun closeConnection(client: Socket) {
+        runCatching { client.close() }
+        connections.remove(client)
     }
 
     private fun logRequest(request: LiteWebHttpRequest, response: LiteWebHttpResponse) {

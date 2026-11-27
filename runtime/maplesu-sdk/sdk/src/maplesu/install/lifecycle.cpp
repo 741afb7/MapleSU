@@ -46,8 +46,6 @@ constexpr bool failed(core::err_t error) { return error != core::kOk; }
 }
 
 namespace {
-constexpr size_t kRootKeyBufferSize = 1024;
-
 bool parse_installed_environment_version(std::string_view text, Version& output) {
     std::size_t cursor = 0;
     const auto read_component = [&](uint32_t& value) {
@@ -301,26 +299,11 @@ static void exec_bootstrap_command(const char* command) {
 }
 
 namespace {
-bool installer_identity_valid(const char* root_key) {
+bool installer_identity_valid() {
     const auto auth = kernel_module::maplesu_request_auth_state();
-    if (!kernel_module::maplesu_request_auth_usable(auth) ||
-        kernel_module::maplesu_request_auth_helper(auth)) return false;
-    if (root_key == nullptr) return true;
-    const std::size_t length = ::strnlen(root_key, kRootKeyBufferSize);
-    return kernel_module::maplesu_request_auth_legacy(auth) &&
-        length >= core::kRootKeyDirChars && length < kRootKeyBufferSize;
-}
-
-core::err_t select_installer_worker_identity(const char* root_key) {
-    if (!installer_identity_valid(root_key)) return compat::kInstallerIdentity;
-    if (root_key != nullptr) {
-        compat::select_installer_identity(root_key);
-        return compat::kInstallerOk;
-    }
-    const auto auth = kernel_module::maplesu_request_auth_state();
-    return kernel_module::maplesu_request_auth_manager(auth) ? compat::kInstallerOk :
-        static_cast<core::err_t>(kernel_module::maplesu_request_set_auth_mode(
-            kernel_module::RequestAuthMode::ManagerOwner));
+    return kernel_module::maplesu_request_auth_usable(auth) &&
+        !kernel_module::maplesu_request_auth_helper(auth) &&
+        kernel_module::maplesu_request_worker_admission() == KModErr::OK;
 }
 
 core::err_t close_installer_worker(std::optional<storage::WorkerScope>& worker) {
@@ -385,16 +368,11 @@ core::err_t collect_installation_result(compat::InstallerChannel& pipe) {
 }
 }  // namespace
 
-core::err_t install_environment(const char* root_key, DeploymentMode mode,
+core::err_t install_environment(DeploymentMode mode,
                                    const InstallOptions& config) {
-    if (!installer_identity_valid(root_key)) return compat::kInstallerIdentity;
+    if (!installer_identity_valid()) return compat::kInstallerIdentity;
     if (mode != DeploymentMode::Boot && mode != DeploymentMode::HotLoad &&
         mode != DeploymentMode::Refresh) return static_cast<core::err_t>(KModErr::ERR_MODULE_PARAM);
-    if (mode == DeploymentMode::Refresh && kernel_module::maplesu_request_owner_mode()) {
-        errno = EOPNOTSUPP;
-        return static_cast<core::err_t>(KModErr::ERR_MODULE_TEST_CHANNEL);
-    }
-
     compat::InstallerChannel pipe;
     core::err_t err = compat::kInstallerOk;
     if (pipe.start()) {
@@ -619,11 +597,8 @@ core::err_t install_environment(const char* root_key, DeploymentMode mode,
             return compat::kInstallerOk;
         };
         try {
-            err = select_installer_worker_identity(root_key);
-            if (succeeded(err)) {
-                worker.emplace();
-                err = perform();
-            }
+            worker.emplace();
+            err = perform();
         } catch (const std::bad_alloc&) {
             errno = ENOMEM;
             err = static_cast<core::err_t>(KModErr::ERR_NO_MEM);
@@ -637,8 +612,8 @@ core::err_t install_environment(const char* root_key, DeploymentMode mode,
     return collect_installation_result(pipe);
 }
 
-core::err_t uninstall_environment(const char* root_key) {
-    if (!installer_identity_valid(root_key)) return compat::kInstallerIdentity;
+core::err_t uninstall_environment() {
+    if (!installer_identity_valid()) return compat::kInstallerIdentity;
 
     compat::InstallerChannel pipe;
     core::err_t err = compat::kInstallerOk;
@@ -700,11 +675,8 @@ core::err_t uninstall_environment(const char* root_key) {
             return err;
         };
         try {
-            err = select_installer_worker_identity(root_key);
-            if (succeeded(err)) {
-                worker.emplace();
-                err = perform();
-            }
+            worker.emplace();
+            err = perform();
         } catch (const std::bad_alloc&) {
             errno = ENOMEM;
             err = static_cast<core::err_t>(KModErr::ERR_NO_MEM);
@@ -718,16 +690,8 @@ core::err_t uninstall_environment(const char* root_key) {
     return collect_installation_result(pipe);
 }
 
-core::err_t installed_version(const char* root_key,
-                                                Version& out_ver) {
-    if (!kernel_module::maplesu_request_owner_mode()) {
-        if (root_key == nullptr) return compat::kInstallerIdentity;
-        const std::size_t root_key_len = ::strnlen(root_key, kRootKeyBufferSize);
-        if (root_key_len < core::kRootKeyDirChars || root_key_len >= kRootKeyBufferSize) {
-            return compat::kInstallerIdentity;
-        }
-        compat::select_installer_identity(root_key);
-    }
+core::err_t installed_version(Version& out_ver) {
+    if (!installer_identity_valid()) return compat::kInstallerIdentity;
 
     std::string version_text;
     compat::InstallerChannel pipe;

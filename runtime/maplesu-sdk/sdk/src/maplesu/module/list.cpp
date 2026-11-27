@@ -114,7 +114,7 @@ std::vector<T> bytes_to_records(const std::vector<uint8_t>& bytes) {
 
 }  // namespace
 
-// 枚举全部已安装模块（不做 root_key 校验的原始通道；由 safe_ 版在子进程里调用）
+// 枚举全部已安装模块（由 safe_ 版在子进程和存储工作域里调用）
 //
 //   1. module_root::set_current_root(true)，失败直接返回该错误码
 //   2. 读三份全局状态清单 -> std::set（running / abnormal / removed_pending_reboot）
@@ -265,6 +265,7 @@ KModErr unsafe_get_all_modules_impl(std::vector<Record>& out_list,
     }
 
     if (closedir(module_list_dir) != 0) return KModErr::ERR_MODULE_READ_FILE;
+    RETURN_IF_ERROR(worker.close_checked());
 
     // 5. 按修改时间升序排序，再按顺序把 record 搬到 out_list
     std::sort(module_items.begin(), module_items.end(), [](const Item& lhs, const Item& rhs) {
@@ -281,6 +282,7 @@ KModErr unsafe_get_all_modules_impl(std::vector<Record>& out_list,
 // The caller sees a new list only after complete frames and the exact child's
 // successful exit. Failed reads close the pipes before waiting for the writer.
 KModErr safe_get_all_modules_impl(std::vector<Record>& out_list) {
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     compat::LegacyListPipe pipe_info;
     KModErr result_err = KModErr::OK;
 

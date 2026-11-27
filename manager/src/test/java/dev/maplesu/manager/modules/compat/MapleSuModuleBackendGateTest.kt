@@ -7,6 +7,7 @@ import dev.maplesu.manager.runtime.ultra.UltraOutcome
 import dev.maplesu.manager.runtime.ultra.UltraPhase
 import dev.maplesu.manager.runtime.ultra.UltraReceipt
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -18,36 +19,9 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 
 /**
- * H1 的**真实入口**测试：直接驱动 [UltraModuleInstallTransaction]（W6-F1）。
- *
- * ## 这个测试与 W2-0 版本的区别（W5 复核 S1-1）
- *
- * 旧版本用 `runBackendGateSequence` **复刻** `MapleSuModuleBackend.install` 的门相关步骤
- * （旧文件自述见 `.analysis/.../w2-0`），从不调用产品代码——把 stage/descriptor 挪到门之前它仍然
- * 全绿，因此它证明不了产品行为。现在：
- *
- *  * 被测对象是**产品类** [UltraModuleInstallTransaction]，`MapleSuModuleBackend.install` 只是把
- *    `Report` 翻成 [UltraModulePackageIdentity] 后转调它（一行委托，见 backend 的 `install`）；
- *  * 断言的是**真实事务**的调用序列：`host.callOrder`、`catalog` 的 stage/commit/discard 计数、
- *    操作日志条数与 token、§4.3 事件条数与内容、回执字段；
- *  * 因此「门在 stage 之前」是可失败的断言（反向对照实验见
- *    `.analysis/ultra-module-crash-remediation-20261031/w6-f1/EVIDENCE.md`：把门挪到 descriptor 之后，
- *    本文件的 `knownIncompatibleNeverReachesTheHost` 立即变红）。
- *
- * ## 为什么这里仍然不 `new` 一个 `MapleSuModuleBackend`
- *
- * 那个类要 `Context`（`filesDir` / `SharedPreferences` / `assets` / `PackageManager`）。仓库的
- * `testImplementation` 只有 junit，按任务约束不引入 Robolectric。所以「`Context` 解析」留在
- * backend（薄壳），「事务行为」全部移进可注入的 [UltraModuleInstallTransaction]——这不是绕开产品
- * 代码，而是把产品代码里真正需要断言的那一段做成可测的。
- *
- * ## 回执 `data` 段为什么是注入的
- *
- * `org.json` 在 JVM 单测里是 `android.jar` 的 stub（`new JSONObject()` 直接抛）。所以 `data`
- * 的生产者 [UltraModuleReceiptData] 被注入：本文件用记录型替身，断言的是
- * [UltraModuleReceiptPayload]（`data` 的语义内容），生产实现 `OrgJsonReceiptData` 的序列化逐字段
- * 与改前相同（见该类注释）。回执的 phase/outcome/unknowns/cleanupOutcome 都是 `UltraReceipt` 的
- * 普通字段，不经过 JSON，断言的是真值。
+ * 直接驱动真实安装事务，检查宿主提交回执、catalog 和 journal 的状态归属。
+ * 兼容记录与环境观测保留诊断，用户选择的安装由宿主返回真实结果；列表刷新不决定提交。
+ * 宿主、catalog 和日志是计数替身，回执 data 记录纯语义载荷，JSON 使用现有 JVM 测试依赖。
  */
 class MapleSuModuleBackendGateTest {
 
@@ -78,7 +52,7 @@ class MapleSuModuleBackendGateTest {
 
     // ------------------------------------------------------------------ 计数型宿主
 
-    /** 计数型宿主：每次调用都记下来，用来断言「被拦请求一次都没到宿主」。 */
+    /** 计数型宿主：分别记录安装调用与独立的显示列表读取。 */
     private class CountingHost : UltraModuleHost {
 
         val callOrder = ArrayList<String>()
@@ -104,7 +78,7 @@ class MapleSuModuleBackendGateTest {
         var installFailure: NativeReceipt? = null
         var modulesFailure: Exception? = null
 
-        /** 安装后 `get_all_modules_list` 的内容。默认没有模块（安装未被证明）。 */
+        /** 独立显示刷新的内容，不作为本次安装提交证据。 */
         var listedAfterInstall: List<MapleSuModInstalledItem> = emptyList()
 
         override fun environmentState(): NativeReceipt {
@@ -132,7 +106,7 @@ class MapleSuModuleBackendGateTest {
             lastDevRunOnce = devRunOnce
             val operation = if (devRunOnce) "install_module_dev_run_once" else "install_module"
             return installFailure ?: if (installAccepted) {
-                receipt(operation)
+                receipt(operation).copy(data = JSONObject().put("installCommitted", true))
             } else {
                 receipt(operation).copy(ok = false, sdkError = "MODULE_REFUSED_BY_HOST", sdkErrorCode = -3)
             }
@@ -165,7 +139,7 @@ class MapleSuModuleBackendGateTest {
 
     // ------------------------------------------------------------------ 计数型 catalog / journal / 回执 data
 
-    /** 计数型包存储：被拦时**必须**一次都没碰（只数宿主调用会漏掉「先复制字节再拦」）。 */
+    /** 计数型包存储：区分提交、保留对账材料与确认未提交后的丢弃。 */
     private class CountingCatalog(private val stagedFile: File) : UltraModuleCatalogPort {
 
         val callOrder = ArrayList<String>()
@@ -215,7 +189,7 @@ class MapleSuModuleBackendGateTest {
         }
     }
 
-    /** 回执 `data` 替身：不构造 JSON（JVM 上 `org.json` 是 stub），只记录语义内容。 */
+    /** 回执 `data` 替身：保留宿主字段与 catalog 身份的语义内容。 */
     private class RecordingReceiptData : UltraModuleReceiptData {
         val payloads = ArrayList<UltraModuleReceiptPayload>()
 
@@ -291,8 +265,7 @@ class MapleSuModuleBackendGateTest {
         facts: () -> UltraModuleDeviceFacts = { deviceFacts() },
     ) = UltraModuleInstallTransaction(
         host = host,
-        // 前置条件观测点：真实实现读 `host.environmentState()` 的 `data.state`，而 `org.json`
-        // 在 JVM 上是 stub，所以测试注入观测值（判据仍在事务里，见 UltraModuleEnvironmentObservation）。
+        // 环境观测独立注入，以便覆盖诊断、读取失败与取消。
         environmentProbe = {
             UltraModuleEnvironmentObservation(host.environmentState(), host.environmentStateValue)
         },
@@ -338,7 +311,7 @@ class MapleSuModuleBackendGateTest {
         )
     }
 
-    // ------------------------------------------------------------------ (a) 被拦 = 0 次宿主调用，0 次 stage
+    // ------------------------------------------------------------------ (a) 兼容诊断与安装结果分开
 
     @Test
     fun selectedModuleReachesHostDespiteCompatibilityDiagnostics() {
@@ -346,7 +319,7 @@ class MapleSuModuleBackendGateTest {
         h.host.listedAfterInstall = listOf(installedItem(ID32, VERSION, MapleSuModRunState.RUNNING))
         val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
         assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
-        assertEquals(listOf("environment", "descriptor", "install", "modules"), h.host.callOrder)
+        assertEquals(listOf("environment", "descriptor", "install"), h.host.callOrder)
         assertEquals(listOf("stage", "stagedArchive", "commit"), h.catalog.callOrder)
         assertEquals(stagedFile.absolutePath, h.host.lastInstallPath)
         assertTrue(h.stderr.isEmpty())
@@ -435,9 +408,9 @@ class MapleSuModuleBackendGateTest {
             h.stderr::add,
         )
 
-        // 顺序固定：descriptor -> install -> 回读 -> commit。
+        // 宿主回执确认提交后写本地 catalog，显示列表不参与安装事务。
         assertEquals(
-            listOf("environment", "descriptor", "install", "modules"),
+            listOf("environment", "descriptor", "install"),
             h.host.callOrder,
         )
         assertEquals(1, h.host.parseModuleDescriptorCalls)
@@ -448,7 +421,7 @@ class MapleSuModuleBackendGateTest {
         assertEquals(stagedFile.absolutePath, h.host.lastInstallPath)
         assertEquals(false, h.host.lastDevRunOnce)
 
-        // 回执与改前一致：宿主接受 + 列表可见 + catalog 已提交。
+        // 回执关联本次宿主提交与本地 catalog 提交。
         assertEquals(UltraPhase.CATALOG_COMMITTED, receipt.phase)
         assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
         assertEquals("catalog_committed", receipt.cleanupOutcome)
@@ -458,10 +431,13 @@ class MapleSuModuleBackendGateTest {
         assertEquals(2, h.stdout.size)
         assertTrue(h.stdout[0].startsWith("Staged $STAGED_TOKEN"))
         assertTrue(h.stdout[1].startsWith("Installed "))
-        assertEquals(2, h.journal.entries.size)
+        assertEquals(3, h.journal.entries.size)
         assertEquals(UltraOutcome.NEEDS_RECONCILIATION, h.journal.entries[0].receipt.outcome)
         assertEquals(STAGED_TOKEN, h.journal.entries[0].token)
-        assertNull(h.journal.entries[1].token)
+        assertEquals(UltraPhase.HOST_COMMITTED_CATALOG_PENDING, h.journal.entries[1].receipt.phase)
+        assertEquals(STAGED_TOKEN, h.journal.entries[1].token)
+        assertEquals(UltraPhase.CATALOG_COMMITTED, h.journal.entries[2].receipt.phase)
+        assertNull(h.journal.entries[2].token)
 
         // §4.3：两次事件 —— 门放行（UNKNOWN）+ 宿主已调用（SUCCESS）。
         val events = h.evidence.events()
@@ -475,17 +451,19 @@ class MapleSuModuleBackendGateTest {
         assertTrue(events[1].detail.contains("state=HOST_CALLED"))
         assertEquals(APK_SHA256, events[1].buildDigest)
 
-        // data 的语义内容：runState / minSdk / webUi / crossCheck。
+        // 保留宿主本次提交事实与实际 catalog 身份，不从显示列表补造运行状态。
         val installed = h.payloads.payloads.single() as UltraModuleReceiptPayload.Installed
-        assertEquals(MapleSuModRunState.RUNNING, installed.runState)
+        assertEquals("install_module", installed.native.operation)
+        assertNotNull(installed.native.data)
+        assertEquals(true, installed.native.data?.opt("installCommitted"))
         assertTrue("descriptor 没有 min_sdk_ver 时保持 null", installed.minSdk == null)
-        assertEquals(false, installed.webUi)
+        assertEquals(identity.id32, installed.catalogModuleId)
         assertTrue(installed.crossCheck.isEmpty())
+        assertEquals(0, h.host.modulesCalls)
     }
 
     @Test
-    fun aDifferentListedModuleIsNotReadAsTheInstalledOne() {
-        // 宿主接受但没有把它列出来：不能凭 install 返回值当成功（回读是唯一证据）。
+    fun aDifferentListedModuleDoesNotOverrideTheHostCommit() {
         val h = harness()
         h.host.listedAfterInstall = listOf(
             installedItem("ffffffffffffffffffffffffffffffff", "9.9.9", MapleSuModRunState.RUNNING),
@@ -496,24 +474,22 @@ class MapleSuModuleBackendGateTest {
             h.stderr::add,
         )
 
-        assertEquals(UltraPhase.HOST_ACCEPTED, receipt.phase)
-        assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
-        assertEquals("staged_kept_for_reconciliation", receipt.cleanupOutcome)
-        assertEquals(0, h.catalog.commitCalls)
+        assertEquals(UltraPhase.CATALOG_COMMITTED, receipt.phase)
+        assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
+        assertEquals(unknownIdentity().id32, receipt.moduleId)
+        assertEquals("catalog_committed", receipt.cleanupOutcome)
+        assertEquals(1, h.catalog.commitCalls)
         assertEquals(0, h.catalog.discardCalls)
-        assertEquals(
-            mapOf("listedAfterInstall" to "module absent from get_all_modules_list"),
-            receipt.unknowns,
-        )
-        assertTrue(h.stderr.single().contains("does not show it yet"))
-        // 待对账时 staged token 必须留在日志里（否则没人能找回那份字节）。
-        assertEquals(STAGED_TOKEN, h.journal.entries.last().token)
+        assertEquals(0, h.host.modulesCalls)
+        assertTrue(receipt.unknowns.isEmpty())
+        assertTrue(h.stderr.isEmpty())
+        assertNull(h.journal.entries.last().token)
     }
 
     // ------------------------------------------------------------------ (c) 宿主拒绝
 
     @Test
-    fun hostRefusalIsRecordedAsHostRefusedAndDiscardsTheStagedCopy() {
+    fun hostFailureWithoutRollbackFactsKeepsTheStagedCopy() {
         val h = harness()
         h.host.installAccepted = false
         val receipt = h.transaction.install(
@@ -523,14 +499,15 @@ class MapleSuModuleBackendGateTest {
         )
 
         assertEquals(UltraPhase.HOST_CALLED, receipt.phase)
-        assertEquals(UltraOutcome.FAILED, receipt.outcome)
+        assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
         assertEquals("MODULE_REFUSED_BY_HOST", receipt.sdkError)
-        assertEquals("staged_discarded", receipt.cleanupOutcome)
-        // 宿主拒绝之后不读列表、不提交 catalog：只丢掉 staged 副本。
-        assertEquals(listOf("stage", "stagedArchive", "discard"), h.catalog.callOrder)
-        assertEquals(1, h.catalog.discardCalls)
+        assertEquals("staged_kept_for_reconciliation", receipt.cleanupOutcome)
+        assertEquals("host_result_unverified", receipt.unknowns["installation"])
+        assertEquals(listOf("stage", "stagedArchive"), h.catalog.callOrder)
+        assertEquals(0, h.catalog.discardCalls)
         assertEquals(0, h.catalog.commitCalls)
         assertEquals(0, h.host.modulesCalls)
+        assertEquals(STAGED_TOKEN, h.journal.entries.last().token)
 
         // §4.3：HOST_REFUSED 事件必须带真实 SDK 返回码。
         val events = h.evidence.events()
@@ -545,11 +522,13 @@ class MapleSuModuleBackendGateTest {
     fun callbackDeclineNeverCommitsEvenWhenAnOlderModuleIsStillListed() {
         for (devOnce in listOf(false, true)) {
             val h = harness()
+            val operation = if (devOnce) "install_module_dev_run_once" else "install_module"
             h.host.installFailure = requireNotNull(NativeReceipt.parse(
-                """{"backend":"maplesu_ultra","operation":"install_module","ok":false,
+                """{"backend":"maplesu_ultra","operation":"$operation","ok":false,
                     "sdkError":"MAPLESU_MODULE_INSTALL_CALLBACK_DECLINED","sdkErrorCode":-1007,
                     "reason":"module requires a different kernel",
-                    "data":{"installCallbackAccepted":false}}""",
+                    "data":{"installCallbackAccepted":false,"installCommitted":false,
+                    "cleanupComplete":true,"cleanupPending":false}}""",
             ))
             h.host.listedAfterInstall = listOf(
                 installedItem(unknownIdentity().id32, "1.0", MapleSuModRunState.RUNNING),
@@ -563,6 +542,7 @@ class MapleSuModuleBackendGateTest {
             assertEquals(0, h.host.modulesCalls)
             assertEquals(0, h.catalog.commitCalls)
             assertEquals(1, h.catalog.discardCalls)
+            assertEquals("native_rollback_complete_staged_discarded", receipt.cleanupOutcome)
             assertEquals("module requires a different kernel", h.stderr.single())
         }
     }
@@ -571,8 +551,9 @@ class MapleSuModuleBackendGateTest {
     fun lostInstallWorkerReceiptKeepsThePackageAndNeverReplaysEitherMode() {
         for (devOnce in listOf(false, true)) {
             val h = harness()
+            val operation = if (devOnce) "install_module_dev_run_once" else "install_module"
             h.host.installFailure = requireNotNull(NativeReceipt.parse(
-                """{"backend":"maplesu_ultra","operation":"install_module","ok":false,
+                """{"backend":"maplesu_ultra","operation":"$operation","ok":false,
                     "sdkError":"MAPLESU_MODULE_INSTALL_INTERRUPTED","sdkErrorCode":-1005,
                     "data":{"reconciliationRequired":true}}""",
             ))
@@ -608,7 +589,9 @@ class MapleSuModuleBackendGateTest {
     @Test
     fun failedStagedCleanupIsReportedAndKeepsItsJournalToken() {
         val h = harness()
-        h.host.installAccepted = false
+        h.host.installFailure = receipt("install_module").copy(
+            ok = false, sdkError = "MAPLESU_SDK_BUSY", sdkErrorCode = -1001,
+        )
         h.catalog.discardFailure = java.io.IOException("disk error")
         val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
         assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
@@ -619,90 +602,162 @@ class MapleSuModuleBackendGateTest {
     }
 
     @Test
-    fun abnormalReadbackNeverReportsInstallOrRunOnceSuccess() {
+    fun staleAbnormalReadbackDoesNotOverrideEitherModesHostCommit() {
         for (devOnce in listOf(false, true)) {
             val h = harness()
             h.host.listedAfterInstall = listOf(installedItem(ID32, VERSION, MapleSuModRunState.ABNORMAL))
             val receipt = h.transaction.install(request(devRunOnce = devOnce), h.stdout::add, h.stderr::add)
-            assertEquals(UltraOutcome.FAILED, receipt.outcome)
+            assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
             assertEquals(UltraPhase.CATALOG_COMMITTED, receipt.phase)
             assertEquals(VERSION, receipt.installedVersion)
             assertNull(receipt.activeVersion)
             assertFalse(receipt.needsReboot)
-            assertEquals("MODULE_ABNORMAL", receipt.unknowns["runtime"])
+            assertTrue(receipt.unknowns.isEmpty())
             assertEquals(1, h.host.installModuleCalls)
-            assertEquals(1, h.catalog.commitCalls) // Keep the installed bytes available for repair/uninstall.
+            assertEquals(0, h.host.modulesCalls)
+            assertEquals(1, h.catalog.commitCalls)
             assertEquals(0, h.catalog.discardCalls)
             assertNull(h.journal.entries.last().token)
-            assertFalse(h.stdout.any { it.startsWith("Installed ") })
-            assertTrue(h.stderr.single().contains("ABNORMAL"))
+            assertTrue(h.stdout.any { it.startsWith("Installed ") })
+            assertTrue(h.stderr.isEmpty())
         }
     }
 
     @Test
-    fun abnormalInstallWithCatalogFailureKeepsReconciliationToken() {
+    fun committedStartupFailureAndCatalogFailureKeepTheirSeparateFacts() {
         val h = harness()
-        h.host.listedAfterInstall = listOf(installedItem(ID32, VERSION, MapleSuModRunState.ABNORMAL))
+        h.host.installFailure = receipt("install_module").copy(
+            ok = false, sdkError = "MODULE_ABNORMAL", sdkErrorCode = -3,
+            data = JSONObject().put("installCommitted", true).put("immediateStartupFailed", true),
+        )
         h.catalog.commitFailure = java.io.IOException("commit failed")
         val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
-        assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
+        assertEquals(UltraOutcome.PENDING_REBOOT, receipt.outcome)
         assertEquals(UltraPhase.HOST_COMMITTED_CATALOG_PENDING, receipt.phase)
+        assertEquals("MODULE_ABNORMAL", receipt.sdkError)
         assertEquals("MODULE_ABNORMAL", receipt.unknowns["runtime"])
+        assertEquals("commit failed", receipt.unknowns["catalog"])
         assertEquals(STAGED_TOKEN, h.journal.entries.last().token)
         assertEquals(0, h.catalog.discardCalls)
-        assertFalse(receipt.needsReboot)
+        assertEquals(0, h.host.modulesCalls)
+        assertTrue(receipt.needsReboot)
+        assertTrue(h.stdout.any { it.contains("diagnostic: MODULE_ABNORMAL") })
+        assertTrue(h.stderr.isEmpty())
     }
 
     @Test
-    fun previousInstalledVersionDoesNotConfirmAnUpgrade() {
+    fun previousListedVersionDoesNotReplaceTheCommittedInstallVersion() {
         val h = harness()
         h.host.listedAfterInstall = listOf(installedItem(ID32, "older-version", MapleSuModRunState.RUNNING))
         val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
-        assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
-        assertEquals("listed module version differs from requested version", receipt.unknowns["listedAfterInstall"])
-        assertEquals(0, h.catalog.commitCalls)
+        assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
+        assertEquals(VERSION, receipt.installedVersion)
+        assertTrue(receipt.unknowns.isEmpty())
+        assertEquals(0, h.host.modulesCalls)
+        assertEquals(1, h.catalog.commitCalls)
         assertEquals(0, h.catalog.discardCalls)
-        assertEquals(STAGED_TOKEN, h.journal.entries.last().token)
+        assertNull(h.journal.entries.last().token)
     }
 
     @Test
-    fun duplicateTargetRowsDoNotConfirmAnInstall() {
+    fun duplicateDisplayedRowsDoNotOverrideTheHostCommit() {
         val h = harness()
         h.host.listedAfterInstall = listOf(
             installedItem(ID32, VERSION, MapleSuModRunState.RUNNING),
             installedItem(ID32, VERSION, MapleSuModRunState.NOT_RUNNING),
         )
         val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
-        assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
-        assertEquals("module list contains duplicate target rows", receipt.unknowns["listedAfterInstall"])
-        assertEquals(0, h.catalog.commitCalls)
-        assertEquals(STAGED_TOKEN, h.journal.entries.last().token)
+        assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
+        assertTrue(receipt.unknowns.isEmpty())
+        assertEquals(0, h.host.modulesCalls)
+        assertEquals(1, h.catalog.commitCalls)
+        assertNull(h.journal.entries.last().token)
     }
 
     @Test
-    fun aNullListedIdDoesNotMatchAnAbsentDescriptorId() {
+    fun aNullDisplayedIdDoesNotReplaceTheConfirmedPackageIdentity() {
         val h = harness()
         h.host.listedAfterInstall = listOf(
             installedItem(ID32, VERSION, MapleSuModRunState.RUNNING).apply { id32 = null },
         )
         val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
+        assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
+        assertEquals(ID32, receipt.moduleId)
+        assertEquals(0, h.host.modulesCalls)
+        assertEquals(1, h.catalog.commitCalls)
+        assertNull(h.journal.entries.last().token)
+    }
+
+    @Test
+    fun independentListFailureDoesNotReplayOrInvalidateTheHostCommit() {
+        val h = harness()
+        h.host.modulesFailure = java.io.IOException("read failed")
+        val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
+        assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
+        assertTrue(receipt.unknowns.isEmpty())
+        assertEquals(1, h.host.installModuleCalls)
+        assertEquals(0, h.host.modulesCalls)
+        assertEquals(1, h.catalog.commitCalls)
+        assertEquals(0, h.catalog.discardCalls)
+        assertNull(h.journal.entries.last().token)
+    }
+
+    @Test
+    fun explicitUncommittedReceiptIsNotReplacedByAVisibleOldModule() {
+        val h = harness()
+        h.host.installFailure = receipt("install_module").copy(
+            operationCompleted = true,
+            data = JSONObject().put("installCommitted", false),
+        )
+        h.host.listedAfterInstall = listOf(installedItem(ID32, VERSION, MapleSuModRunState.RUNNING))
+        val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
         assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
+        assertEquals("host_result_unverified", receipt.unknowns["installation"])
+        assertEquals(0, h.host.modulesCalls)
         assertEquals(0, h.catalog.commitCalls)
+        assertEquals(0, h.catalog.discardCalls)
         assertEquals(STAGED_TOKEN, h.journal.entries.last().token)
     }
 
     @Test
-    fun readbackExceptionProducesAReconciliationReceiptWithoutRetryingTheInstall() {
+    fun anotherOperationsCommitDoesNotConfirmThisInstall() {
         val h = harness()
-        h.host.modulesFailure = java.io.IOException("read failed")
+        h.host.installFailure = receipt("uninstall_module").copy(
+            data = JSONObject().put("installCommitted", true),
+        )
         val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
         assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
-        assertEquals("module list read failed", receipt.unknowns["listedAfterInstall"])
-        assertEquals(1, h.host.installModuleCalls)
-        assertEquals(1, h.host.modulesCalls)
         assertEquals(0, h.catalog.commitCalls)
         assertEquals(0, h.catalog.discardCalls)
         assertEquals(STAGED_TOKEN, h.journal.entries.last().token)
+    }
+
+    @Test
+    fun successfulLegacyInstallReceiptKeepsItsExistingCommitMeaning() {
+        val h = harness()
+        h.host.installFailure = receipt("install_module")
+        val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
+        assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
+        assertEquals(UltraPhase.CATALOG_COMMITTED, receipt.phase)
+        assertEquals(1, h.catalog.commitCalls)
+        assertEquals(0, h.host.modulesCalls)
+        assertNull(h.journal.entries.last().token)
+    }
+
+    @Test
+    fun knownUnsubmittedInstallDiscardsOnlyItsStagedCopy() {
+        val h = harness()
+        h.host.installFailure = receipt("install_module").copy(
+            ok = false, sdkError = "MAPLESU_SDK_BUSY", sdkErrorCode = -1001,
+        )
+        val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
+        assertEquals(UltraOutcome.FAILED, receipt.outcome)
+        assertEquals("MAPLESU_SDK_BUSY", receipt.sdkError)
+        assertEquals("staged_discarded", receipt.cleanupOutcome)
+        assertEquals(1, h.host.installModuleCalls)
+        assertEquals(1, h.catalog.discardCalls)
+        assertEquals(0, h.catalog.commitCalls)
+        assertNull(h.journal.entries.last().token)
     }
 
     // ------------------------------------------------------------------ (d) stage 失败
@@ -749,7 +804,7 @@ class MapleSuModuleBackendGateTest {
 
         assertEquals(1, h.catalog.stageCalls)
         assertEquals(1, h.catalog.commitCalls)
-        assertEquals(listOf("environment", "descriptor", "install", "modules"), h.host.callOrder)
+        assertEquals(listOf("environment", "descriptor", "install"), h.host.callOrder)
     }
 
     @Test
@@ -760,10 +815,11 @@ class MapleSuModuleBackendGateTest {
         val receipt = h.transaction.install(request(), h.stdout::add, h.stderr::add)
 
         assertEquals(UltraPhase.HOST_CALLED, receipt.phase)
-        assertEquals(UltraOutcome.FAILED, receipt.outcome)
+        assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
         assertEquals("MODULE_REFUSED_BY_HOST", receipt.sdkError)
         assertEquals(listOf("environment", "descriptor", "install"), h.host.callOrder)
-        assertEquals(1, h.catalog.discardCalls)
+        assertEquals(0, h.catalog.discardCalls)
+        assertEquals(STAGED_TOKEN, h.journal.entries.last().token)
         assertEquals(listOf("MODULE_REFUSED_BY_HOST"), h.stderr)
     }
 
@@ -784,7 +840,7 @@ class MapleSuModuleBackendGateTest {
     fun devRunOnceUsesTheUserSelectedInstallTransaction() {
         val h = harness()
         val receipt = h.transaction.install(request(devRunOnce = true, action = UltraModuleAction.DEV_RUN_ONCE), h.stdout::add, h.stderr::add)
-        assertEquals(UltraOutcome.NEEDS_RECONCILIATION, receipt.outcome)
+        assertEquals(UltraOutcome.COMPLETED, receipt.outcome)
         assertEquals(1, h.catalog.stageCalls)
         assertEquals(1, h.host.installModuleCalls)
         assertEquals(true, h.host.lastDevRunOnce)

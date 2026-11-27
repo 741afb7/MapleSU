@@ -1,6 +1,7 @@
 // su allowlist implementation.
 //
 #include "kernel_module_kit_umbrella.h"
+#include "maplesu_storage_private.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -17,9 +18,6 @@
 #include <sys/xattr.h>
 #include <unistd.h>
 
-// 私有运行时 API：当前模块的 ROOT 密钥（符号名带 hash 后缀，不可改名）。
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(void);
-
 // 私有运行时文件接口（由本 SDK 的私有 DAC / 白名单成员提供）：
 //   * chmod 只接受运行时校验通过的文件，并把权限收紧到受限默认值；
 //   * allowlist_create 以独占方式创建空白名单文件；
@@ -32,9 +30,6 @@ extern "C" bool maplesu_private_allowlist_save(const std::string* path,
 namespace {
 
 // 文件名常量
-constexpr char kSuAllowlistFile[] = "/su_allowlist.txt";
-constexpr std::size_t kRootKeyPrefixLen = 16;
-constexpr std::size_t kPathBufSize = 1024;
 
 // 去掉首尾空白后拷贝。
 //
@@ -94,7 +89,7 @@ public:
     // 从磁盘装载（不存在则建空文件）。
     bool load();
 
-    // "/data/<root_key 前缀>/su_allowlist.txt"
+    // Current deployment system directory plus the private authorization file.
     std::string get_su_allowlist_path();
 
     // 返回去重后的当前表（不改动成员）。
@@ -120,13 +115,9 @@ private:
 SuAllowList::SuAllowList() = default;
 
 std::string SuAllowList::get_su_allowlist_path() {
-    const std::string root_key = __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-    const std::string key_prefix = root_key.substr(0, kRootKeyPrefixLen);
-    const std::string dir_name = key_prefix + key_prefix[0];
-
-    char dir_buf[kPathBufSize] = {0};
-    snprintf(dir_buf, sizeof(dir_buf), "/data/%s/", dir_name.c_str());
-    return std::string(dir_buf) + kSuAllowlistFile;
+    std::string directory;
+    if (is_failed(maplesu::storage::current_system_directory(directory))) return {};
+    return directory + "su_allowlist.txt";
 }
 
 std::vector<std::string> SuAllowList::filter_duplicates(const std::vector<std::string>& apps) {
@@ -151,6 +142,7 @@ std::vector<std::string> SuAllowList::get_apps() {
 
 bool SuAllowList::load() {
     path_ = get_su_allowlist_path();
+    if (path_.empty()) return false;
     apps_.clear();
 
     std::error_code ec;

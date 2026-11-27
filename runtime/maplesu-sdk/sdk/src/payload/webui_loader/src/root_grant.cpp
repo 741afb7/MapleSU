@@ -1,41 +1,23 @@
-// webui_loader -- root handshake implementation.
-//
+// The SDK's worker acquires authority before exec; the loader verifies it.
 #include "root_grant.h"
-
-#include <cstring>
-
+#include "module_err_def.h"
+#include "maplesu/compat/native_module_abi.h"
+#include <string>
 #include <sys/syscall.h>
-#include <sys/types.h>
 #include <unistd.h>
 
-#include "module_err_def.h"
-
 namespace maplesu::payload::webui {
-namespace {
-
-constexpr long long as_code(KModErr err) { return static_cast<long long>(err); }
-
-bool key_is_well_formed(const char* root_key) {
-    if (root_key == nullptr) return false;
-    const size_t length = strnlen(root_key, 1024);
-    return length >= 16 && length < 1024;
+long long acquire_root() {
+    return static_cast<long long>(getuid() == 0 && geteuid() == 0 ? KModErr::OK : KModErr::ERR_MODULE_NO_ROOT);
 }
-
-}  // namespace
-
-long long acquire_root(const char* root_key) {
-    if (!key_is_well_formed(root_key)) return as_code(KModErr::ERR_MODULE_ROOT_KEY);
-    if (getuid() == 0 && geteuid() == 0) return as_code(KModErr::OK);
-
-    // The credential handshake: the kernel grants root to an exec attempt whose
-    // path is the root key with its final character removed.  The path lookup
-    // itself is expected to fail; what matters is the identity afterwards.
-    std::string exec_path(root_key);
-    exec_path.pop_back();
+long long acquire_legacy_root(const char* credential) {
+    if (!maplesu::compat::native_module::valid_legacy_credential(credential))
+        return static_cast<long long>(KModErr::ERR_MODULE_ROOT_KEY);
+    if (getuid() == 0 && geteuid() == 0) return static_cast<long long>(KModErr::OK);
+    std::string exec_path(credential, 47);
     syscall(__NR_execve, exec_path.c_str(), nullptr, nullptr);
-
-    if (getuid() != 0 || geteuid() != 0) return as_code(KModErr::ERR_MODULE_NO_ROOT);
-    return as_code(KModErr::OK);
+    volatile char* bytes = exec_path.data();
+    for (size_t i = 0; i < exec_path.size(); ++i) bytes[i] = 0;
+    return acquire_root();
 }
-
-}  // namespace maplesu::payload::webui
+}

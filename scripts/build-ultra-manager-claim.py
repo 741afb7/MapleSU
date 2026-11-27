@@ -2,12 +2,14 @@
 from argparse import ArgumentParser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import gzip
+import lzma
 import hashlib
 import json
 import re
 import shutil
 import subprocess
+import sys
+import claim_current_sources as current_sources
 import time
 import uuid
 
@@ -21,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "runtime/ultra/identity/kernel"
 KERNELS = ["android12-5.10", "android13-5.15", "android14-6.1",
            "android15-6.6", "android16-6.12", "android17-6.18"]
+CURRENT_SOURCE_SELECTION = None
 MODULE_ROUTE_BINDING = None
 MODULE_ROUTE_INPUTS = None
 KERNEL_618_SOURCE = None
@@ -131,9 +134,9 @@ P2_ROUTE_DELTA = ROOT / "docs/parallel/2026-11-17/evidence/mainline-integration/
 P2_ROUTE_DELTA_SHA256 = "887e2deb4661286aad759620f496300e4d13c7b922bc159f03dd4825440a72a5"
 SOURCE_MIGRATION = ROOT / ".tmp/mainline-source-integration/current-intake-preparation-20261118/naming-migration/FINAL-SOURCE-MAP.json"
 SOURCE_MIGRATION_SHA256 = "d766da5fc7c5e6ad3687735fcaf7604fadfc51562c7dc0d9de6b6afc44add496"
-BUILD_TOOLS = [Path(__file__), ROOT / "scripts/policy_claim_routes.py", ROOT / "scripts/policy_object_debug.py", ROOT / "scripts/apply-ultra-kprobe-text-owner.py", ROOT / "scripts/policy_btf_abi.py",
+BUILD_TOOLS = [Path(__file__), ROOT / "scripts/claim_current_sources.py", ROOT / "scripts/policy_claim_routes.py", ROOT / "scripts/policy_object_debug.py", ROOT / "scripts/apply-ultra-kprobe-text-owner.py", ROOT / "scripts/policy_btf_abi.py",
                ROOT / "scripts/policy-kernel-clang.py", ROOT / "scripts/policy_reference_abi.py",
-               ROOT / "scripts/policy_payload_publish.py",
+               ROOT / "scripts/policy_payload_publish.py", ROOT / "scripts/policy_path_mount.py",
                ROOT / "native-inputs/policy/android17-6.18/source/seccomp.c",
                ROOT / "native-inputs/policy/android17-6.18/source/source-receipt.json",
                ROOT / "scripts/policy_reference_image.py", ROOT / "scripts/policy_payload_image_target.py",
@@ -444,7 +447,8 @@ def identity(path):
 object_names = ("manager_owner_watch", "manager_management", "manager_management_facts", "manager_callback_types", "manager_resident_host", "manager_uid_gateway", "manager_uid_snapshot", "manager_uid_facts")
 if json.loads((target / "build-inputs.json").read_text())["suSourceSelection"] is not None:
     su_selection = json.loads((target / "build-inputs.json").read_text())["suSourceSelection"]
-    if su_selection["schema"] == "maplesu-p2-su-component-source-selection/1":
+    if su_selection["schema"] in ("maplesu-p2-su-component-source-selection/1",
+                                  "maplesu-claim-current-source-selection/1"):
         object_names += ("su_install_registry", "su_profile_apply", "su_profile_namespace", "su_profile_execution", "su_profile_resolve", "manager_su_component_facts", "manager_su_profile_facts", "manager_su_namespace_facts", "manager_su_component_callback_types")
     else:
         object_names += ("su_install_registry", "manager_su_facts", "manager_su_callback_types")
@@ -603,6 +607,8 @@ def r10_source_evolution(r09_rows, route_selected):
 
 
 def upstream_source_freeze():
+    if CURRENT_SOURCE_SELECTION is not None:
+        return current_sources.public_selection(sys.modules[__name__])
     for path, expected in ((SOURCE_FREEZE, SOURCE_FREEZE_SHA256),
                            (PARENT_FREEZE, PARENT_FREEZE_SHA256), (BASE_FREEZE, BASE_FREEZE_SHA256),
                            (PUBLICATION_CONTACT, PUBLICATION_CONTACT_SHA256),
@@ -1121,7 +1127,7 @@ def claim_release_version():
 
 
 def write_runtime_manifest(assets, out, inputs, support, results, module_routes=None):
-    """Package every original ABI fact using bounded selected-family gzip chunks."""
+    """Package every original ABI fact using bounded selected-family XZ chunks."""
     payloads = {}
     for row in results:
         kernel, payload = row["kernel"], row["payload"]
@@ -1129,14 +1135,14 @@ def write_runtime_manifest(assets, out, inputs, support, results, module_routes=
             payload = dict(payload, support={"bootstrap": dict(row["retirementSupport"]["bootstrap"],
                 path=kernel + "/bootstrap.bin")})
         decoded = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-        compressed = gzip.compress(decoded, compresslevel=9, mtime=0)
+        compressed = lzma.compress(decoded, format=lzma.FORMAT_XZ, preset=6)
         if not 0 < len(decoded) <= 32 * 1048576 or not 0 < len(compressed) <= 4 * 1048576:
             raise ValueError("Runtime payload metadata exceeds its bounded encoding: " + kernel)
         # This complete JSON is build evidence; it is byte-identical to inflation.
         (out / kernel / "runtime-payload-metadata.full.json").write_bytes(decoded)
         chunks = []
         for index, start in enumerate(range(0, len(compressed), 524288)):
-            path = f"{kernel}/metadata-{index:03d}.json.gz.part"
+            path = f"{kernel}/metadata-{index:03d}.json.xz.part"
             if not path.startswith(kernel + "/") or "\\" in path or \
                     Path(path).is_absolute() or any(part in ("", ".", "..") for part in path.split("/")):
                 raise ValueError("Runtime metadata chunk path is invalid")
@@ -1146,9 +1152,9 @@ def write_runtime_manifest(assets, out, inputs, support, results, module_routes=
         if not 0 < len(chunks) <= 8 or len({row["path"] for row in chunks}) != len(chunks):
             raise ValueError("Runtime metadata chunk count is invalid")
         payloads[kernel] = dict(bytes=payload["bytes"], sha256=payload["sha256"],
-            metadataEncoding="gzip-chunks-v1", decodedBytes=len(decoded),
-            decodedSha256=hashlib.sha256(decoded).hexdigest(), gzipBytes=len(compressed),
-            gzipSha256=hashlib.sha256(compressed).hexdigest(), chunks=chunks)
+            metadataEncoding="xz-chunks-v1", decodedBytes=len(decoded),
+            decodedSha256=hashlib.sha256(decoded).hexdigest(), xzBytes=len(compressed),
+            xzSha256=hashlib.sha256(compressed).hexdigest(), chunks=chunks)
     variants = {row["kernel"]: dict(row["retirementSupport"]["bootstrap"],
         path=row["kernel"] + "/bootstrap.bin") for row in results if "retirementSupport" in row}
     if variants:
@@ -3841,6 +3847,7 @@ def collect_su_namespace_abi(target, reference, policy, objects, record):
                 raise ValueError("SU namespace compiled/reference BTF mismatch: " + key)
         if native["compiledLayouts"]["ptRegs"]["members"]["regs"]["bytes"] // 31 != layouts[11]:
             raise ValueError("SU namespace actual ARM64 register argument width mismatch")
+        data_signatures = {name: reference.variable(name) for name in SU_NAMESPACE_DATA}
         evidence_path = target / "reference-function-markers.json"
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
         source = json.loads((target / "reference-source.json").read_text(encoding="utf-8"))
@@ -3865,7 +3872,7 @@ def collect_su_namespace_abi(target, reference, policy, objects, record):
                 item["verified"] = True
         for index, name in enumerate(SU_NAMESPACE_DATA):
             declared = su_namespace_object_declaration(declarations, "msu_su_namespace_data_" + str(index))
-            signature = reference.variable(name)
+            signature = data_signatures[name]
             marker = evidence.get("suDataMarkers", {}).get(name, {})
             item = native["dataAbi"][name] = {"signature": signature, "declarationSignature": declared, "marker": marker, "verified": False}
             if declared != "*" + signature or not marker.get("available") or marker.get("name") != name:
@@ -3877,6 +3884,12 @@ def collect_su_namespace_abi(target, reference, policy, objects, record):
         native["metadataComplete"] = True
     except (OSError, ValueError, KeyError, IndexError) as error:
         native["missing"].append(type(error).__name__ + ": " + str(error))
+
+
+def su_component_required_entrypoints():
+    local_only = current_sources.LOCAL_ONLY_SU_ENTRYPOINTS if CURRENT_SOURCE_SELECTION is not None else {}
+    return {obj: [name for name in names if name not in local_only]
+            for obj, names in SU_COMPONENT_FUNCTIONS.items()}
 
 
 def collect_su_component_abi(target, payload, reference):
@@ -3985,7 +3998,11 @@ def collect_su_component_abi(target, payload, reference):
                     if at < 4 or int.from_bytes(section.data()[at - 4:at], "little") != item["typeid"]:
                         raise ValueError("SU component final entry KCFI prefix mismatch: " + name)
                     entry.update(prefixOffset=symbol["st_value"] - 4, prefixWord=item["typeid"], typeid=item["typeid"], prefixVerified=True)
-        record["entrypointsComplete"] = all(item["available"] for item in record["entrypoints"].values())
+        record["requiredEntrypoints"] = su_component_required_entrypoints()
+        if CURRENT_SOURCE_SELECTION is not None:
+            record["localOnlyEntrypoints"] = dict(current_sources.LOCAL_ONLY_SU_ENTRYPOINTS)
+        record["entrypointsComplete"] = all(record["entrypoints"][name]["available"]
+            for names in record["requiredEntrypoints"].values() for name in names)
         record["kernelMetadataComplete"] = record["nativeNamespace"]["metadataComplete"]
         if not record["entrypointsComplete"]:
             record["missing"].append("Actual native factory/consumer roots are incomplete")
@@ -4637,6 +4654,23 @@ if len(ucounts) > 1 or len(helper) > 1 or bool(re.search(r"\bucounts\b", cred_bo
     raise RuntimeError("unsupported actual cred ucounts field/helper contract")
 macros["MSU_MANAGEMENT_CRED_UCOUNTS"] = int(bool(ucounts))
 kernel_root = Path(sys.argv[1]).parents[2]
+path_mount_tools = runpy.run_path("/source/scripts/policy_path_mount.py")
+path_mount_header = kernel_root / "fs/internal.h"
+if path_mount_header.is_file():
+    path_mount_source, path_mount_method = path_mount_header, "actual-kernel-private-header"
+    path_mount_bytes = path_mount_source.read_bytes()
+    path_mount_const = path_mount_tools["path_mount_path_const"](path_mount_bytes)
+else:
+    # Sparse source trees must use the explicit, source-bound actual BTF input.
+    # Missing type evidence is an error; there is no mutable/version fallback.
+    path_mount_source, path_mount_method = Path(sys.argv[6]), "actual-reference-BTF-const-chain"
+    path_mount_bytes = path_mount_source.read_bytes()
+    sys.path.insert(0, "/source/scripts")
+    path_mount_const = path_mount_tools["path_mount_path_const_btf"](path_mount_bytes)
+macros["MSU_PATH_MOUNT_PATH_CONST"] = path_mount_const
+path_mount_api = {"method": path_mount_method, "pathConst": path_mount_const,
+    "source": {"path": str(path_mount_source), "bytes": len(path_mount_bytes),
+        "sha256": hashlib.sha256(path_mount_bytes).hexdigest()}}
 native_header = kernel_root / "include/linux/kprobe_text_owner.h"
 native_text = {"complete": False, "reason": "Selected kernel has no native text-owner producer"}
 if native_header.exists():
@@ -4706,7 +4740,8 @@ if seccomp_enabled:
 macros["MSU_TASK_SECCOMP_RELEASE_LOCKS_TASK"] = int(seccomp_api["locksTask"])
 
 destination = Path(sys.argv[2])
-destination.write_text("".join("#define %s %d\n" % row for row in macros.items()), newline="\n")
+destination.write_text("".join("#define %s %d\n" % row for row in macros.items()) +
+    path_mount_tools["path_mount_qualifier_define"](path_mount_const), newline="\n")
 config = Path(sys.argv[3]).read_bytes()
 cfi_names = ("CONFIG_CFI_CLANG", "CONFIG_CFI", "CONFIG_CFI_PERMISSIVE",
              "CONFIG_CFI_ICALL_NORMALIZE_INTEGERS", "CONFIG_LTO_CLANG", "CONFIG_LTO_NONE")
@@ -4731,6 +4766,7 @@ for line in config.decode("utf-8").splitlines():
         management_config[line[2:-11]] = "n"
 destination.with_suffix(".json").write_text(json.dumps({
     "source": sys.argv[1], "sourceSha256": hashlib.sha256(header).hexdigest(),
+    "pathMountApi": path_mount_api,
     "macros": macros, "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
     "kernelConfigPath": sys.argv[3], "kernelConfigSha256": hashlib.sha256(config).hexdigest(),
     "cfiConfig": cfi_config,
@@ -4773,8 +4809,9 @@ destination.with_suffix(".json").write_text(json.dumps({
             f"pahole -J /output/{kernel}/manager_su_callback_types.o\n"
     compiler_environment = ("export LD_LIBRARY_PATH=/kernel-toolchain/lib/x86_64-linux-gnu:/kernel-toolchain/lib/llvm-22/lib\n"
         if kernel == "android17-6.18" and KERNEL_618_TOOLCHAIN is not None else "")
+    path_mount_btf = "/source/native-inputs/policy/android17-6.18/vmlinux.btf" if kernel == "android17-6.18" else "/dev/null"
     script = f"""set -eu
-{compiler_environment}python3 /output/{kernel}/configure-layout.py {fs_header} /output/{kernel}/msu_resolver_build_config.h {kernel_config} /source/native-inputs/policy/android17-6.18/source/seccomp.c /source/native-inputs/policy/android17-6.18/source/source-receipt.json
+{compiler_environment}python3 /output/{kernel}/configure-layout.py {fs_header} /output/{kernel}/msu_resolver_build_config.h {kernel_config} /source/native-inputs/policy/android17-6.18/source/seccomp.c /source/native-inputs/policy/android17-6.18/source/source-receipt.json {path_mount_btf}
 {make} -j2 msu_manager_claim.o
 {make} -j2 manager_management_facts.o manager_uid_facts.o
 {core_build_steps}{su_build_steps}pahole -J /output/{kernel}/manager_management.o
@@ -5329,6 +5366,10 @@ def host_deployment_selection_inputs():
 
 
 def host_deployment_public_selection():
+    if CURRENT_SOURCE_SELECTION is not None:
+        return dict(current_sources.public_selection(sys.modules[__name__]),
+            runtimeChannel=HOST_DEPLOYMENT_SELECTION["runtimeChannel"],
+            runtimeObjects=list(HOST_RUNTIME_OBJECTS))
     item = HOST_DEPLOYMENT_SELECTION
     return {"schema": "maplesu-host-deployment-source-evolution/1",
         "identity": item["identity"], "ownerCandidate": item["ownerCandidate"],
@@ -5653,6 +5694,8 @@ def core_runtime_selection_inputs():
 
 
 def core_runtime_public_selection():
+    if CURRENT_SOURCE_SELECTION is not None:
+        return current_sources.public_selection(sys.modules[__name__])
     if CORE_RUNTIME_SELECTION is None:
         return None
     item = CORE_RUNTIME_SELECTION
@@ -5889,7 +5932,7 @@ TASK_PROFILE_CALLERS = {
     "msu_task_profile_apply_current": ("su_profile_execution",),
 }
 TASK_PROFILE_PROBE = "manager_task_profile_types"
-TASK_PROFILE_MISSING = ("slot63", "rcu", "bitops", "cfi", "syscallTracepoint", "cloneExec")
+TASK_PROFILE_MISSING = ("slot63", "rcu", "bitops", "cfi", "syscallTracepoint")
 TASK_PROFILE_SELECTION = None
 TASK_PROFILE_TRACE_APIS = ("msu_task_profile_trace_bind", "msu_task_profile_trace_open",
     "msu_task_profile_trace_close", "msu_task_profile_trace_ready")
@@ -6336,7 +6379,7 @@ def collect_task_profile_implementation(target, payload, record, policy):
         targetQualified=False, deviceQualified=False, qualificationStage="per-input-image-binding",
         sourceSelectionIdentity=record["sourceSelectionIdentity"],
         sourceSuccessor=TASK_PROFILE_SELECTION,
-        targetProofSchema="maplesu-task-profile-target-proof/2",
+        targetProofSchema="maplesu-task-profile-target-proof/3",
         slot63Contract="fixed-kernelsu-bit63-layout-compatibility",
         sourceSuccessorIdentity=TASK_PROFILE_SELECTION["identity"] if TASK_PROFILE_SELECTION else None,
         objects={}, functions={}, sourceContracts={}, relocations={})
@@ -6444,7 +6487,7 @@ def collect_task_profile_implementation(target, payload, record, policy):
     binding["targetProofSchema"] = result["targetProofSchema"]
     binding["slot63Contract"] = result["slot63Contract"]
     binding["proofBits"] = {name: 1 << index for index, name in enumerate(TASK_PROFILE_MISSING)}
-    binding["requiredProofMask"] = 0x3f
+    binding["requiredProofMask"] = 0x1f
     binding["initiallyUnbound"] = True
     marker = result["markerTargetBinding"] = task_profile_implementation_data(target,
         "msu_task_profile_marker_target", ".msu.task_profile.marker-target", 112, writable=True)
@@ -6773,7 +6816,7 @@ RUNTIME_SU_CURRENT_SHA256 = {
     "su_profile_execution.c": "2452c98074edad9d00e6328c7c61233dbb1f4f6fcdb3a545baf5abce36234426",
     "su_profile_execution.h": "de1b2da01000bac3435abd9dfee9151d30057d3f98cbb35df9623a2ce927ed3a",
     "su_profile_namespace.h": "a6aad26cd4fa0f92f98ca7dfc22b25d7ed58edc854eff6606d283a5a1f9d3a8f",
-    "su_profile_namespace.c": "c03abe93caf54d3e13d1eddde3e3e62424234b53402b4f1029ba420b2990d3b1",
+    "su_profile_namespace.c": "b71314beed73a90141123f6f36a4f080eaf42c475a7fee82495169cce83a331b",
 }
 RUNTIME_ADDITIONAL_OBJECTS = ("manager_early_fixed", "manager_early_oem", "manager_early_root",
     "manager_early_selinux", "manager_early_runtime_factory", "manager_early_root_backend",
@@ -7452,6 +7495,8 @@ _runtime_parent_core_source_evolution = core_source_evolution
 
 
 def core_public_selection():
+    if CURRENT_SOURCE_SELECTION is not None:
+        return current_sources.public_selection(sys.modules[__name__])
     result = _runtime_parent_core_public_selection()
     if RUNTIME_LAYOUT_SELECTION is not None:
         result["runtimeLayoutSourceSelection"] = RUNTIME_LAYOUT_SELECTION["identity"]
@@ -7459,6 +7504,8 @@ def core_public_selection():
 
 
 def core_source_evolution():
+    if CURRENT_SOURCE_SELECTION is not None:
+        return current_sources.source_evolution(sys.modules[__name__])
     result = _runtime_parent_core_source_evolution()
     if RUNTIME_LAYOUT_SELECTION is not None:
         replacements = {row["logicalPath"]: row for row in RUNTIME_LAYOUT_SELECTION["files"]}
@@ -7527,10 +7574,30 @@ def main():
     parser.add_argument("--host-retirement-source-selection-sha256")
     parser.add_argument("--runtime-layout-source-selection", type=Path)
     parser.add_argument("--runtime-layout-source-selection-sha256")
+    parser.add_argument("--freeze-current-sources", type=Path,
+                        help="Freeze current project claim sources and tools; perform no build")
+    parser.add_argument("--current-source-selection", type=Path,
+                        help="Build only the exact current-source generation, without historical overlays")
+    parser.add_argument("--current-source-selection-sha256")
     parser.add_argument("--kernel-source-618", type=Path)
     parser.add_argument("--kernel-objtree-618", type=Path)
     parser.add_argument("--kernel-toolchain-618", type=Path)
     args = parser.parse_args()
+    if args.freeze_current_sources:
+        if args.current_source_selection or args.assets or args.publish_existing or args.reference_abi_only:
+            parser.error("Current source freeze is a separate source-only operation")
+        print(json.dumps(current_sources.freeze_current_sources(sys.modules[__name__], args.freeze_current_sources)))
+        return 0
+    if bool(args.current_source_selection) != bool(args.current_source_selection_sha256):
+        parser.error("Current source selection path and exact SHA256 must be supplied together")
+    if args.current_source_selection:
+        historical = [value for key, value in vars(args).items()
+                      if (key.endswith("source_selection") and key != "current_source_selection")
+                      or key == "source_corrections"]
+        if any(historical):
+            parser.error("Current source selection excludes historical overlays")
+        current_sources.select_current_sources(sys.modules[__name__], args.current_source_selection,
+                                               args.current_source_selection_sha256)
     custom_618 = (args.kernel_source_618, args.kernel_objtree_618, args.kernel_toolchain_618)
     if any(custom_618):
         if not all(item is not None and item.is_dir() for item in custom_618):
@@ -7620,21 +7687,25 @@ def main():
         (out / "reference-abi-results.json").write_text(
             json.dumps(references, indent=2) + "\n", newline="\n")
         return 0 if all(r["complete"] for r in references.values()) else 1
-    selection = upstream_source_freeze()
-    selected_inputs = [core_baseline_input(row["newPath"], ROOT / row["newPath"])
-                       for row in selection["sourceMigration"]["selectedInputs"]]
-    su_receipts = su_selected_receipts()
-    before = {str(s.relative_to(ROOT)): sha(s) for s in [ROOT / "manager/build.gradle.kts", *SOURCES, *PUBLICATION_GATE_INPUTS, *SUPPORT_SOURCES, *selected_inputs,
-              *su_source_paths(), *su_receipts, *core_selection_inputs(), *host_deployment_selection_inputs(),
-              *source_correction_inputs(), PROTOCOL, FRAME, *BUILD_TOOLS,
-              *su_source_paths(), *su_receipts, *core_selection_inputs(), *host_deployment_selection_inputs(),
-              *core_runtime_selection_inputs(), *host_durable_selection_inputs(), *host_initialization_inputs(), *task_profile_selection_inputs(),
-              *core_current_task_inputs(), *host_publication_inputs(), *host_sync_inputs(), *host_retirement_inputs(),
-              *runtime_layout_selection_inputs(), PROTOCOL, FRAME, *BUILD_TOOLS, *RAW_REFERENCE_INPUTS,
-              SOURCE_FREEZE, PARENT_FREEZE, BASE_FREEZE, SOURCE_CHANGESET, PARENT_CHANGESET, BASE_CHANGESET,
-              PUBLICATION_CONTACT, P2_HOST_DELTA, P2_ROUTE_DELTA, R09_FREEZE, R09_CHANGESET,
-              R09_BASELINE, R10_FREEZE, R10_CHANGESET, R10_BASELINE, R10_ADOPTION, SOURCE_MIGRATION,
-              BASE_FREEZE.with_name("BASELINE.json")]}
+    if CURRENT_SOURCE_SELECTION is not None:
+        before = {str(item.relative_to(ROOT)): sha(item)
+                  for item in current_sources.build_inputs(sys.modules[__name__])}
+    else:
+        selection = upstream_source_freeze()
+        selected_inputs = [core_baseline_input(row["newPath"], ROOT / row["newPath"])
+                           for row in selection["sourceMigration"]["selectedInputs"]]
+        su_receipts = su_selected_receipts()
+        before = {str(s.relative_to(ROOT)): sha(s) for s in [ROOT / "manager/build.gradle.kts", *SOURCES, *PUBLICATION_GATE_INPUTS, *SUPPORT_SOURCES, *selected_inputs,
+                  *su_source_paths(), *su_receipts, *core_selection_inputs(), *host_deployment_selection_inputs(),
+                  *source_correction_inputs(), PROTOCOL, FRAME, *BUILD_TOOLS,
+                  *su_source_paths(), *su_receipts, *core_selection_inputs(), *host_deployment_selection_inputs(),
+                  *core_runtime_selection_inputs(), *host_durable_selection_inputs(), *host_initialization_inputs(), *task_profile_selection_inputs(),
+                  *core_current_task_inputs(), *host_publication_inputs(), *host_sync_inputs(), *host_retirement_inputs(),
+                  *runtime_layout_selection_inputs(), PROTOCOL, FRAME, *BUILD_TOOLS, *RAW_REFERENCE_INPUTS,
+                  SOURCE_FREEZE, PARENT_FREEZE, BASE_FREEZE, SOURCE_CHANGESET, PARENT_CHANGESET, BASE_CHANGESET,
+                  PUBLICATION_CONTACT, P2_HOST_DELTA, P2_ROUTE_DELTA, R09_FREEZE, R09_CHANGESET,
+                  R09_BASELINE, R10_FREEZE, R10_CHANGESET, R10_BASELINE, R10_ADOPTION, SOURCE_MIGRATION,
+                  BASE_FREEZE.with_name("BASELINE.json")]}
     if args.publish_existing:
         from policy_payload_publish import publish_existing
         return publish_existing(globals(), out, args.assets.resolve(), before)

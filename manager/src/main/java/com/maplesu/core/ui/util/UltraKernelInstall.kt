@@ -11,15 +11,12 @@ import dev.maplesu.manager.installer.InstallerSnapshot
 import dev.maplesu.manager.installer.BaselineProvisioner
 import dev.maplesu.manager.installer.BaselineProvisionOutcome
 import dev.maplesu.manager.installer.productionBaselineProvisioner
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
-import dev.maplesu.manager.ultrakernel.UltraKernelCredentialRequiredException
 import dev.maplesu.manager.ultrakernel.UltraKernelFlow
 import dev.maplesu.manager.ultrakernel.UltraKernelGenerateCodes
 import dev.maplesu.manager.ultrakernel.UltraKernelGenerateException
 import dev.maplesu.manager.ultrakernel.UltraKernelPlan
 import dev.maplesu.manager.ultrakernel.UltraKernelSpec
 import dev.maplesu.manager.ultrakernel.KernelSeries
-import dev.maplesu.manager.runtime.ultra.UltraInstallCredentials
 import dev.maplesu.manager.workmode.superuser.DirectRootScriptRunner
 import dev.maplesu.manager.workmode.switch.DeviceBootFacts
 import java.io.File
@@ -108,23 +105,12 @@ internal fun ultraKernelReleaseOf(image: File, pairedBoot: File? = null): String
  */
 internal fun ultraKernelSeries(release: String): String = KernelSeries.of(release).orEmpty()
 
-/** Existing identity only: preview never provisions or claims a live pairing. */
-internal fun ultraKernelCredential(): UltraKernelCredential? =
-    UltraInstallCredentials.existing(ksuApp)
-
-/**
- * Explicit installation prepares its own identity. A preparation failure never asks for pairing.
- */
-internal fun ultraCredentialRequiredMessage(): String = ksuApp.getString(
-    R.string.install_boot_credential_required,
-)
-
 /** One line for a `ULTRA_KERNEL_GENERATE_*` refusal; carries the stable code, never the spec text. */
 internal fun ultraGenerateFailureMessage(error: UltraKernelGenerateException): String =
     if (error.code == UltraKernelGenerateCodes.SITE_COVERAGE) {
         ksuApp.getString(
             R.string.install_boot_support_site_coverage,
-            error.detail.ifEmpty { error.code },
+            error.code + error.detail.takeIf { it.isNotEmpty() }?.let { ":$it" }.orEmpty(),
         )
     } else {
         val detail = dev.maplesu.manager.runtime.ultra.UltraSdkLogging.redact(error.detail)
@@ -133,34 +119,13 @@ internal fun ultraGenerateFailureMessage(error: UltraKernelGenerateException): S
             error.code + detail.takeIf { it.isNotBlank() }?.let { ":$it" }.orEmpty())
     }
 
-/**
- * Production implementation of the S2/S3 generation port (`UltraKernelGenerationPort`).
- *
- * It is a thin sourcing object around the two things the S2 probe must not do itself: read the
- * existing credential and render a plan. Both are injected, so the wiring is unit-testable
- * on a plain JVM with a fake renderer - no Android, no 36 MB kernel, no device.
- *
- * The port answers *feasibility*, and it answers it with the real renderer when it can:
- *  - selected image without a credential -> defer provisioning until explicit confirmation,
- *    independently of the current device's pairing and runtime state;
- *  - current partition without a credential -> defer provisioning until explicit confirmation;
- *  - boot image available -> render it; a refusal (`SITE_COVERAGE`, `KALLSYMS`, ...) is reported
- *    with its own code so S3 can say why instead of "not wired";
- *  - current-partition source (no image copied) -> [UltraKernelGenerationPort.GenerationPlan.Available]
- *    with `deferred = true`: the plan is rendered from the live dump at install time, so only
- *    feasibility can be answered here and the record count stays unknown.
- */
+/** Read-only feasibility uses the same keyless renderer as explicit installation. */
 internal class UltraKernelSourcedGeneration(
-    private val credentials: () -> UltraKernelCredential?,
-    private val render: (File, UltraKernelCredential) -> UltraKernelPlan,
+    private val render: (File) -> UltraKernelPlan,
+    private val legacyModuleRequired: (File) -> Boolean = { false },
 ) : UltraKernelGenerationPort {
 
     override fun plan(boot: File?, release: String): UltraKernelGenerationPort.GenerationPlan {
-        val credential = credentials() ?: run {
-            return UltraKernelGenerationPort.GenerationPlan.Available(
-                specSha256 = "", patches = 0, deferred = true,
-            )
-        }
         if (boot == null || !boot.isFile) {
             return UltraKernelGenerationPort.GenerationPlan.Available(
                 specSha256 = "",
@@ -169,10 +134,10 @@ internal class UltraKernelSourcedGeneration(
             )
         }
         return try {
-            if (dev.maplesu.image.BootImageInspector.inspect(boot).kernelSize == 0L) {
+            if (dev.maplesu.image.BootImageInspector.inspect(boot).kernelSize == 0L || legacyModuleRequired(boot)) {
                 return UltraKernelGenerationPort.GenerationPlan.Available("", 0, deferred = true)
             }
-            val plan = render(boot, credential)
+            val plan = render(boot)
             UltraKernelGenerationPort.GenerationPlan.Available(
                 specSha256 = plan.derived?.patchedKernelSha256.orEmpty(),
                 patches = plan.records.size,
@@ -194,8 +159,8 @@ internal class UltraKernelSourcedGeneration(
  */
 internal object UltraKernelGeneration {
     val port: UltraKernelGenerationPort = UltraKernelSourcedGeneration(
-        credentials = ::ultraKernelCredential,
-        render = { boot, credential -> UltraKernelFlow(ksuApp).generatePlan(boot, credential) },
+        render = { boot -> UltraKernelFlow(ksuApp).generatePlan(boot) },
+        legacyModuleRequired = { boot -> UltraKernelFlow(ksuApp).usesLegacyModule(boot) },
     )
 }
 
@@ -229,8 +194,6 @@ internal sealed class UltraImageBuild {
          */
         val release: String,
         val variantLabel: String,
-        /** Exact embedded identity, archived with exports and handed off before local installation. */
-        val credential: UltraKernelCredential?,
         val partition: String = "boot",
     ) : UltraImageBuild()
 
@@ -275,11 +238,7 @@ internal fun ultraDirectInstall(
         onStdout("当前 boot 备份 sha256 $backupSha")
         onStage(InstallStage.PATCHING)
         val preparation = try {
-            flow.prepareTarget(backup, UltraInstallCredentials.forCandidate(ksuApp), variantId, onStdout)
-        } catch (error: UltraKernelCredentialRequiredException) {
-            val message = ultraCredentialRequiredMessage()
-            onStderr(message)
-            return FlashResult(78, message, false, FlashOutcome.FAILED)
+            flow.prepareTarget(backup, variantId, onStdout)
         } catch (error: UltraKernelGenerateException) {
             val message = ultraGenerateFailureMessage(error)
             onStderr(message)
@@ -288,19 +247,15 @@ internal fun ultraDirectInstall(
         if (preparation.alreadyInstalled) {
             onStdout("镜像已修补，继续安装")
         }
-        val variant = requireNotNull(preparation.variant)
+        val variant = preparation.variant
         val candidate = flow.candidateForInstall(backup, preparation)
-        onStdout("系统内核：${variant.label}")
+        onStdout("系统内核：${variant?.label ?: "Ultra ${candidate.partition}"}")
         onStdout("候选镜像 sha256 ${candidate.bootSha256}")
         onStdout("内核 sha256 ${candidate.kernelSha256}")
-        UltraInstallCredentials.retainCandidate(ksuApp, candidate.image, candidate.bootSha256,
-            preparation.credential, taskId)
         onStage(InstallStage.WRITING)
         val installed = InstallerServiceClient.installBoot(ksuApp, candidate.image, observed, backup, taskId)
         val state = installed.getString("state")
         if (state == "REBOOT_REQUIRED" && installed.getBoolean("rebootRequired")) {
-            runCatching { dev.maplesu.manager.runtime.ultra.UltraInstallCredentialRecovery.recover(ksuApp) }
-                .onFailure { Log.w(TAG_KERNEL, "Install credential handoff deferred to startup", it) }
             onStage(InstallStage.AWAITING_REBOOT)
             onStdout(ksuApp.getString(R.string.install_image_installed))
             FlashResult(0, "", true, FlashOutcome.WRITTEN)
@@ -335,11 +290,8 @@ internal fun ultraImageBuildCandidate(
         val flow = UltraKernelFlow(ksuApp)
         val preparation = try {
             val artifact = if (dev.maplesu.image.BootImageInspector.inspect(source).kernelSize == 0L)
-                requireNotNull(initBootArtifact) { "ULTRA_INIT_PAIRED_BOOT_REQUIRED" } else null
-            flow.prepareTarget(source, UltraInstallCredentials.forCandidate(ksuApp, imageOnly), variantId,
-                artifact, recoveredDeployment, onStdout)
-        } catch (error: UltraKernelCredentialRequiredException) {
-            return@withCurrentImage UltraImageBuild.Refused(78, ultraCredentialRequiredMessage())
+                requireNotNull(initBootArtifact) { "ULTRA_INIT_PAIRED_BOOT_REQUIRED" } else initBootArtifact
+            flow.prepareTarget(source, variantId, artifact, recoveredDeployment, onStdout)
         } catch (error: UltraKernelGenerateException) {
             return@withCurrentImage UltraImageBuild.Refused(78, ultraGenerateFailureMessage(error))
         } catch (error: Exception) {
@@ -348,12 +300,7 @@ internal fun ultraImageBuildCandidate(
         }
         val variant = preparation.variant
         val candidate = flow.candidateForInstall(source, preparation)
-        // Archive both packaged and generated identities without replacing a live pairing.
-        // Confirmed first installs also retain a pending key for an external flash.
-        UltraInstallCredentials.retainCandidate(
-            ksuApp, candidate.image, candidate.bootSha256, preparation.credential,
-            UltraInstallCredentials.IMAGE_EXPORT_OPERATION)
-        val label = variant?.label ?: "Ultra init_boot"
+        val label = variant?.label ?: "Ultra ${candidate.partition}"
         onStdout(if (variant == null) "系统内核：$label" else "系统内核：${variant.label}（${variant.patches} 条记录）")
         onStdout("内核 sha256 ${candidate.kernelSha256}")
         val built = UltraImageBuild.Candidate(
@@ -364,7 +311,6 @@ internal fun ultraImageBuildCandidate(
             // release：后者只是"补丁集出自哪个目录"，写成 release 会让调用方以为镜像不是本机的。
             release = candidate.kernelRelease,
             variantLabel = label,
-            credential = preparation.credential,
             partition = candidate.partition,
         )
         if (preparation.alreadyInstalled) UltraImageBuild.AlreadyPatched(built) else built

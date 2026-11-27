@@ -53,7 +53,7 @@ internal class LenovoSigningSession(
             val companions = names.associateWith(::acquire)
             val restored = if (fromFile) emptyMap() else {
                 val status = InstallerServiceClient.withService(context, persistent = true, rootTarget = target) { it.getBootInstall(taskId) }
-                status.getStringArrayList("restorePartitions").orEmpty().associateWith(::acquire)
+                status.getStringArrayList("originalPartitions").orEmpty().associateWith(::acquire)
             }
             log("联想 AVB 签名开始：${options.mode(candidate.partition)}，目标分区：${candidate.partition}")
             outputs = LenovoAvbSigner.sign(options.mode(candidate.partition), candidate.partition, candidate.image, source,
@@ -73,9 +73,9 @@ internal class LenovoSigningSession(
             outputs = outputs + (candidate.partition to retained)
             val signed = candidate.copy(image = retained, sha256 = hash, size = retained.length())
             if (target == InstallTargetMode.ULTRA) {
-                dev.maplesu.manager.runtime.ultra.UltraInstallCredentials.retainSignedIdentity(context,
+                dev.maplesu.manager.runtime.ultra.UltraInstallTransactions.retainSignedIdentity(context,
                     candidate.image, candidate.sha256, signed, if (fromFile)
-                        dev.maplesu.manager.runtime.ultra.UltraInstallCredentials.IMAGE_EXPORT_OPERATION else taskId)
+                        dev.maplesu.manager.runtime.ultra.UltraInstallTransactions.IMAGE_EXPORT_OPERATION else taskId)
             }
             log("联想 AVB 签名成功（RSA / hash / 验证链回读通过）")
             outputs.forEach { (name, file) -> log("签名输出路径 [$name]：${file.absolutePath}") }

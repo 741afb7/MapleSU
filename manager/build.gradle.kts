@@ -26,12 +26,8 @@ protobuf {
     }
 }
 
-// --- 5.0.5 随包 Ultra SDK 构建身份（配置期读取，缺失即降级，构建不得失败） -------------
-// 身份清单优先级：runtime/maplesu-sdk/SDK-RELEASE.json（发布清单，导入脚本生成）
-// → evidence/ultra-sdk-505/sdk/sdk-build.json（构建清单）。两处都缺/不可解析时用默认值。
-// 读取结果注入 BuildConfig，与 runtime/maplesu-sdk/SDK-IDENTITY.cmake 注入 C++ 的宏
-// 同源（都由 sdk-build.json 派生），因此 Kotlin 侧与 getSdkBuildIdentity 回执可逐字段对齐。
-// 字段名两种清单形状不同（SCHEMA.md §5/§6），这里两种都接受；主文件缺某字段时由次文件补。
+// The selected source delivery supplies both Kotlin and native build identities.
+// Configuration supports source-only checks; preBuild verifies the complete delivery.
 data class UltraSdkIdentity(
     val buildId: String = "unknown",
     val sdkVersion: String = "unknown",
@@ -39,7 +35,6 @@ data class UltraSdkIdentity(
     val sdkSha256: String = "unknown",
     val helperSha256: String = "unknown",
     val helperBuildId: String = "unknown",
-    val keySlotOffset: Long = -1L,
     val source: String = "defaults",
 )
 
@@ -49,7 +44,7 @@ fun ultraSdkJson(file: File): Map<String, Any?>? = try {
         JsonSlurper().parse(file) as? Map<String, Any?>
     }
 } catch (t: Throwable) {
-    // 身份清单损坏同样不能失败：调用方退回默认值，来源记为该文件（便于定位坏文件）。
+    // The build task reports a missing or malformed selected identity.
     null
 }
 
@@ -83,43 +78,15 @@ if (providers.gradleProperty("maplesuUltraSdkDirectory").isPresent) {
         "An explicit SDK directory requires its verified release and generated identity"
     }
 }
-// schema §5 要求 sdk-build.json 在 evidence/ultra-sdk-505/sdk/ 与 evidence/ultra-sdk-505/ 各有一份
-// 字节一致的副本：SDK 重建期间 sdk/ 会被清空重建，根下副本保证配置期仍能取到身份。
-val ultraSdkBuildManifestPath = listOf(
-    "evidence/ultra-sdk-505/sdk/sdk-build.json",
-    "evidence/ultra-sdk-505/sdk-build.json",
-).firstOrNull { rootProject.file(it).isFile }
-val ultraSdkBuildManifest = ultraSdkBuildManifestPath?.let { ultraSdkJson(rootProject.file(it)) }
 val ultraSdkIdentity = UltraSdkIdentity(
-    buildId = ultraSdkIdentityManifest?.ultraSdkText("sdkBuildId")
-        ?: ultraSdkBuildManifest?.ultraSdkText("sdkBuildId") ?: "unknown",
-    sdkVersion = ultraSdkIdentityManifest?.ultraSdkText("sdkVersion")
-        ?: ultraSdkBuildManifest?.ultraSdkText("sdkVersion") ?: "unknown",
-    helperSize = ultraSdkIdentityManifest?.ultraSdkObject("helper")?.ultraSdkNumber("size")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("helper")?.ultraSdkNumber("size") ?: -1L,
-    sdkSha256 = ultraSdkIdentityManifest?.ultraSdkObject("archive")?.ultraSdkText("sha256")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("artifacts")?.ultraSdkObject("archive")?.ultraSdkText("sha256")
-        ?: ultraSdkBuildManifest?.ultraSdkText("sdkSha256") ?: "unknown",
-    helperSha256 = ultraSdkIdentityManifest?.ultraSdkObject("helper")?.ultraSdkText("normalizedSha256")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("helper")?.ultraSdkText("normalizedSha256")
-        ?: ultraSdkIdentityManifest?.ultraSdkObject("helper")?.ultraSdkText("sha256")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("helper")?.ultraSdkText("sha256")
-        ?: ultraSdkBuildManifest?.ultraSdkText("helperSha256") ?: "unknown",
-    helperBuildId = ultraSdkIdentityManifest?.ultraSdkObject("helper")?.ultraSdkText("buildId")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("helper")?.ultraSdkText("buildId")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("bootstrap")?.ultraSdkText("elfBuildId")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("bootstrap")?.ultraSdkText("buildId") ?: "unknown",
-    keySlotOffset = ultraSdkIdentityManifest?.ultraSdkObject("helper")?.ultraSdkNumber("keySlotOffset")
-        ?: ultraSdkIdentityManifest?.ultraSdkNumber("keySlotOffset")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("helper")?.ultraSdkNumber("keySlotOffset")
-        ?: ultraSdkBuildManifest?.ultraSdkObject("bootstrap")?.ultraSdkNumber("keySlotOffset")
-        ?: ultraSdkBuildManifest?.ultraSdkNumber("keySlotOffset")
-        ?: -1L,
-    source = when {
-        ultraSdkIdentityManifest != null -> ultraSdkDirectory.resolve("SDK-RELEASE.json").relativeTo(rootProject.projectDir).invariantSeparatorsPath
-        ultraSdkBuildManifest != null -> ultraSdkBuildManifestPath ?: "defaults"
-        else -> "defaults"
-    },
+    buildId = ultraSdkIdentityManifest?.ultraSdkText("sdkBuildId") ?: "unknown",
+    sdkVersion = ultraSdkIdentityManifest?.ultraSdkText("sdkVersion") ?: "unknown",
+    helperSize = ultraSdkIdentityManifest?.ultraSdkObject("helper")?.ultraSdkNumber("size") ?: -1L,
+    sdkSha256 = ultraSdkIdentityManifest?.ultraSdkObject("archive")?.ultraSdkText("sha256") ?: "unknown",
+    helperSha256 = ultraSdkIdentityManifest?.ultraSdkObject("helper")?.ultraSdkText("sha256") ?: "unknown",
+    helperBuildId = ultraSdkIdentityManifest?.ultraSdkObject("helper")?.ultraSdkText("buildId") ?: "unknown",
+    source = if (ultraSdkIdentityManifest != null)
+        ultraSdkDirectory.resolve("SDK-RELEASE.json").relativeTo(rootProject.projectDir).invariantSeparatorsPath else "defaults",
 )
 
 // 5.0.5 验收开关：只有显式 -PmaplesuSdkAcceptanceRelease=true 才把 instrumentation 跑在
@@ -140,7 +107,7 @@ android {
         versionCode = 50201
         versionName = "5.2.1"
         buildConfigField("boolean", "IS_PR_BUILD", "false")
-        // 5.0.5 随包构建身份：未导入 SDK 时全部为 unknown / -1，构建照常成功。
+        // Values describe the selected, verified source delivery.
         buildConfigField("String", "ULTRA_SDK_BUILD_ID", ultraSdkJavaString(ultraSdkIdentity.buildId))
         buildConfigField(
             "String", "ULTRA_SDK_UPSTREAM_VERSION", ultraSdkJavaString(ultraSdkIdentity.sdkVersion))
@@ -151,7 +118,6 @@ android {
             "String", "ULTRA_SDK_HELPER_SHA256", ultraSdkJavaString(ultraSdkIdentity.helperSha256))
         buildConfigField(
             "String", "ULTRA_SDK_HELPER_BUILD_ID", ultraSdkJavaString(ultraSdkIdentity.helperBuildId))
-        buildConfigField("long", "ULTRA_SDK_KEY_SLOT_OFFSET", "${ultraSdkIdentity.keySlotOffset}L")
         buildConfigField("String", "ULTRA_POLICY_BACKEND_SHA256", ultraSdkJavaString(policyBootExpectedSha256))
         buildConfigField("long", "ULTRA_POLICY_BACKEND_BYTES", "${policyBootExpectedBytes}L")
         buildConfigField(
@@ -658,6 +624,7 @@ abstract class PackageUltraManagerClaim : DefaultTask() {
     @get:Input abstract val pythonExecutable: Property<String>
     @get:Inject abstract val execOperations: ExecOperations
     @get:InputDirectory abstract val claimDirectory: DirectoryProperty
+    @get:InputFile @get:Optional abstract val publicationReceipt: RegularFileProperty
     @get:InputDirectory abstract val mainAssetsDirectory: DirectoryProperty
     @get:OutputDirectory abstract val assetsDirectory: DirectoryProperty
 
@@ -684,6 +651,150 @@ abstract class PackageUltraManagerClaim : DefaultTask() {
             }
         }
         return sha.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun publicationSourceInputs(manifest: Map<String, Any?>,
+        inputs: Map<String, Any?>): Map<String, String> {
+        if (!publicationReceipt.isPresent) return emptyMap()
+        fun objectValue(value: Any?): Map<String, Any?> =
+            (value as? Map<*, *>)?.entries?.associate { it.key.toString() to it.value }
+                ?: error("ULTRA_CLAIM_PUBLICATION_OBJECT")
+        fun rows(value: Any?) = (value as? List<*>)?.map { objectValue(it) }
+            ?: error("ULTRA_CLAIM_PUBLICATION_ROWS")
+        val checked = mutableSetOf<String>()
+        fun bound(value: Any?, file: File? = null): File {
+            val row = objectValue(value)
+            val actual = file ?: project.rootProject.file(row["path"] as? String
+                ?: error("ULTRA_CLAIM_PUBLICATION_PATH"))
+            val key = actual.canonicalPath + ":" + row["bytes"] + ":" + row["sha256"]
+            if (checked.add(key)) check(actual.isFile &&
+                actual.length() == (row["bytes"] as? Number)?.toLong() && digest(actual) == row["sha256"]) {
+                "ULTRA_CLAIM_PUBLICATION_IDENTITY:${actual.path}"
+            }
+            return actual
+        }
+        fun document(value: Any?) = readClaimJson(bound(value))
+            ?: error("ULTRA_CLAIM_PUBLICATION_JSON")
+        val receipt = readClaimJson(publicationReceipt.get().asFile)
+            ?: error("ULTRA_CLAIM_PUBLICATION_REQUIRED")
+        check(receipt["schema"] == "maplesu-claim-publication-input-adoption/1" &&
+            receipt["passed"] == true && receipt["rawManifestBytesPreserved"] == true &&
+            receipt["rawCompilationProvenanceChanged"] == false) { "ULTRA_CLAIM_PUBLICATION_SCHEMA" }
+        val manifestFile = claimDirectory.get().file("manifest.json").asFile
+        bound(receipt["manifest"], manifestFile)
+        bound(receipt["originalManifest"], manifestFile)
+        val original = document(receipt["originalPublication"])
+        check(original["schema"] == "maplesu-existing-claim-publication/1" &&
+            original["inputs"] == inputs && original["moduleRoutes"] == manifest["moduleRoutes"] &&
+            receipt["nativeModuleRoutes"] == manifest["moduleRoutes"] &&
+            (receipt["publicationInputs"] as? Number)?.toInt() == inputs.size) {
+            "ULTRA_CLAIM_PUBLICATION_RAW_BINDING"
+        }
+        bound(original["manifest"], manifestFile)
+        val binding = document(receipt["binding"])
+        check(binding["schema"] == "maplesu-native-owner-final-binding/1" &&
+            binding["deltas"] == receipt["publicationOnlyDeltas"]) { "ULTRA_CLAIM_PUBLICATION_NATIVE_BINDING" }
+        val deltas = rows(binding["deltas"])
+        val names = setOf("Kbuild", "package.py", "legacy_direct_modpost.py",
+            "legacy_cfi_contract.py", "task_profile_legacy.py")
+        val expectedPaths = names.map { "runtime/ultra/boot/init-bridge/$it" }.toSet()
+        check(deltas.size == expectedPaths.size && deltas.map { it["path"] }.toSet() == expectedPaths &&
+            deltas.all { it["kind"] == "productionTool" }) { "ULTRA_CLAIM_PUBLICATION_DELTA_SET" }
+        val consumers = rows(receipt["consumerSourceDeltas"])
+        check(consumers.size == 1 && consumers.single()["path"] == "manager/build.gradle.kts") {
+            "ULTRA_CLAIM_PUBLICATION_CONSUMER_SET"
+        }
+        bound(receipt["consumerSourceBaseline"])
+        check(objectValue(consumers.single()["before"]).let { before ->
+            val baseline = objectValue(receipt["consumerSourceBaseline"])
+            before["bytes"] == baseline["bytes"] && before["sha256"] == baseline["sha256"]
+        }) { "ULTRA_CLAIM_PUBLICATION_CONSUMER_BEFORE" }
+        val current = document(binding["current"])
+        val currentFiles = rows(current["files"]).associateBy { it["logicalPath"] }
+        val currentTools = rows(current["tools"]).associateBy { it["path"] }
+        val adopted = (deltas + consumers).associate { row ->
+            val path = row["path"] as String
+            val before = objectValue(row["before"])
+            val after = objectValue(row["after"])
+            check(inputs.entries.single { it.key.replace('\\', '/') == path }.value == before["sha256"]) {
+                "ULTRA_CLAIM_PUBLICATION_BEFORE:$path"
+            }
+            bound(after, project.rootProject.file(path))
+            if (path in expectedPaths) {
+                val selected = currentFiles[path]?.get("after") ?: currentTools[path]
+                check(objectValue(selected).let { it["bytes"] == after["bytes"] && it["sha256"] == after["sha256"] }) {
+                    "ULTRA_CLAIM_PUBLICATION_NATIVE_SOURCE:$path"
+                }
+            }
+            path to (after["sha256"] as String)
+        }
+        fun compiledSource(value: Any?, copy: File? = null) {
+            val row = objectValue(value)
+            val path = (row["path"] as String).replace('\\', '/')
+            check(path.substringAfterLast('/') !in names + "build.gradle.kts") {
+                "ULTRA_CLAIM_PUBLICATION_COMPILED_DELTA:$path"
+            }
+            bound(row)
+            if (copy != null) bound(row, copy)
+        }
+        val families = rows(original["families"])
+        val dependencySets = rows(receipt["rawDependencyReceipts"])
+        check(families.map { it["kernel"] }.toSet() == objectValue(manifest["payloads"]).keys &&
+            families.size == objectValue(manifest["payloads"]).size &&
+            dependencySets.map { it["kernel"] }.toSet() == families.map { it["kernel"] }.toSet() &&
+            dependencySets.size == families.size) { "ULTRA_CLAIM_PUBLICATION_FAMILY_SET" }
+        families.forEach { family ->
+            val compiledFile = bound(family["inputs"])
+            val target = compiledFile.parentFile
+            val compiled = readClaimJson(compiledFile) ?: error("ULTRA_CLAIM_PUBLICATION_COMPILED_INPUTS")
+            val rawSelection = objectValue(compiled["runtimeLayoutSourceSelection"])
+            val rawFreeze = document(rawSelection["identity"])
+            fun normalizedSources(value: Any?) = rows(value).map { row ->
+                val source = objectValue(row["after"])
+                row + ("after" to (source + ("path" to project.rootProject.file(source["path"] as String).canonicalPath)))
+            }
+            check(normalizedSources(rawFreeze["files"]) == normalizedSources(rawSelection["files"])) {
+                "ULTRA_CLAIM_PUBLICATION_RAW_FREEZE"
+            }
+            rows(rawFreeze["files"]).forEach { source ->
+                check(inputs.entries.single { it.key.replace('\\', '/') == source["logicalPath"] }.value ==
+                    objectValue(source["after"])["sha256"]) { "ULTRA_CLAIM_PUBLICATION_RAW_SOURCE" }
+            }
+            rows(compiled["inputs"]).forEach { source ->
+                compiledSource(source["sourceIdentity"], target.resolve(source["copy"] as String))
+            }
+            rows(compiled["buildTools"]).forEach { compiledSource(it) }
+            val dependencies = target.resolve("build-dependencies").listFiles { file -> file.extension == "json" }
+                ?: error("ULTRA_CLAIM_PUBLICATION_DEPENDENCIES")
+            check(dependencies.isNotEmpty()) { "ULTRA_CLAIM_PUBLICATION_DEPENDENCIES" }
+            val expectedDependencies = rows(dependencySets.single { it["kernel"] == family["kernel"] }["receipts"])
+            check(expectedDependencies.map { project.rootProject.file(it["path"] as String).canonicalPath }.toSet() ==
+                dependencies.map { it.canonicalPath }.toSet() && expectedDependencies.size == dependencies.size) {
+                "ULTRA_CLAIM_PUBLICATION_DEPENDENCY_SET"
+            }
+            expectedDependencies.forEach { bound(it) }
+            dependencies.forEach { file ->
+                val proof = readClaimJson(file) ?: error("ULTRA_CLAIM_PUBLICATION_DEPENDENCY_JSON")
+                check(proof["complete"] == true) { "ULTRA_CLAIM_PUBLICATION_DEPENDENCY_INCOMPLETE" }
+                for ((key, name) in mapOf("objectIdentity" to "${file.nameWithoutExtension}.o",
+                    "commandIdentity" to ".${file.nameWithoutExtension}.o.cmd",
+                    "workingDirectoryIdentity" to "kbuild-working-directory.txt")) bound(proof[key], target.resolve(name))
+                bound(proof["sourceIdentity"], target.resolve("${file.nameWithoutExtension}.c"))
+                rows(proof["dependencies"]).forEach { dependency ->
+                    check((dependency["path"] as String).replace('\\', '/').substringAfterLast('/') !in names + "build.gradle.kts") {
+                        "ULTRA_CLAIM_PUBLICATION_COMPILED_DELTA"
+                    }
+                    bound(dependency, target.resolve(dependency["archivePath"] as String))
+                }
+            }
+        }
+        objectValue(manifest["support"]).values.forEach { support ->
+            rows(document(objectValue(support)["sourceInputsIdentity"])["files"]).forEach { source ->
+                compiledSource(source["selectedSource"])
+                compiledSource(source["compiledCopy"])
+            }
+        }
+        return adopted
     }
 
     @TaskAction fun packageEntries() {
@@ -774,12 +885,14 @@ abstract class PackageUltraManagerClaim : DefaultTask() {
             }
             if ((manifest["schemaVersion"] as? Number)?.toInt() == 2) {
                 val descriptor = row as? Map<*, *> ?: error("ULTRA_CLAIM_METADATA:$family")
-                check(descriptor["metadataEncoding"] == "gzip-chunks-v1") { "ULTRA_CLAIM_METADATA:$family" }
+                val encoding = descriptor["metadataEncoding"]
+                check(encoding in setOf("gzip-chunks-v1", "xz-chunks-v1")) { "ULTRA_CLAIM_METADATA:$family" }
+                val codec = if (encoding == "xz-chunks-v1") "xz" else "gzip"
                 val chunks = descriptor["chunks"] as? List<*> ?: error("ULTRA_CLAIM_CHUNKS:$family")
                 check(chunks.size in 1..8) { "ULTRA_CLAIM_CHUNKS:$family" }
                 val paths = mutableSetOf<String>()
-                val gzipDigest = MessageDigest.getInstance("SHA-256")
-                var gzipBytes = 0L
+                val compressedDigest = MessageDigest.getInstance("SHA-256")
+                var compressedBytes = 0L
                 chunks.forEach { value ->
                     val chunk = value as? Map<*, *> ?: error("ULTRA_CLAIM_CHUNK:$family")
                     val path = chunk["path"] as? String ?: error("ULTRA_CLAIM_CHUNK_PATH:$family")
@@ -790,19 +903,19 @@ abstract class PackageUltraManagerClaim : DefaultTask() {
                     val bytes = (chunk["bytes"] as? Number)?.toLong() ?: 0L
                     check(bytes in 1L..524288L) { "ULTRA_CLAIM_CHUNK_SIZE:$path" }
                     verify(path, chunk)
-                    gzipBytes += bytes
-                    check(gzipBytes <= 4194304L) { "ULTRA_CLAIM_METADATA_SIZE:$family" }
+                    compressedBytes += bytes
+                    check(compressedBytes <= 4194304L) { "ULTRA_CLAIM_METADATA_SIZE:$family" }
                     claim.resolve(path).inputStream().use { input ->
                         val buffer = ByteArray(65536)
                         while (true) {
                             val count = input.read(buffer)
                             if (count < 0) break
-                            gzipDigest.update(buffer, 0, count)
+                            compressedDigest.update(buffer, 0, count)
                         }
                     }
                 }
-                check(gzipBytes == (descriptor["gzipBytes"] as? Number)?.toLong() &&
-                    gzipDigest.digest().joinToString("") { "%02x".format(it) } == descriptor["gzipSha256"]) {
+                check(compressedBytes == (descriptor["${codec}Bytes"] as? Number)?.toLong() &&
+                    compressedDigest.digest().joinToString("") { "%02x".format(it) } == descriptor["${codec}Sha256"]) {
                     "ULTRA_CLAIM_METADATA_CHANGED:$family"
                 }
             }
@@ -813,9 +926,12 @@ abstract class PackageUltraManagerClaim : DefaultTask() {
         }.toSet() == expectedFiles) { "ULTRA_CLAIM_FILE_SET" }
         val inputs = manifest.claimObject("inputs") ?: error("ULTRA_CLAIM_SOURCES_REQUIRED")
         check(inputs.isNotEmpty()) { "ULTRA_CLAIM_SOURCES_EMPTY" }
+        val publicationInputs = publicationSourceInputs(manifest, inputs)
         inputs.forEach { (path, sha) ->
             val source = project.rootProject.file(path.replace('\\', '/'))
-            check(source.isFile && digest(source) == sha) { "ULTRA_CLAIM_SOURCE_CHANGED:$path" }
+            check(source.isFile && digest(source) == (publicationInputs[path.replace('\\', '/')] ?: sha)) {
+                "ULTRA_CLAIM_SOURCE_CHANGED:$path"
+            }
         }
         project.sync {
             from(mainAssetsDirectory) { exclude("ultra-manager-claim/**") }
@@ -829,6 +945,10 @@ val packageUltraManagerClaim = tasks.register<PackageUltraManagerClaim>("package
     appVersion.set(android.defaultConfig.versionName!!)
     releaseVersionCode.set(android.defaultConfig.versionCode!!)
     if (ultraManagerClaimDirectory != null) claimDirectory.set(rootProject.file(ultraManagerClaimDirectory))
+    providers.gradleProperty("maplesuUltraClaimPublicationReceipt").orNull?.let {
+        publicationReceipt.set(rootProject.file(it))
+        outputs.upToDateWhen { false }
+    }
     pythonExecutable.set(providers.gradleProperty("maplesuPython")
         .orElse(providers.environmentVariable("MAPLESU_PYTHON")).getOrElse("python"))
     routeInputs.from(rootProject.file("scripts/policy_claim_routes.py"),
@@ -874,9 +994,10 @@ abstract class PackageUltraInitBridge : DefaultTask() {
             "symvers", "bridge", "handoff", "handoff-verifier", "target-identity", "target-contract")
         val selected = targetArguments.get()
         val exactBundle = selected.isNotEmpty()
+        val exactCatalog = catalogPlanPath.get().isNotEmpty()
         val missing = (if (exactBundle) required.filter { selected[it].isNullOrBlank() } else emptyList()).toMutableList()
-        if (!exactBundle && (componentCatalogPlanPath.get().isEmpty() || catalogPlanPath.get().isNotEmpty())) {
-            missing += "component-catalog-plan or exact target inputs"
+        if (!exactBundle && !exactCatalog && componentCatalogPlanPath.get().isEmpty()) {
+            missing += "catalog plan or exact target inputs"
         }
         selected.filterKeys { it != "credential-symbol" }.forEach { (name, path) ->
             val file = project.rootProject.file(path)
@@ -900,14 +1021,14 @@ abstract class PackageUltraInitBridge : DefaultTask() {
         // package.py publishes its manifest last and requires a fresh output directory.
         project.delete(bundle)
         assets.mkdirs()
-        if (!exactBundle) bundle.mkdirs()
+        if (!exactBundle && !exactCatalog) bundle.mkdirs()
         val arguments = mutableListOf(pythonExecutable.get(),
             sourceDirectory.get().file("package.py").asFile.absolutePath)
         selected.forEach { (name, value) -> arguments += listOf("--$name",
             if (name == "credential-symbol") value else project.rootProject.file(value).absolutePath) }
         arguments += listOf("--output", bundle.absolutePath)
         if (exactBundle) result["command"] = arguments
-        else result["packageMode"] = "component-catalog-only"
+        else result["packageMode"] = if (exactCatalog) "exact-catalog-only" else "component-catalog-only"
         result["status"] = "RUNNING"
         saveReceipt()
         val exitCode = if (exactBundle) execOperations.exec {
@@ -920,7 +1041,7 @@ abstract class PackageUltraInitBridge : DefaultTask() {
             val catalogArguments = listOf(pythonExecutable.get(),
                 sourceDirectory.get().file("package_catalog.py").asFile.absolutePath,
                 "--plan", project.rootProject.file(catalogPlanPath.get()).absolutePath,
-                "--output", bundle.absolutePath, "--append-to-default")
+                "--output", bundle.absolutePath) + (if (exactBundle) listOf("--append-to-default") else emptyList())
             result["catalogCommand"] = catalogArguments
             result["status"] = "CATALOG_RUNNING"
             saveReceipt()
@@ -958,7 +1079,7 @@ abstract class PackageUltraInitBridge : DefaultTask() {
         }
         result["status"] = if (exitCode == 0) "PACKAGED" else "PACKAGE_FAILED"
         if (exitCode == 0) {
-            check(bundle.resolve(if (exactBundle) "manifest.json" else "catalog-kmi.json").isFile) {
+            check(bundle.resolve(if (exactBundle || exactCatalog) "manifest.json" else "catalog-kmi.json").isFile) {
                 "ULTRA_BRIDGE_MANIFEST_MISSING"
             }
             result["files"] = bundle.walkTopDown().filter { it.isFile }.sortedBy { it.path }.map(::identity).toList()
@@ -1006,7 +1127,7 @@ val packageUltraInitBridge = tasks.register<PackageUltraInitBridge>("packageUltr
                 val original = ((provenance["inputs"] as? Map<*, *>)?.get("bridge") as? Map<*, *>)?.get("path") as? String
                     ?: error("ULTRA_CATALOG_ORIGINAL_MODULE")
                 inputs += File(original)
-                if (rowsKey == "components") {
+                if (rowsKey == "components" || (manifest["schemaVersion"] as? Number)?.toInt() == 3) {
                     (provenance["inputs"] as? Map<*, *> ?: error("ULTRA_CATALOG_COMPONENT_INPUTS")).values.forEach { item ->
                         val path = (item as? Map<*, *>)?.get("path") as? String ?: error("ULTRA_CATALOG_COMPONENT_SOURCE")
                         inputs += File(path)
@@ -1036,7 +1157,8 @@ androidComponents.onVariants { variant ->
     // Normal uses its embedded KMI modules; Ultra boot uses the image patcher.
     // Only the separate Ultra init_boot carrier consumes this target-specific bundle.
     // Any supplied bridge input still selects the complete, strict packaging task.
-    if (ultraInitBridgeArguments.isNotEmpty() || ultraInitBridgeComponentPlan.get().isNotEmpty()) {
+    if (ultraInitBridgeArguments.isNotEmpty() || ultraInitBridgeComponentPlan.get().isNotEmpty() ||
+        providers.gradleProperty("maplesuInitBridge.catalog-plan").isPresent) {
         variant.sources.assets?.addGeneratedSourceDirectory(packageUltraInitBridge, PackageUltraInitBridge::assetsDirectory)
     }
     variant.sources.assets?.addGeneratedSourceDirectory(packagePolicyHooks, PackagePolicyHooks::assetsDirectory)
@@ -1112,9 +1234,16 @@ kotlin {
 
 // Identity is generated from the same release manifest consumed by BuildConfig.
 val verifyUltraSdkIdentity by tasks.registering(Exec::class) {
-    onlyIf { ultraSdkDirectory.resolve("SDK-RELEASE.json").isFile }
+    inputs.files(rootProject.file("scripts/sync-ultra-sdk-identity.py"),
+        rootProject.file("scripts/source_sdk_delivery.py"))
+    inputs.dir(ultraSdkDirectory)
     workingDir(rootProject.projectDir)
     doFirst {
+        check(ultraSdkIdentityManifest?.get("rootKeyRequired") == false &&
+            ultraSdkIdentityManifest.ultraSdkObject("sourceBuild") != null &&
+            ultraSdkIdentityManifest.ultraSdkObject("helper")?.get("keyless") == true) {
+            "Ultra requires a verified keyless source SDK delivery; rebuild and select it with maplesuUltraSdkDirectory"
+        }
         val python = providers.gradleProperty("maplesuPython")
             .orElse(providers.environmentVariable("MAPLESU_PYTHON")).getOrElse("python")
         commandLine(python, rootProject.file("scripts/sync-ultra-sdk-identity.py"), "--check",

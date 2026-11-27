@@ -96,6 +96,30 @@ class UltraKernelCommLocationTest {
             assertEquals(extent, result.widthBytes)
         }
     }
+    @Test fun `generation resolves the verified bounded setter location`() {
+        for (strict in listOf(false, true)) {
+            val (raw, symbols) = image(member = 256)
+            val fields = UltraKernelStructOffsets.resolve(symbols, raw,
+                setOf(UltraKernelStructOffsets.COMM), emptyMap(), null, strict)
+            assertEquals(256, fields.getValue(UltraKernelStructOffsets.COMM))
+        }
+    }
+    @Test fun `generation rejects a setter with a different array extent`() {
+        val (raw, symbols) = image(extent = 24)
+        val error = assertThrows(UltraKernelGenerateException::class.java) {
+            UltraKernelStructOffsets.resolve(symbols, raw,
+                setOf(UltraKernelStructOffsets.COMM), emptyMap(), null, true)
+        }
+        assertTrue(error.message.orEmpty(), error.message.orEmpty().contains("STRUCT_COPY_EXTENT_UNPROVEN"))
+    }
+    @Test fun `generation retains the bounded setter terminator requirement`() {
+        val (raw, symbols) = image(terminator = false)
+        val error = assertThrows(UltraKernelGenerateException::class.java) {
+            UltraKernelStructOffsets.resolve(symbols, raw,
+                setOf(UltraKernelStructOffsets.COMM), emptyMap(), null, true)
+        }
+        assertTrue(error.message.orEmpty(), error.message.orEmpty().contains("STRUCT_COPY_EXTENT_UNPROVEN"))
+    }
     @Test fun `W bound is zero extended before X width strlen clamp`() {
         for ((member, extent) in listOf(160 to 16, 256 to 24)) {
             val result = field(image(member, extent, boundInW = true))

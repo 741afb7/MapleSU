@@ -24,11 +24,11 @@ struct ModuleControlResult {
     ModuleControlState state;
 };
 // The installed helper must implement the gate, including in a later boot.
-int64_t module_control_capability(const char* rootKey, bool& supported);
-int64_t get_module_control(const char* rootKey, const char* id32, ModuleControlState& out);
+int64_t module_control_capability(bool& supported);
+int64_t get_module_control(const char* id32, ModuleControlState& out);
 // One authenticated read worker for the list; errors remain attached to each input row.
 std::vector<ModuleControlResult> get_module_controls(
-    const char* rootKey, const std::vector<maplesu::sdk::module_record>& records);
+    const std::vector<maplesu::sdk::module_record>& records);
 // Changes desired boot state only; never invokes install/uninstall or module entry.
-int64_t set_module_enabled(const char* rootKey, const char* id32, bool enabled, ModuleControlState& out);
+int64_t set_module_enabled(const char* id32, bool enabled, ModuleControlState& out);
 }

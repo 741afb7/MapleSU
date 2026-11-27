@@ -10,9 +10,9 @@ struct UidProfileV1 {
 };
 static_assert(sizeof(UidProfileV1) == 264);
 
-KModErr set_uid_profile(const char* root_key, uint32_t uid, const char* package,
+KModErr set_uid_profile(uint32_t uid, const char* package,
                        bool allow, ResultV1& result);
-KModErr get_uid_profiles_with_cb(const char* root_key, void (*callback)(const UidProfileV1*));
+KModErr get_uid_profiles_with_cb(void (*callback)(const UidProfileV1*));
 namespace detail {
 // Raw records share the existing atomic su_allowlist file. No second authority.
 KModErr replace_uid_profile(std::vector<std::string>& raw, uint32_t uid,

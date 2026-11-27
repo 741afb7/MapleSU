@@ -11,7 +11,7 @@
 // Version printed on the boot log ("MapleSU: <major>.<minor>.<patch>").
 #define HELPER_VERSION_MAJOR 5
 #define HELPER_VERSION_MINOR 2
-#define HELPER_VERSION_PATCH 0
+#define HELPER_VERSION_PATCH 1
 
 // Boot-session actions produced by helper_session_begin().
 enum helper_session_action {
@@ -29,7 +29,7 @@ enum {
     HELPER_EXIT_PROTECTED = 4,
 };
 
-// Key/flag/receipt file suffixes, relative to the installed helper path.
+// Flag/receipt file suffixes, relative to the installed helper path.
 #define HELPER_SUFFIX_SAFE_FLAG ".safe_flag"
 #define HELPER_SUFFIX_DUPLICATE ".boot_session.duplicate"
 #define HELPER_SUFFIX_COMPLETED ".boot_session.completed"
@@ -53,18 +53,10 @@ enum {
 #define HELPER_MODULE_ID "maplesuenvironmentbootstrapv1001"
 static_assert(sizeof(HELPER_MODULE_ID) == HELPER_MODULE_LEN + 1, "helper module ID must retain the 32-byte ABI");
 
-// The root key token embedded in the helper image.  The installer replaces this
-// 4096-byte token in place with the real 48-character key and NUL padding; the
-// command line never carries the key.  The definition lives in
-// helper_platform_android.cpp / the host test, because only the platform half
-// owns the literal image slot.
-extern "C" const char maplesu_helper_root_key_token[4096];
-
 struct helper_context {
     struct helper_ops ops; /* copied table, so callers keep ownership of theirs */
     char self_path[HELPER_PATH_MAX]; /* installed helper: <data dir>/init */
     char env_dir[HELPER_PATH_MAX];   /* <data dir> without trailing slash */
-    char root_key[HELPER_KEY_LEN + 1];
     char module_id[HELPER_MODULE_LEN + 1];
     char boot_id[HELPER_BOOT_ID_LEN + 1];
     int lock_fd;
@@ -100,10 +92,6 @@ void helper_log_error(struct helper_context* context, const char* prefix, helper
 // Paths relative to the installed helper.
 int helper_state_path(const struct helper_context* context, const char* suffix,
                       char* out, helper_u32 capacity);
-// Installed bootstrap/state directory: "/data/<key[0:16]>".
-int helper_data_dir_from_key(const char* key, helper_u32 key_length, char* out,
-                             helper_u32 capacity);
-
 // The transaction sources do not allocate; these are the scratch limits they
 // accept for one package list and one directory page.
 #define HELPER_MAX_PACKAGES 256

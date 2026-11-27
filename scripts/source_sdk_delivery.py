@@ -45,25 +45,16 @@ def source_helper_identity(helper, report):
     from elftools.elf.elffile import ELFFile
 
     data = Path(helper).read_bytes()
-    slot = report['keySlot']
-    offset = slot['offset']
-    assert slot['capacity'] == 4096 and slot['tokenBytes'] == 128 and slot['keyLength'] == 48, 'SOURCE_SDK_HELPER_SLOT'
-    assert 0 < offset < len(data) - 4096, 'SOURCE_SDK_HELPER_SLOT'
-    token = (b'5d31494d2e18e3fdef2afaf740b0febc19229cb292f57ebc3bc1c96c6d70b709'
-             b'8d2dc1f356b733e8c999e6ac85bdca24c8c74f03ae7d5b2a402e96804576e925')
-    padded = token + bytes(4096 - len(token))
-    assert data[offset:offset + 4096] == padded and data.count(padded) == data.count(token) == 1, 'SOURCE_SDK_HELPER_SLOT'
+    assert report.get('keyless') is True and 'keySlot' not in report, 'SOURCE_SDK_HELPER_KEYLESS'
     elf = ELFFile(io.BytesIO(data))
     assert elf.elfclass == 64 and elf.little_endian and elf['e_type'] == 'ET_DYN' and elf['e_machine'] == 'EM_AARCH64', 'SOURCE_SDK_HELPER_ELF'
     note = elf.get_section_by_name('.note.gnu.build-id')
     assert note is not None, 'SOURCE_SDK_HELPER_BUILD_ID'
     notes = list(note.iter_notes())
     assert len(notes) == 1 and notes[0]['n_type'] == 'NT_GNU_BUILD_ID', 'SOURCE_SDK_HELPER_BUILD_ID'
-    normalized = bytearray(data)
-    normalized[offset:offset + 4096] = bytes(4096)
     return dict(sha256=hashlib.sha256(data).hexdigest(), size=len(data),
-                normalizedSha256=hashlib.sha256(normalized).hexdigest(), buildId=notes[0]['n_desc'],
-                keySlotOffset=offset)
+                normalizedSha256=hashlib.sha256(data).hexdigest(), buildId=notes[0]['n_desc'],
+                keyless=True)
 
 
 def verify_source_helper_pair(manifest, source, build, helper, backend, root, build_root=None):
@@ -238,7 +229,7 @@ def verify_build_provenance(report, root, build_root=None):
     assert units and len(by_object) == len(units), 'SOURCE_SDK_PROVENANCE_UNITS'
     for unit in units:
         assert unit.get('dependency_kind') in ('compiler-mmd', 'ir-source'), 'SOURCE_SDK_DEPENDENCY_KIND'
-        assert unit['stage'] in ('compile', 'compose', 'payload', 'source-helper', 'source-backend', 'experimental-helper', 'link-sample'), 'SOURCE_SDK_PROVENANCE_STAGE'
+        assert unit['stage'] in ('compile', 'compose', 'payload', 'source-helper', 'source-backend', 'experimental-helper', 'link-sample', 'public-abi'), 'SOURCE_SDK_PROVENANCE_STAGE'
         assert unit.get('dependencies') and len(set(unit['dependencies'])) == len(unit['dependencies']), 'SOURCE_SDK_DEPENDENCIES'
         sources = {unit['source'], unit.get('build_source', unit['source'])}
         for name in unit['dependencies'] + list(sources):
@@ -313,6 +304,15 @@ def verify_build_provenance(report, root, build_root=None):
         assert unit['dependencies'] == [item['path'] for item in output['dependencies']], 'SOURCE_SDK_LINK_DEPENDENCIES'
         expected.add(key)
     assert expected == {key for key in by_object if key[0] == 'link-sample'}, 'SOURCE_SDK_LINK_COVERAGE'
+    public = report.get('keyless_public_abi')
+    public_units = [unit for unit in units if unit['stage'] == 'public-abi']
+    assert len(public_units) == int(public is not None), 'SOURCE_SDK_PUBLIC_ABI_COVERAGE'
+    if public is not None:
+        unit, output = public_units[0], public['unit']
+        for field in ('source', 'build_source', 'object', 'bytes', 'sha256', 'stage',
+                      'precompile', 'precompile_complete', 'precompile_errors', 'dependency_kind'):
+            assert unit[field] == output[field], 'SOURCE_SDK_PUBLIC_ABI_UNIT'
+        assert unit['dependencies'] == [item['path'] for item in output['dependencies']], 'SOURCE_SDK_PUBLIC_ABI_DEPENDENCIES'
     toolchain = proof.get('toolchain') or {}
     assert toolchain.get('ndk_root') and toolchain.get('ndk_version') and toolchain.get('target'), 'SOURCE_SDK_TOOLCHAIN'
     assert all(toolchain.get('versions', {}).get(name) not in (None, '', 'unavailable') for name in ('clang', 'llvm-ar', 'ld.lld')), 'SOURCE_SDK_TOOLCHAIN_VERSIONS'
@@ -639,17 +639,97 @@ def verify_source_validation(build, report_path, review_item, root, build_root):
                 review=record(review_path, root), rawGate=validation['raw_gate'])
 
 
+def verify_keyless_source_gate(build, root, build_root):
+    """Verify the current ABI and real links without requiring old epoch equivalence."""
+    assert build_root is not None and build.get('source_selection'), 'SOURCE_SDK_KEYLESS_SELECTION'
+    gate = build['gate']
+    assert (gate['status'] == 'PASS' and gate['exit_code'] == 0 and gate['problems'] == []
+            and gate['reference_equivalence'] is False and gate['runtime_acceptance'] is False), 'SOURCE_SDK_KEYLESS_GATE'
+    assert build['final_archive_stability']['passed'] is True, 'SOURCE_SDK_KEYLESS_PAIRING'
+    assert 'link_sample' not in build['stages_run'] and 'verify' not in build['stages_run'], 'SOURCE_SDK_KEYLESS_REFERENCE_RESIDUAL'
+    tools = root / 'runtime/maplesu-sdk/sdk/tools'
+    spec = importlib.util.spec_from_file_location('source_sdk_keyless_gate', tools / 'keyless_gate.py')
+    keyless = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(keyless)
+    validation = build['source_validation']
+    assert validation['reference_equivalence'] is False and validation['runtime_acceptance'] is False, 'SOURCE_SDK_KEYLESS_SCOPE'
+    archive = checked(validation['archive'], root, build_root)
+    assert validation['archive'] == dict(path=build['pack']['archive'], size=build['pack']['bytes'], sha256=build['pack']['sha256']), 'SOURCE_SDK_KEYLESS_ARCHIVE'
+    raw = json.loads(checked(validation['raw_gate'], root, build_root).read_text(encoding='utf-8'))
+    assert not keyless.structural_problems(raw), 'SOURCE_SDK_KEYLESS_STRUCTURE'
+    assert raw['inputs']['new']['sha256'] == sha(archive) and raw['inputs']['new']['bytes'] == archive.stat().st_size, 'SOURCE_SDK_KEYLESS_RAW_ARCHIVE'
+    assert gate['historical_reference']['status'] == raw['status'] and gate['historical_reference']['summary'] == raw.get('summary'), 'SOURCE_SDK_KEYLESS_HISTORY'
+    link = validation['link']
+    assert gate['complete_archive_link'] == link and link['exit_code'] == 0, 'SOURCE_SDK_KEYLESS_LINK'
+    argv = link['argv']
+    required = ('-shared', '-Wl,--whole-archive', '-Wl,--no-whole-archive', '-Wl,--no-undefined', '-Wl,--no-gc-sections', '-Wl,--trace')
+    assert all(argv.count(flag) == 1 for flag in required) and '-Wl,--gc-sections' not in argv, 'SOURCE_SDK_KEYLESS_LINK_SCOPE'
+    assert argv.index('-Wl,--no-whole-archive') == argv.index('-Wl,--whole-archive') + 2 and Path(argv[argv.index('-Wl,--whole-archive') + 1]).resolve() == archive, 'SOURCE_SDK_KEYLESS_LINK_ARCHIVE'
+    ndk = (root / build['provenance']['toolchain']['ndk_root']).resolve()
+
+    def tool_input(item):
+        path = (root / item['path']).resolve()
+        assert path.is_relative_to(ndk) and path.is_file() and record(path, root) == {key: item[key] for key in ('path', 'size', 'sha256')}, 'SOURCE_SDK_KEYLESS_TOOL'
+        return path
+
+    assert Path(argv[0]).resolve() == tool_input(link['compiler']), 'SOURCE_SDK_KEYLESS_COMPILER'
+    tool_input(link['linker'])
+    assert [{key: item[key] for key in ('path', 'size', 'sha256')} for item in link['tools_before']] == [link['compiler'], link['linker'], validation['symbol_tool']], 'SOURCE_SDK_KEYLESS_TOOL_BOUNDARY'
+    for item in link['tools_before']:
+        tool_input(item)
+    output = checked(link['output'], root, build_root)
+    assert Path(argv[argv.index('-o') + 1]).resolve() == output, 'SOURCE_SDK_KEYLESS_LINK_OUTPUT'
+    checked(link['map'], root, build_root)
+    trace = checked(link['trace'], root, build_root).read_text(encoding='utf-8').splitlines()
+    members = parse_ar(str(archive))['members']
+    selected = [line.split('(', 1)[1][:-1] for line in trace
+                if line.endswith(')') and '(' in line and Path(line.split('(', 1)[0]).resolve() == archive]
+    assert selected == [member['name'] for member in members] and len(members) == 260, 'SOURCE_SDK_KEYLESS_LINK_MEMBERS'
+    providers = {tool_input(item) for item in link['providers']}
+    actual = {Path(line.split('(', 1)[0]).resolve() for line in trace if Path(line.split('(', 1)[0]).is_file()} - {archive}
+    assert actual == providers and providers, 'SOURCE_SDK_KEYLESS_LINK_PROVIDERS'
+    symbols = json.loads(checked(validation['symbols'], root, build_root).read_text(encoding='utf-8'))
+    raw_symbols = set().union(*(set(symbols[field]) for field in ('defined', 'undefined', 'weak_defined', 'weak_undefined')))
+    assert not raw_symbols.intersection(keyless.RETIRED_SYMBOLS), 'SOURCE_SDK_KEYLESS_RETIRED_API'
+    public_path = (root / gate['public_abi']).resolve()
+    assert public_path == build_root / 'report/keyless-public-abi.json', 'SOURCE_SDK_KEYLESS_PUBLIC_PATH'
+    public = json.loads(public_path.read_text(encoding='utf-8'))
+    assert public == build['keyless_public_abi'] and public['schema'] == 'maplesu-sdk-keyless-public-abi/1', 'SOURCE_SDK_KEYLESS_PUBLIC_RECEIPT'
+    assert public['status'] == 'PASS' and public['problems'] == [] and public['runtime_acceptance'] is False, 'SOURCE_SDK_KEYLESS_PUBLIC_STATUS'
+    assert not keyless.legacy_credential_problems(public['required_symbols']), 'SOURCE_SDK_KEYLESS_PUBLIC_CREDENTIAL'
+    assert public['legacy_credential_symbols'] == sorted(raw_symbols.intersection(keyless.LEGACY_CREDENTIAL_SYMBOLS)), 'SOURCE_SDK_LEGACY_CREDENTIAL_RECEIPT'
+    assert public['archive'] == validation['archive'], 'SOURCE_SDK_KEYLESS_PUBLIC_ARCHIVE'
+    assert checked(public['source'], root) == tools / 'keyless_public_abi.cpp', 'SOURCE_SDK_KEYLESS_PUBLIC_SOURCE'
+    probe = checked(public['object'], root, build_root)
+    linked = checked(public['output'], root, build_root)
+    compile_argv, link_argv = public['compile_argv'], public['link_argv']
+    assert Path(compile_argv[compile_argv.index('-c') + 1]).resolve() == root / public['source']['path'] and Path(compile_argv[compile_argv.index('-o') + 1]).resolve() == probe, 'SOURCE_SDK_KEYLESS_PUBLIC_COMPILE'
+    assert str(archive) in link_argv and str(probe) in link_argv and Path(link_argv[link_argv.index('-o') + 1]).resolve() == linked, 'SOURCE_SDK_KEYLESS_PUBLIC_LINK'
+    assert all(flag in link_argv for flag in ('-shared', '-Wl,--no-undefined', '-Wl,--no-gc-sections')) and '-Wl,--gc-sections' not in link_argv, 'SOURCE_SDK_KEYLESS_PUBLIC_LINK_SCOPE'
+    for item in public['tools_before']:
+        tool_input(item)
+    assert Path(compile_argv[0]).resolve() == Path(link_argv[0]).resolve() == tool_input(public['tools_before'][0]), 'SOURCE_SDK_KEYLESS_PUBLIC_COMPILER'
+    assert public['dependencies']['dependency_complete'] and public['dependencies']['precompile_complete'], 'SOURCE_SDK_KEYLESS_PUBLIC_DEPENDENCIES'
+    expected = keyless.module_entry_symbols((root / 'runtime/maplesu-sdk/include/maplesu/compat/native_module_abi.h').read_text(encoding='utf-8-sig'))
+    assert public['module_symbols'] == expected and set(expected) <= elf_symbol_sets(linked)[0], 'SOURCE_SDK_KEYLESS_MODULE_EXPORTS'
+    assert all(name.removesuffix('_keyless_v1') not in raw_symbols for name in expected if name.endswith('_keyless_v1')), 'SOURCE_SDK_KEYLESS_RETIRED_MODULE'
+
+
 def verify_source_build_status(build, report_path, root, build_root, validation_review=None):
     assert not build['compile']['failures'], 'SOURCE_SDK_BUILD_FAILED'
     if validation_review is not None:
         return verify_source_validation(build, report_path, validation_review, root, build_root)
     assert 'failure' not in build, 'SOURCE_SDK_BUILD_FAILED'
-    assert build['gate']['exit_code'] == 0, 'SOURCE_SDK_MEMBER_GATE'
+    if build['gate'].get('schema') == 'maplesu-sdk-keyless-delivery-gate/1':
+        verify_keyless_source_gate(build, root, build_root)
+    else:
+        assert build['gate']['exit_code'] == 0, 'SOURCE_SDK_MEMBER_GATE'
     return None
 
 
 def verify_source_delivery(manifest, root):
     root = Path(root).resolve()
+    assert manifest.get('rootKeyRequired') is False and manifest['helper'].get('keyless') is True, 'SOURCE_SDK_KEYLESS_REQUIRED'
     source = manifest['sourceBuild']
     assert source['schemaVersion'] == 1 and source['deviceAcceptance'] is False, 'SOURCE_SDK_SCOPE'
     build_root = (root / source['buildDirectory']).resolve() if 'buildDirectory' in source else None
@@ -717,8 +797,7 @@ def verify_source_delivery(manifest, root):
         assert extracted['payload_sha256'] == sha(payload) and extracted['payload_size'] == payload.stat().st_size, 'SOURCE_SDK_PAYLOAD_MISMATCH: ' + name
     helper = checked(manifest['helper'], root)
     assert sha(helper) == expected['autorun_bootstrap']['file']['sha256'], 'SOURCE_SDK_HELPER_NOT_EMBEDDED'
-    slot = manifest['helper']['keySlotOffset']
-    assert 0 < slot < helper.stat().st_size - 4096, 'SOURCE_SDK_HELPER_SLOT'
+    assert 'keySlotOffset' not in manifest['helper'], 'SOURCE_SDK_HELPER_KEYLESS'
     retained = json.loads(checked(source['retainedRelease'], root).read_text(encoding='utf-8-sig'))
     policy = manifest['environmentPolicyBoot']
     backend = checked(policy['backend'], root)
@@ -732,16 +811,7 @@ def verify_source_delivery(manifest, root):
             verify_source_bootstrap(build, archive, helper, backend, root, build_root)
         assert all(item['origin'] == 'source-built' for item in source['payloads']), 'SOURCE_SDK_PAYLOAD_SOURCE_SELECTION'
     else:
-        assert source.get('helperOrigin', 'reference-copy') == 'reference-copy', 'SOURCE_SDK_HELPER_SOURCE_RECEIPT_MISSING'
-        assert manifest['helper']['sha256'] == retained['helper']['sha256'], 'SOURCE_SDK_RETAINED_HELPER'
-        for key in ('normalizedSha256', 'buildId', 'keySlotOffset', 'size'):
-            assert manifest['helper'][key] == retained['helper'][key], 'SOURCE_SDK_HELPER_IDENTITY'
-        helper_bytes = helper.read_bytes()
-        retained_helper = checked(retained['helper'], root).read_bytes()
-        for value, label in ((identity['fileName'].encode() + b'\0', 'NAME'),
-                             (bytes.fromhex(identity['noteHex']), 'NOTE')):
-            expected_count = retained_helper.count(value)
-            assert expected_count > 0 and helper_bytes.count(value) == expected_count, 'SOURCE_SDK_BACKEND_' + label + '_UNPAIRED'
+        raise AssertionError('SOURCE_SDK_HELPER_SOURCE_RECEIPT_MISSING')
     assert policy['entryHelperSha256'] == sha(helper), 'SOURCE_SDK_BACKEND_HELPER'
     bundle = checked(policy['delivery']['bundleManifest'], root)
     if not source_helper:

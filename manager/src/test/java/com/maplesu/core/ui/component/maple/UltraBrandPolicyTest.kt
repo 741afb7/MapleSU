@@ -76,6 +76,14 @@ class UltraBrandPolicyTest {
     }
 
     @Test
+    fun historicalModeAloneDoesNotConfirmAnInstalledUltraBrand() {
+        val hidden = com.maplesu.core.ui.screen.home.HomeWorkModeSwitchState.HIDDEN
+        assertFalse(shouldShowUltraBrand(homeUltraBrandFacts(hidden, false, false, WorkMode.LITE)))
+        assertTrue(shouldShowUltraBrand(homeUltraBrandFacts(hidden, false, false,
+            WorkMode.LITE, environmentInstalled = true)))
+    }
+
+    @Test
     fun allFactCombinationsFailClosed() {
         for (mode in listOf(null, WorkMode.LITE, WorkMode.KSU)) {
             for (installed in HomeInstallSignal.entries) {

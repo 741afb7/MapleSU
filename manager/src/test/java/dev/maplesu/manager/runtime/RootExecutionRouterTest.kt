@@ -39,7 +39,7 @@ class RootExecutionRouterTest {
         clock: () -> Long = { 0L },
         ksu: RootExecutor? = null,
     ) = RootExecutionRouter(
-        lite, ultra,
+        ultra,
         modeProvider = mode,
         clock = clock,
         capabilityTtlMillis = 2_000L,
@@ -78,11 +78,11 @@ class RootExecutionRouterTest {
     }
 
     @Test
-    fun liteModeUltraUnavailableDoesNotBlockLiteKernelFallback() {
+    fun unavailableUltraDoesNotSelectARetiredCredentialBackend() {
         val ultra = FakeExecutor(RootBackend.ULTRA_ENV, available = false)
         val lite = FakeExecutor(RootBackend.LITE_KERNEL)
         val result = router(lite, ultra).execute("id")
-        assertEquals(RootBackend.LITE_KERNEL, result.backend)
+        assertEquals(RootBackend.NONE, result.backend)
         assertEquals(0, ultra.calls)
     }
 
@@ -106,7 +106,7 @@ class RootExecutionRouterTest {
     }
 
     @Test
-    fun ksuModeWithoutExecutorFallsToUltraThenStructuredNone() {
+    fun ksuModeWithoutRegisteredExecutorStaysStructuredNone() {
         val lite = FakeExecutor(RootBackend.LITE_KERNEL)
         val ultra = FakeExecutor(RootBackend.ULTRA_ENV, available = false)
         val result = router(lite, ultra, mode = { WorkMode.KSU }).execute("id")
@@ -114,8 +114,7 @@ class RootExecutionRouterTest {
         assertFalse(result.ok)
         // 绝不因为"KSU 后端没装"就偷偷回落到 Lite 内核凭据。
         assertEquals(0, lite.calls)
-        assertTrue(result.detail.contains("ULTRA_ENV"))
-        assertTrue(result.detail.contains("BACKEND_UNAVAILABLE"))
+        assertEquals("NO_ROOT_BACKEND", result.detail)
     }
 
     @Test
@@ -137,7 +136,6 @@ class RootExecutionRouterTest {
         val ksu = FakeExecutor(RootBackend.KSU, result = RootExecResult(RootBackend.KSU, 0, "ok"))
         RootExec.installForTest(
             RootExecutionRouter(
-                liteKernel = FakeExecutor(RootBackend.LITE_KERNEL),
                 ultraEnv = null,
                 modeProvider = { WorkMode.KSU },
             ),
@@ -196,10 +194,10 @@ class RootExecutionRouterTest {
         assertEquals(RootBackend.ULTRA_ENV, router.capability().backend)
         ultra.available = false
         now = 1_000L
-        // TTL 内返回缓存（不重新探测）；过期后重新探测 → Lite。
+        // TTL 内返回缓存；过期后不可用状态保持 NONE。
         assertEquals(RootBackend.ULTRA_ENV, router.capability().backend)
         now = 2_500L
-        assertEquals(RootBackend.LITE_KERNEL, router.capability().backend)
+        assertEquals(RootBackend.NONE, router.capability().backend)
     }
 
     @Test
@@ -209,7 +207,7 @@ class RootExecutionRouterTest {
         assertEquals(RootBackend.ULTRA_ENV, router.capability().backend)
         ultra.available = false
         assertEquals(RootBackend.ULTRA_ENV, router.capability().backend)
-        assertEquals(RootBackend.LITE_KERNEL, router.capability(forceRefresh = true).backend)
+        assertEquals(RootBackend.NONE, router.capability(forceRefresh = true).backend)
     }
 
     @Test
@@ -239,7 +237,7 @@ class RootExecutionRouterTest {
     fun preferredBackendMatchesDeviceShape() {
         val router = router(FakeExecutor(RootBackend.LITE_KERNEL), FakeExecutor(RootBackend.ULTRA_ENV))
         assertEquals(RootBackend.ULTRA_ENV, router.preferredBackend())
-        // KSU：装了 KSU executor → KSU；没装 → ULTRA_ENV（且真的执行时才失败，不提前假装）。
+        // KSU 只使用其已注册通道；未注册保持 NONE。
         val ksuWired = router(
             FakeExecutor(RootBackend.LITE_KERNEL),
             FakeExecutor(RootBackend.ULTRA_ENV),
@@ -252,7 +250,7 @@ class RootExecutionRouterTest {
             FakeExecutor(RootBackend.ULTRA_ENV),
             mode = { WorkMode.KSU },
         )
-        assertEquals(RootBackend.ULTRA_ENV, ksuUnwired.preferredBackend())
+        assertEquals(RootBackend.NONE, ksuUnwired.preferredBackend())
     }
 
     @Test
@@ -288,7 +286,7 @@ class RootExecutionRouterTest {
     @Test fun aPairedUltraChannelWithAnUnknownProbeNeverStartsTheLegacyCredentialProcess() {
         val lite = FakeExecutor(RootBackend.LITE_KERNEL)
         val ultra = FakeExecutor(RootBackend.ULTRA_ENV, available = false)
-        val router = RootExecutionRouter(lite, ultra, modeProvider = { WorkMode.LITE }, ultraIdentity = { true })
+        val router = RootExecutionRouter(ultra, modeProvider = { WorkMode.LITE }, ultraIdentity = { true })
         assertFalse(router.execute("install-once").ok)
         assertEquals(0, lite.calls)
         ultra.available = true
@@ -300,7 +298,7 @@ class RootExecutionRouterTest {
     @Test fun aFailedUltraMutationIsNotReplayedOnTheLegacyBackend() {
         val lite = FakeExecutor(RootBackend.LITE_KERNEL)
         val ultra = FakeExecutor(RootBackend.ULTRA_ENV, result = RootExecResult(RootBackend.ULTRA_ENV, 137, "", "PROCESS_DIED"))
-        val router = RootExecutionRouter(lite, ultra, modeProvider = { WorkMode.LITE }, ultraIdentity = { true })
+        val router = RootExecutionRouter(ultra, modeProvider = { WorkMode.LITE }, ultraIdentity = { true })
         assertFalse(router.execute("write-once").ok)
         assertEquals(1, ultra.calls)
         assertEquals(0, lite.calls)
@@ -317,7 +315,7 @@ class RootExecutionRouterTest {
             prepare = { probes++; live },
             onFailure = { invalidations++ },
         )
-        val router = RootExecutionRouter(null, ultra, modeProvider = { WorkMode.LITE }, ultraIdentity = { true })
+        val router = RootExecutionRouter(ultra, modeProvider = { WorkMode.LITE }, ultraIdentity = { true })
         assertFalse(router.capability().available)
         assertEquals(0, probes)
         assertFalse(router.execute("first").ok)
@@ -349,7 +347,7 @@ class RootExecutionRouterTest {
                 } finally { active.decrementAndGet() }
             }
         }
-        val router = RootExecutionRouter(null, ultra, modeProvider = { WorkMode.LITE }, ultraIdentity = { true })
+        val router = RootExecutionRouter(ultra, modeProvider = { WorkMode.LITE }, ultraIdentity = { true })
         val firstResult = FutureTask { router.execute("first") }
         val secondStarted = CountDownLatch(1)
         val secondFinished = CountDownLatch(1)

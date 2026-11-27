@@ -27,7 +27,7 @@
     <string name="theme_package_title">Theme package</string>
     <string name="theme_package_export">Export theme package</string>
     <string name="theme_package_import">Import theme package</string>
-    <string name="theme_package_import_summary">FinaSU / FolkPatch FPT format</string>
+    <string name="theme_package_import_summary">FinaSU / FolkPatch FPT and SukiSU / Nova formats</string>
     <string name="theme_reset">Reset theme</string>
     <string name="theme_reset_summary">Keep interface style and operational settings</string>
     <string name="theme_busy">Processing theme…</string>
@@ -153,7 +153,7 @@
     <string name="theme_appearance_store_summary">Set up MapleSU themes</string>
     <string name="theme_appearance_layout_summary">Large, small and three-card arrangements</string>
     <string name="theme_font_preview">Font preview · MapleSU\n枫叶随风，设置随你。\nABCDEFGHIJKLMNOPQRSTUVWXYZ\n0123456789</string>
-    <string name="theme_download_mode_message">In-app: save the download in My themes, then confirm to apply.\nBrowser: download in your browser, then open the .fpt file to import it.</string>
+    <string name="theme_download_mode_message">In-app: save the download in My themes, then confirm to apply.\nBrowser: download in your browser, then open the .fpt or .sukisu file to import it. SukiSU store downloads use in-app authentication in either mode.</string>
     <string name="theme_remove_named_background">Remove %1$s background</string>
     <string name="theme_layout_background">%1$s · Background</string>
     <string name="theme_named_opacity">%1$s opacity</string>
@@ -193,4 +193,5 @@
     <string name="theme_images_summary">Status artwork, cropping and navigation icons</string>
     <string name="theme_section_navigation">Navigation and gestures</string>
     <string name="theme_wallpaper_picker_summary">Choose an image, GIF or video</string>
+    <string name="theme_catalog_sukisu_summary">Browse SukiSU / Nova themes (package formats 1–5) with automatic device access. Colors, adaptive backgrounds, card artwork and navigation icons adapt to MapleSU. Import previews list any layout or effect differences.</string>
 </resources>

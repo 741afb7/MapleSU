@@ -8,7 +8,7 @@ internal object UltraStartupWarmup {
         val activeMode: WorkMode?,
         val detectionSettled: Boolean,
         val ksuResponded: Boolean?,
-        val pendingInstallCredential: Boolean,
+        val pendingInstall: Boolean,
         val suspended: Boolean,
         val quiescing: Boolean,
         val switchPending: Boolean,
@@ -21,8 +21,8 @@ internal object UltraStartupWarmup {
     data class Result(val ran: Boolean, val paired: Boolean, val reason: String)
 
     fun identityRecovered(result: String): Boolean =
-        result == "RECOVERED" || result == "RECOVERY_LOCAL_KEY_VERIFIED" ||
-            result == "RECOVERY_OWNER_VERIFIED" ||
+        result == "RECOVERY_OWNER_VERIFIED" ||
+            result == "RECOVERY_LOCAL_KEY_VERIFIED" || result == "RECOVERY_LEGACY_RECOVERED" ||
             result == "BOOT_SDK_CURRENT" || result == "BOOT_SDK_RESTORED"
 
     fun matchesPostBootSwitch(recoveryId: String?, executing: Boolean, pending: Boolean, observedId: String?): Boolean =
@@ -42,15 +42,16 @@ internal object UltraStartupWarmup {
         if (input.switchPending && !input.postBootUltraSwitchRecovery) return Result(false, false, "SWITCH_PENDING")
         if (input.conflictingRoot || input.ksuResponded == true) return Result(false, false, "ROOT_CONFLICT")
         if (input.liveEnvironmentReady) {
+            if (input.activeMode == null) retryDetection()
             val paired = pairEnvironment()
-            if (paired && input.activeMode == null) retryDetection()
             return Result(true, paired, if (paired) "RUNNING" else "MANAGER_SU_UNVERIFIED")
         }
-        // Historical install evidence can belong to another kernel/key. Recover
+        // Historical install evidence can belong to another kernel. Recover
         // the live identity before setup, including an already selected Ultra mode.
         val recovered = recoverIdentity()
+        if (recovered && input.activeMode == null) retryDetection()
         if (input.activeMode == null) {
-            val localIdentity = input.pendingInstallCredential || input.postBootUltraSwitchRecovery ||
+            val localIdentity = input.pendingInstall || input.postBootUltraSwitchRecovery ||
                 input.verifiedUltraIdentity
             if (!input.detectionSettled && !recovered) return Result(false, false, "DETECTION_PENDING")
             if (input.ksuResponded != false && !recovered) return Result(false, false, "KSU_UNRESOLVED")
@@ -58,7 +59,7 @@ internal object UltraStartupWarmup {
         }
         setupEnvironment()
         val paired = bootSessionReady() ?: pairEnvironment()
-        if (paired && input.activeMode == null) retryDetection()
+        if (paired && !recovered && input.activeMode == null) retryDetection()
         return Result(true, paired, if (paired) "RUNNING" else "NOT_RUNNING")
     }
 }

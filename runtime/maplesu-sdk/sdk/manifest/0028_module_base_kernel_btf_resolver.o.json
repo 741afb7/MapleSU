@@ -2,13 +2,13 @@
   "idx": 28,
   "name": "module_base_kernel_btf_resolver.o",
   "group": "core",
-  "layout": "elf",
+  "layout": "bitcode",
   "kind": "COMPOSED",
   "sources": [
     "src/module_base/module_base_kernel_btf_resolver.cpp",
     "../../ultra/policy/kernel_layout.cpp"
   ],
-  "flagsProfile": "core-oz-elf-fexceptions",
+  "flagsProfile": "core-oz-bitcode-fexceptions",
   "extraFlags": [
     "-D_FORTIFY_SOURCE=2",
     "-I../../ultra/policy"
@@ -50,7 +50,7 @@
     },
     "note": "Measured header 4243c0de. Compare all T/t/W/w by PROTOCOL section 5, including local and weak text. U baseline applies only to bitcode, native ELF has zero allowance. See stored symbol lists and exact compile argv; no symbol-forcing anchors."
   },
-  "notes": "P2 layout consumer: composes the same runtime/pro/policy/kernel_layout.cpp used by the native layout reader. Original/recovery/selfCheck fields describe the prior restoration baseline, not equivalence of this refactored member. Current-source build and behavior require their own P2 receipts. Explicit original.layout=bitcode records the frozen header; current layout=elf is the measured P2 ld.lld-r output (545744 bytes, sha256 8da90f888a4e78e71160cdaeb766a75a8e5e50b65e071a3e1a4ebfabc9739df4). P2 ran compile/compose/pack only; current raw symbol/layout member-gate verification and full SDK publication remain pending.",
+  "notes": "Composes the resolver and the same runtime/ultra/policy/kernel_layout.cpp used by the native layout reader. The current member retains the frozen bitcode container: compile both declared TUs with exceptions into bitcode and compose them with llvm-link. Original/recovery/selfCheck fields describe the prior restoration baseline, not T/U equivalence of this refactored member; current source, publication and behavior retain their own validation receipts.",
   "developmentRefactor": {
     "schema": "maplesu-sdk-development-refactor/1",
     "date": "2026-11-15",

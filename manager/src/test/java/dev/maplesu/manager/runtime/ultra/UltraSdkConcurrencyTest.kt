@@ -6,7 +6,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -147,33 +146,6 @@ class UltraSdkConcurrencyTest {
         } finally { release.countDown(); workers.shutdownNow() }
     }
 
-    @Test fun controlledRestartOnlyAcceptsTheAuthenticatedRootServicePid() {
-        for (pid in listOf(-1, 0, 1)) {
-            try { UltraIdentityRecovery.restartScript(pid); fail("invalid pid=$pid") }
-            catch (_: IllegalArgumentException) { }
-        }
-        val script = UltraIdentityRecovery.restartScript(321)
-        assertTrue(script.contains("P='321'"))
-        assertTrue(script.indexOf("stat -c %u") < script.indexOf("kill -TERM"))
-        assertTrue(script.indexOf("maplesu-ultra-identity") < script.indexOf("kill -TERM"))
-        assertFalse(script.contains("pkill"))
-        assertTrue(script.contains("MAPLESU_IDENTITY_STOPPED"))
-    }
 
-    @Test fun identityDeploymentUsesExplicitOctalInTheAndroidShell() {
-        val deploy = UltraIdentityRecovery::class.java.getDeclaredMethod("deployScript",
-            File::class.java, String::class.java, File::class.java, File::class.java,
-            File::class.java, String::class.java, String::class.java).apply { isAccessible = true }
-        val directory = java.nio.file.Files.createTempDirectory("identity-mode-").toFile()
-        try {
-            val config = File(directory, "config").apply { writeText("{}") }
-            val start = File(directory, "start").apply { writeText("#!/system/bin/sh\n") }
-            val script = deploy.invoke(UltraIdentityRecovery, File(directory, "apk"), "hash", config,
-                start, File(directory, "bridge"), "hash", "0123456789abcdef0123456789abcdef") as String
-            assertTrue(script.contains("\$((8#\$mode & 8#22))"))
-            assertFalse(script.contains("\$((0\$mode & 022))"))
-            assertTrue(script.contains("stat -c %u"))
-            assertTrue(script.contains("[ ! -L"))
-        } finally { directory.deleteRecursively() }
-    }
+
 }

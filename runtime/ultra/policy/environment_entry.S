@@ -12,8 +12,6 @@ maplesu_environment_policy_entry:
     stp q2, q3, [sp, #128]
     stp q4, q5, [sp, #160]
     stp q6, q7, [sp, #192]
-    adrp x0, original_root_key
-    add x0, x0, :lo12:original_root_key
     bl maplesu_environment_policy_load
     cmp w0, #0
     cset w9, eq

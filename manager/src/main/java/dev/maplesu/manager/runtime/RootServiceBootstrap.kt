@@ -12,6 +12,50 @@ internal object RootServiceBootstrap {
         IllegalStateException(reason, result.cause)
     internal data class Candidate(val source: String, val run: (String) -> Result)
 
+    /** A binding attempt owns only service establishment; its caller invokes the service action. */
+    internal data class Binding<T>(val script: () -> String?, val await: () -> T, val close: () -> Unit)
+
+    fun <T> connect(candidates: List<Candidate>, bind: () -> Binding<T>,
+                    onAttempt: (String, String, Result) -> Unit = { _, _, _ -> }): T {
+        var failed: Failure? = null
+        for (candidate in candidates) {
+            checkInterrupted()
+            var binding: Binding<T>? = null
+            var connected = false
+            var phase = "bind"
+            try {
+                binding = bind()
+                val script = binding.script()
+                checkInterrupted()
+                if (script != null) {
+                    phase = "launch"
+                    val result = run(candidate, script)
+                    onAttempt(candidate.source, phase, result)
+                    checkInterrupted()
+                    if (!result.ok) throw Failure(result, candidate.source, phase,
+                        if (result.code == 13) "INSTALLER_ROOT_REQUIRED" else "INSTALLER_SERVICE_LAUNCH_FAILED")
+                }
+                phase = "connect"
+                val value = binding.await()
+                checkInterrupted()
+                onAttempt(candidate.source, phase, Result(0, ""))
+                connected = true
+                return value
+            } catch (error: Exception) {
+                rethrowCancellation(error)
+                val failure = error as? Failure ?: Failure(
+                    Result(-1, "", "ROOT_SERVICE_${phase.uppercase()}_FAILED:${error.javaClass.simpleName}", cause = error),
+                    candidate.source, phase, "INSTALLER_SERVICE_${phase.uppercase()}_FAILED")
+                if (error !is Failure) onAttempt(candidate.source, phase, failure.result)
+                // A later non-root path must not hide a root source's connection failure.
+                if (failed == null || failure.message != "INSTALLER_ROOT_REQUIRED") failed = failure
+            } finally {
+                if (!connected) binding?.close()
+            }
+        }
+        throw failed ?: Failure(Result(-1, ""), "", "launch", "INSTALLER_ROOT_SOURCES_EXHAUSTED")
+    }
+
     private const val READY = "MAPLESU_ROOT_SERVICE_READY"
     private const val PROBE = "/system/bin/service check activity | /system/bin/grep -q ': found' || exit 14; " +
         "printf '$READY\\n'"
@@ -65,12 +109,16 @@ internal object RootServiceBootstrap {
             }
         }
     } catch (error: Exception) {
+        rethrowCancellation(error)
+        Result(-1, "", "ROOT_SERVICE_SOURCE_FAILED:${error.javaClass.simpleName}", cause = error)
+    }
+
+    private fun rethrowCancellation(error: Exception) {
         val cancelled = generateSequence<Throwable>(error) { it.cause }.take(8).firstOrNull {
             it is InterruptedException || it is java.util.concurrent.CancellationException
         }
         if (cancelled is InterruptedException) Thread.currentThread().interrupt()
         if (cancelled != null) throw cancelled
-        Result(-1, "", "ROOT_SERVICE_SOURCE_FAILED:${error.javaClass.simpleName}", cause = error)
     }
 
     private fun checkInterrupted() {

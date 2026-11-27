@@ -22,8 +22,6 @@ KModErr safe_uninstall_module(const char*);
 namespace default_modules::module_root { KModErr set_current_root(bool); }
 namespace default_modules::module_su_redirect { KModErr add_su_allowlist(const char*); }
 namespace default_modules::module_bypass_oplus_secure_guard { bool first_install_init(); }
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
 
 #pragma GCC visibility push(hidden)
 namespace maplesu::compat {
@@ -44,12 +42,6 @@ inline constexpr install::core::err_t kInstallerReadText = static_cast<install::
 inline constexpr install::core::err_t kInstallerParseVersion = static_cast<install::core::err_t>(KModErr::ERR_MODULE_PARSE_VERSION);
 inline constexpr const char* kInstallerVersionFile = maplesu::compat::kEnvironmentVersionFile;
 
-inline const char* installer_identity() {
-    return __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-}
-inline void select_installer_identity(const char* key) {
-    __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
-}
 inline install::core::err_t installer_root(bool enabled) {
     return static_cast<install::core::err_t>(default_modules::module_root::set_current_root(enabled));
 }

@@ -48,7 +48,6 @@ enum {
 
 #define HELPER_PATH_MAX 512
 #define HELPER_NAME_MAX 64
-#define HELPER_KEY_LEN 48
 #define HELPER_MODULE_LEN 32
 #define HELPER_BOOT_ID_LEN 36
 #define HELPER_RECEIPT_LEN 37 /* boot id + '\n', the byte count the receipts hold */

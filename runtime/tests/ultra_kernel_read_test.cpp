@@ -1,12 +1,14 @@
 #include "module_err_def.h"
+#include <algorithm>
 #include "aarch64_asm_helper.h"
 #include "module_base_kernel_mem.h"
 #include "module_base_kernel_symbol_kaddr.h"
 #include <array>
 #include <cassert>
 #include <cstring>
-#include <fstream>
-#include <iterator>
+#include <sys/prctl.h>
+#include "module_base_kernel_request.h"
+#include "maplesu_request_private.h"
 #include "../ultra/authorization/kernel_read_metadata.h"
 
 extern "C" KModErr __wrap__ZN13kernel_module23request_kernel_read_memEmPvj(uint64_t, void*, uint32_t);
@@ -16,26 +18,39 @@ constexpr uint64_t source = 0xffff800000500ff8ULL;
 constexpr uint64_t metadata = 0xffff800000700010ULL;
 constexpr uint64_t nofault = 0xffff800000900000ULL;
 constexpr uint64_t copy_user = 0xffff800000901000ULL;
-std::vector<uint8_t> frame_start, frame_end;
+std::vector<uint8_t> staged;
+unsigned restores, secure_restores;
+int fixture_securebits;
 std::array<uint8_t, 600> output;
 std::string mode;
+std::string credential(48, 'K');
 bool resolving;
 int bootstrap_calls, read_calls, lookups;
 uint32_t bootstrap_offset, bootstrap_remaining;
 uint8_t pattern(size_t index) { return static_cast<uint8_t>(index * 37 + 11); }
 }
 
+extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW() {
+    return credential.c_str();
+}
 namespace kernel_module {
+uint64_t maplesu_request_auth_state() { return 4; }
+bool maplesu_request_owner_binding_matches(const RequestOwnerBinding&) { assert(false); return false; }
+KModErr maplesu_request_owner_channel(maplesu_metadata_owner_v3&, uint64_t&, RequestOwnerBinding&) {
+    assert(false); return KModErr::ERR_MODULE_TEST_CHANNEL;
+}
+KModErr maplesu_request_owner_read(uint64_t, void*, uint32_t, const RequestOwnerBinding&) {
+    assert(false); return KModErr::ERR_MODULE_TEST_CHANNEL;
+}
+KModErr maplesu_request_v2_channel(maplesu_response_v2& query, bool& supported) {
+    query = {}; supported = false; return KModErr::OK;
+}
+KModErr maplesu_request_v2_read(uint64_t, void*, uint32_t) {
+    assert(false); return KModErr::ERR_MODULE_TEST_CHANNEL;
+}
 KModErr get_append_package_run_fake_proc_path_addr(uint64_t& output) {
     output = mode == "bad-anchor" ? 0 : metadata + 8;
     return KModErr::OK;
-}
-void arm64_module_asm_func_start(asmjit::a64::Assembler* a) {
-    a->embed(frame_start.data(), frame_start.size());
-}
-void arm64_module_asm_func_end(asmjit::a64::Assembler* a, asmjit::a64::GpX result) {
-    assert(result.id() == 0);
-    a->embed(frame_end.data(), frame_end.size());
 }
 KModErr kallsyms_lookup_name(const char* name, SymbolHit& out, SymbolMatchMode) {
     ++lookups;
@@ -80,7 +95,24 @@ KModErr kallsyms_lookup_name(const char* name, SymbolHit& out, SymbolMatchMode) 
     }
     return KModErr::OK;
 }
-KModErr execute_kernel_asm_func_with_buf(const uint8_t* code, uint32_t size, uint64_t& result) {
+KModErr request_kernel_alloc_mem(uint32_t size,uint64_t& address) {
+    assert(size); address=source+0x10000; return KModErr::OK;
+}
+KModErr unsafe_request_kernel_write_mem(uint64_t address,const void* bytes,uint32_t size) {
+    assert(address==source+0x10000);
+    const auto* data=static_cast<const uint8_t*>(bytes); staged.assign(data,data+size); return KModErr::OK;
+}
+KModErr request_kernel_set_suid_sgid(uint32_t,uint32_t) { ++restores; return KModErr::OK; }
+KModErr maplesu_request_owner_execute(const uint8_t*,uint32_t,uint64_t&) { assert(false); return KModErr::ERR_MODULE_TEST_CHANNEL; }
+KModErr maplesu_request_key_execute(const uint8_t*,uint32_t,uint64_t&,bool&) { assert(false); return KModErr::ERR_MODULE_TEST_CHANNEL; }
+KModErr maplesu_request_key_credential_begin() { assert(false); return KModErr::ERR_MODULE_TEST_CHANNEL; }
+KModErr maplesu_request_key_credential_end(KModErr) { assert(false); return KModErr::ERR_MODULE_TEST_CHANNEL; }
+CleanupReceiptScope::CleanupReceiptScope() noexcept {}
+CleanupReceiptScope::~CleanupReceiptScope() noexcept {}
+KModErr unsafe_request_kernel_exec_mem(uint64_t address,uint32_t size,uint64_t& reply) {
+    assert(address==source+0x10000 && size==staged.size());
+    const auto* code=staged.data();
+    uint64_t result=0;
     const int index = resolving ? bootstrap_calls++ : read_calls++ % 3;
     const auto count = std::min(uint32_t{7}, bootstrap_remaining);
     std::printf("capture=%s,%d,%s,%u,%u,", resolving ? "bootstrap" : "read", index, mode.c_str(),
@@ -108,20 +140,24 @@ KModErr execute_kernel_asm_func_with_buf(const uint8_t* code, uint32_t size, uin
             for (size_t i = begin; i < end; ++i) output[i] = pattern(i);
         }
     }
+    // Model only the legacy syscall receipt. Actual m025 decodes it, checks
+    // PR_GET_SECUREBITS, restores saved credentials, and publishes the result.
+    reply=(result&UINT64_C(0x0000ffffffffffff))<<8;
+    fixture_securebits=static_cast<int>(result>>48);
     return KModErr::OK;
 }
 }
 
+extern "C" int prctl(int option,...) noexcept {
+    assert(option==PR_GET_SECUREBITS); return fixture_securebits;
+}
+extern "C" KModErr maplesu_restore_securebits(uint32_t value) {
+    ++secure_restores; fixture_securebits=static_cast<int>(value); return KModErr::OK;
+}
+extern "C" int64_t maplesu_release_staging(uint64_t) { assert(false); return 0; }
 int main(int argc, char** argv) {
-    assert(argc == 4);
+    assert(argc == 2);
     mode = argv[1];
-    auto load = [](const char* path) {
-        std::ifstream file(path, std::ios::binary);
-        return std::vector<uint8_t>(std::istreambuf_iterator<char>(file), {});
-    };
-    frame_start = load(argv[2]);
-    frame_end = load(argv[3]);
-    assert(!frame_start.empty() && !frame_end.empty());
     output.fill(0xa5);
     const auto error = __wrap__ZN13kernel_module23request_kernel_read_memEmPvj(source, output.data(), output.size());
     const bool success = mode == "good" || mode == "older";
@@ -153,5 +189,7 @@ int main(int argc, char** argv) {
     assert(is_failed(__wrap__ZN13kernel_module23request_kernel_read_memEmPvj(0x1000, output.data(), 1)));
     assert(is_failed(__wrap__ZN13kernel_module23request_kernel_read_memEmPvj(UINT64_MAX - 1, output.data(), 4)));
     assert(before == bootstrap_calls + read_calls);
+    assert(restores==static_cast<unsigned>(bootstrap_calls+read_calls));
+    assert(secure_restores==restores && fixture_securebits==0);
     std::printf("PASS mode=%s bootstrap=%d batches=%d lookups=%d\n", mode.c_str(), bootstrap_calls, read_calls, lookups);
 }

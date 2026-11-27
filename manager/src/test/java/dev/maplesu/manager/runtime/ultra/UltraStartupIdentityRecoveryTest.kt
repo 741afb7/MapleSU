@@ -8,7 +8,7 @@ import org.junit.Test
 class UltraStartupIdentityRecoveryTest {
     private val absent = UltraStartupWarmup.Input(
         activeMode = null, detectionSettled = true, ksuResponded = false,
-        pendingInstallCredential = false, suspended = false, quiescing = false,
+        pendingInstall = false, suspended = false, quiescing = false,
         switchPending = false, conflictingRoot = false,
     )
 
@@ -53,11 +53,27 @@ class UltraStartupIdentityRecoveryTest {
 
     @Test fun unsuccessfulRecoveryDoesNotBecomeAnEnvironmentIdentity() {
         for (recovery in listOf("RECOVERY_SUSPENDED", "BOOT_SDK_RECOVERY_UNREADABLE",
-            "RECOVERY_ROOT_NOT_VERIFIED", "RECOVERY_SCOPE_CHANGED", "RECOVERY_STORE_FAILED")) {
+            "RECOVERY_ROOT_NOT_VERIFIED", "RECOVERY_SCOPE_CHANGED", "RECOVERY_STORE_FAILED",
+            "RECOVERY_LEGACY_IDENTITY_PENDING", "RECOVERY_LEGACY_VERIFICATION_FAILED")) {
             assertFalse(recovery, UltraStartupWarmup.identityRecovered(recovery))
         }
-        for (recovery in listOf("RECOVERED", "RECOVERY_LOCAL_KEY_VERIFIED")) {
+        for (recovery in listOf("RECOVERY_OWNER_VERIFIED", "RECOVERY_LOCAL_KEY_VERIFIED",
+            "RECOVERY_LEGACY_RECOVERED")) {
             assertTrue(recovery, UltraStartupWarmup.identityRecovered(recovery))
+        }
+    }
+
+    @Test fun verifiedLegacyRecoveryContinuesStartupAndRequestsDetection() {
+        for (recovery in listOf("RECOVERY_LOCAL_KEY_VERIFIED", "RECOVERY_LEGACY_RECOVERED")) {
+            val calls = mutableListOf<String>()
+            val result = UltraStartupWarmup.run(absent.copy(detectionSettled = false, ksuResponded = null),
+                setupEnvironment = { calls += "setup" },
+                pairEnvironment = { calls += "pair"; true },
+                retryDetection = { calls += "detect" },
+                recoverIdentity = { UltraStartupWarmup.identityRecovered(recovery) })
+            assertTrue(recovery, result.ran)
+            assertTrue(recovery, result.paired)
+            assertEquals(listOf("setup", "pair", "detect"), calls)
         }
     }
 
@@ -124,7 +140,7 @@ class UltraStartupIdentityRecoveryTest {
 
     @Test fun knownUltraAndHistoricalInstallEvidenceRecoverTheLiveKeyBeforeSetup() {
         for (input in listOf(absent.copy(activeMode = WorkMode.LITE),
-            absent.copy(pendingInstallCredential = true), absent.copy(verifiedUltraIdentity = true),
+            absent.copy(pendingInstall = true), absent.copy(verifiedUltraIdentity = true),
             absent.copy(postBootUltraSwitchRecovery = true))) {
             val calls = mutableListOf<String>()
             val result = UltraStartupWarmup.run(input,

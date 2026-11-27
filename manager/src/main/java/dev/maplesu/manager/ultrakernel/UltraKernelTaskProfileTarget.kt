@@ -6,16 +6,16 @@ import java.nio.ByteOrder
 
 /** Same-generation implementation facts and facts derived from the current input Image. */
 internal object UltraKernelTaskProfileTarget {
-    const val PROOF_SCHEMA = "maplesu-task-profile-target-proof/2"
+    const val PROOF_SCHEMA = "maplesu-task-profile-target-proof/3"
     const val SLOT_CONTRACT = "fixed-kernelsu-bit63-layout-compatibility"
     val proofBits = linkedMapOf("slot63" to 1, "rcu" to 2, "bitops" to 4,
-        "cfi" to 8, "syscallTracepoint" to 16, "cloneExec" to 32)
+        "cfi" to 8, "syscallTracepoint" to 16)
     data class Table(val symbol: String, val section: String, val offset: Int, val fileOffset: Int,
         val words: List<Int>, val sha256: String, val writable: Boolean)
     data class Implementation(val present: Boolean, val entries: Map<String, UltraKernelManagerClaimPayload.CallbackPrefix>,
         val signatures: Map<String, String>, val sourceSha256: String, val trace: Table, val target: Table,
         val marker: Table, val nativeAbi: JsonObject, val normalizeIntegers: Boolean,
-        val legacyCfi: JsonObject? = null)
+        val legacyCfi: JsonObject? = null, val nativeLayout: JsonObject? = null)
     data class Proof(val targetSha256: String, val configSha256: String, val proofSha256: String,
         val workMember: Int, val workBit: Int, val markerWords: List<Int>, val evidence: JsonObject,
         val missing: Map<String, String>) {
@@ -119,7 +119,28 @@ internal object UltraKernelTaskProfileTarget {
             table("msu_task_profile_trace_compiled_layout", ".msu.task_profile.trace-layout", 12, false),
             table("msu_task_profile_target", ".msu.task_profile.target", 34, true),
             table("msu_task_profile_marker_target", ".msu.task_profile.marker-target", 28, true),
-            native, policy.getValue("normalizeIntegers").jsonPrimitive.boolean, report.getValue("legacyCfi").jsonObject)
+            native, policy.getValue("normalizeIntegers").jsonPrimitive.boolean, report.getValue("legacyCfi").jsonObject,
+            report["nativeLayout"]?.jsonObject?.also { layout ->
+                require(layout["schema"]?.jsonPrimitive?.content == "maplesu-task-profile-native-layout/1" &&
+                    layout["origin"]?.jsonPrimitive?.content == "module-dwarf-derived-btf" &&
+                    layout["targetImageBtf"]?.jsonPrimitive?.booleanOrNull == false) {
+                    "ULTRA_KERNEL_TASK_PROFILE_MODULE_NATIVE_LAYOUT_SOURCE"
+                }
+                for (key in listOf("moduleDebugSource", "derivedObject")) identity(report.getValue("provenance").jsonObject[key])
+                require(layout.getValue("fields").jsonObject.isNotEmpty()) { "ULTRA_KERNEL_TASK_PROFILE_MODULE_NATIVE_LAYOUT_EMPTY" }
+                for ((name, value) in layout.getValue("fields").jsonObject) {
+                    val field = value.jsonObject
+                    val offset = field.getValue("offsetBytes").jsonPrimitive.int
+                    val width = field.getValue("widthBytes").jsonPrimitive.int
+                    val owner = field.getValue("ownerSizeBytes").jsonPrimitive.int
+                    require(name.matches(Regex("[A-Za-z_][A-Za-z_0-9]*\\.[A-Za-z_][A-Za-z_0-9.]*")) &&
+                        owner in 1..1048576 && width > 0 && offset >= 0 && offset.toLong() + width <= owner &&
+                        (!name.endsWith(".__size") || offset == 0 && width == owner) &&
+                        (field["signature"]?.jsonPrimitive?.content?.let { it.isNotEmpty() && it.length <= 65536 } ?: name.endsWith(".__size"))) {
+                        "ULTRA_KERNEL_TASK_PROFILE_MODULE_NATIVE_LAYOUT_FIELD:$name"
+                    }
+                }
+            })
     }
     fun parseImplementation(report: JsonObject, parent: JsonObject, reference: JsonObject,
         coreInputs: Map<String, JsonObject>, elf: ByteArray, mode: String, normalize: Boolean): Implementation {
@@ -135,18 +156,36 @@ internal object UltraKernelTaskProfileTarget {
             "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_SCHEMA"
         }
         val successor = report.getValue("sourceSuccessor").jsonObject
-        require(successor["schema"]?.jsonPrimitive?.content == "maplesu-task-profile-source-successor/1" &&
-            successor["productionWritten"]?.jsonPrimitive?.booleanOrNull == false &&
-            successor["sourceOwnerFrozen"]?.jsonPrimitive?.booleanOrNull == true &&
-            same(identity(successor["identity"]), identity(report["sourceSuccessorIdentity"])) &&
-            same(identity(successor["parentCoreSelection"]), identity(parent["sourceSelectionIdentity"]))) {
-            "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_SUCCESSOR"
-        }
-        identity(successor["sourceFreeze"])
-        val runtime = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze")
-            .jsonObject.getValue("runtimeLayoutEvolution").jsonObject
-        require(same(identity(successor["parentRuntimeLayoutSelection"]), identity(runtime["identity"]))) {
-            "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_RUNTIME_PARENT"
+        val currentSources = successor["schema"]?.jsonPrimitive?.content == "maplesu-claim-current-source-selection/1"
+        if (currentSources) {
+            val core = reference.getValue("coreLifecycleAbi").jsonObject.getValue("sourceSelection").jsonObject
+            val freeze = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze").jsonObject
+            require(successor.keys == setOf("schema", "identity", "targetQualified", "parentRuntimeLayoutSelection", "files") &&
+                successor["targetQualified"]?.jsonPrimitive?.booleanOrNull == false &&
+                core == freeze && core["schema"] == successor["schema"] &&
+                core["sourceOwnerFrozen"]?.jsonPrimitive?.booleanOrNull == true &&
+                core["targetQualified"]?.jsonPrimitive?.booleanOrNull == false &&
+                core["rootKeyRequired"]?.jsonPrimitive?.booleanOrNull == false &&
+                successor["identity"] == core["identity"] && successor["identity"] == parent["sourceSelectionIdentity"] &&
+                successor["identity"] == report["sourceSuccessorIdentity"] &&
+                successor["parentRuntimeLayoutSelection"] == core["identity"]) {
+                "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_CURRENT_SELECTION"
+            }
+            identity(successor["identity"])
+        } else {
+            require(successor["schema"]?.jsonPrimitive?.content == "maplesu-task-profile-source-successor/1" &&
+                successor["productionWritten"]?.jsonPrimitive?.booleanOrNull == false &&
+                successor["sourceOwnerFrozen"]?.jsonPrimitive?.booleanOrNull == true &&
+                same(identity(successor["identity"]), identity(report["sourceSuccessorIdentity"])) &&
+                same(identity(successor["parentCoreSelection"]), identity(parent["sourceSelectionIdentity"]))) {
+                "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_SUCCESSOR"
+            }
+            identity(successor["sourceFreeze"])
+            val runtime = reference.getValue("managementAbi").jsonObject.getValue("upstreamSourceFreeze")
+                .jsonObject.getValue("runtimeLayoutEvolution").jsonObject
+            require(same(identity(successor["parentRuntimeLayoutSelection"]), identity(runtime["identity"]))) {
+                "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_RUNTIME_PARENT"
+            }
         }
         val rows = successor.getValue("files").jsonArray.map { it.jsonObject }
         val selected = rows.associateBy { it.getValue("logicalPath").jsonPrimitive.content }
@@ -156,17 +195,30 @@ internal object UltraKernelTaskProfileTarget {
             "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_SOURCE_SET"
         }
         for ((logical, row) in selected) {
-            val before = identity(row["before"]); val after = identity(row["after"])
-            require(after.getValue("path").jsonPrimitive.content.replace('\\', '/').endsWith("/" + logical.substringAfterLast('/'))) {
-                "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_SOURCE_PATH:$logical"
-            }
-            coreInputs[logical]?.let { core ->
-                require(same(after, identity(core["nativeCopyIdentity"] ?: core["after"])) &&
-                    same(before, identity(core["previousTaskProfileInput"]))) {
-                    "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_CORE_CHAIN:$logical"
+            if (currentSources) {
+                val after = identity(row["after"])
+                val core = coreInputs.getValue(logical)
+                require(row.keys == setOf("role", "logicalPath", "before", "after", "snapshotIdentity") &&
+                    row["role"]?.jsonPrimitive?.content == "native" && row["before"] is JsonNull &&
+                    row["after"] == row["snapshotIdentity"] &&
+                    after.getValue("path").jsonPrimitive.content.replace('\\', '/').endsWith("/$logical") &&
+                    same(after, identity(core["after"])) && core["role"]?.jsonPrimitive?.content == "native") {
+                    "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_CURRENT_SOURCE:$logical"
+                }
+            } else {
+                val before = identity(row["before"]); val after = identity(row["after"])
+                require(after.getValue("path").jsonPrimitive.content.replace('\\', '/').endsWith("/" + logical.substringAfterLast('/'))) {
+                    "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_SOURCE_PATH:$logical"
+                }
+                coreInputs[logical]?.let { core ->
+                    require(same(after, identity(core["nativeCopyIdentity"] ?: core["after"])) &&
+                        same(before, identity(core["previousTaskProfileInput"]))) {
+                        "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_CORE_CHAIN:$logical"
+                    }
                 }
             }
         }
+
         val objects = report.getValue("objects").jsonObject
         require(objects.keys == setOf("manager_task_state", "manager_su_runtime_target", "manager_su_runtime_factory")) {
             "ULTRA_KERNEL_TASK_PROFILE_IMPLEMENTATION_OBJECT_SET"
@@ -309,7 +361,7 @@ internal object UltraKernelTaskProfileTarget {
         val target = table("targetBinding", "msu_task_profile_target", ".msu.task_profile.target", 34, true)
         val marker = table("markerTargetBinding", "msu_task_profile_marker_target", ".msu.task_profile.marker-target", 28, true)
         val targetReport = report.getValue("targetBinding").jsonObject
-        require(targetReport["requiredProofMask"]?.jsonPrimitive?.intOrNull == 63 &&
+        require(targetReport["requiredProofMask"]?.jsonPrimitive?.intOrNull == 31 &&
             targetReport["targetProofSchema"]?.jsonPrimitive?.content == PROOF_SCHEMA &&
             targetReport["slot63Contract"]?.jsonPrimitive?.content == SLOT_CONTRACT &&
             targetReport.getValue("proofBits").jsonObject.mapValues { it.value.jsonPrimitive.int } == proofBits) {
@@ -329,7 +381,7 @@ internal object UltraKernelTaskProfileTarget {
             return ByteArray(32) { value.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
         }
         return ByteBuffer.allocate(136).order(ByteOrder.LITTLE_ENDIAN).apply {
-            putInt(0x4d535450); putInt(1); putInt(136); putInt(0); putInt(63); putInt(0)
+            putInt(0x4d535450); putInt(1); putInt(136); putInt(0); putInt(31); putInt(0)
             putInt(63); putInt(proof.workMember); putInt(proof.workBit); putInt(0)
             put(digest(proof.targetSha256)); put(digest(proof.configSha256)); put(digest(proof.proofSha256))
             putInt(12, 1)
@@ -368,13 +420,159 @@ internal object UltraKernelTaskProfileTarget {
         return bytes to config
     }
 
+    /** Unchecked trace transport has its own proof, separate from CFI membership. */
+    fun legacyUncheckedTrace(impl: Implementation, name: String, member: JsonObject): JsonObject? {
+        if (member["cfiMode"]?.jsonPrimitive?.content != "unchecked-native-callsite") return null
+        val legacy = requireNotNull(impl.legacyCfi)
+        val calls = legacy.getValue("callbackCallsites").jsonObject.getValue(name).jsonArray
+        require(name == "msu_task_profile_sys_enter" && calls.size == 1 &&
+            member["symbol"]?.jsonPrimitive?.content == name && "typeIdHex" !in member &&
+            member["runtimeOwnerQualified"]?.jsonPrimitive?.booleanOrNull == false) {
+            "ULTRA_KERNEL_TASK_PROFILE_LEGACY_UNCHECKED:$name"
+        }
+        val call = calls.single().jsonObject
+        require(call["caller"]?.jsonPrimitive?.content == "__traceiter_sys_enter" &&
+            call["cfiMode"]?.jsonPrimitive?.content == "unchecked-native-callsite" && "typeIdHex" !in call &&
+            legacy.getValue("callerTypeSets").jsonObject.getValue("__traceiter_sys_enter").jsonArray.isEmpty() &&
+            listOf("runtimeOwnerQualified", "deviceQualified").all { call[it]?.jsonPrimitive?.booleanOrNull == false }) {
+            "ULTRA_KERNEL_TASK_PROFILE_LEGACY_UNCHECKED_CALLSITE:$name"
+        }
+        val signature = "*" + impl.signatures.getValue(name)
+        when (member["proof"]?.jsonPrimitive?.content) {
+            "actual-native-unchecked-trace-callsite-not-cfi-membership" -> require(
+                member["callbackSignature"]?.jsonPrimitive?.content == signature &&
+                    call["callbackSignature"]?.jsonPrimitive?.content == signature &&
+                    call["proof"]?.jsonPrimitive?.content == "actual-symbol-bounded-uninstrumented-trace-loop-and-btf") {
+                "ULTRA_KERNEL_TASK_PROFILE_LEGACY_UNCHECKED_SIGNATURE:$name"
+            }
+            "actual-native-unchecked-trace-machine-abi-not-semantic-or-cfi-membership" -> {
+                val arguments = signature.removePrefix("*fv(").removeSuffix(")").split(';')
+                val abi = buildJsonObject {
+                    put("pcs", "aapcs64"); put("argumentRegisters", JsonArray(listOf("x0", "x1", "x2").map(::JsonPrimitive)))
+                    put("argumentBytes", JsonArray(listOf(8, 8, 8).map(::JsonPrimitive)))
+                    put("argumentSources", JsonArray(listOf("record-data", "iterator-x1", "iterator-x2").map(::JsonPrimitive)))
+                    put("returnValueUsed", false)
+                }
+                require(member["moduleCallbackSignature"]?.jsonPrimitive?.content == signature &&
+                    signature.startsWith("*fv(") && signature.endsWith(";)") && arguments.size == 4 && arguments.last().isEmpty() &&
+                    arguments.dropLast(1).all { it.matches(Regex("(?:\\*+(?:v|s[A-Za-z_][A-Za-z_0-9]*|i[1-8]:[0-9]+)|i8:[0-9]+)")) } &&
+                    member["callbackMachineAbi"] == abi && call["callbackMachineAbi"] == abi &&
+                    listOf(member, call).all { fact -> fact["machineAbiQualified"]?.jsonPrimitive?.booleanOrNull == true &&
+                        listOf("targetSemanticSignatureQualified", "targetCfiTypeIdQualified").all {
+                            fact[it]?.jsonPrimitive?.booleanOrNull == false
+                        } } && call["btfAvailable"]?.jsonPrimitive?.booleanOrNull == false &&
+                    call["registrationWriter"] is JsonObject &&
+                    call["proof"]?.jsonPrimitive?.content == "actual-symbol-bounded-uninstrumented-trace-loop-and-registration-writer") {
+                    "ULTRA_KERNEL_TASK_PROFILE_LEGACY_UNCHECKED_MACHINE_ABI:$name"
+                }
+            }
+            else -> error("ULTRA_KERNEL_TASK_PROFILE_LEGACY_UNCHECKED_PROOF:$name")
+        }
+        return call
+    }
+
+    /** Replay the current Image's bounded native iterator, including both loop edges.
+     * Layout may come from its BTF or the module actually accepted by the normal loader. */
+    private fun verifyUncheckedTrace(kernel: ByteArray, symbols: UltraKernelSymbols, layout: UltraKernelLayout): JsonObject {
+        fun need(ok: Boolean, reason: String) = require(ok) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_UNCHECKED_TRACE:$reason" }
+        fun unique(name: String) = symbols.offsetsOf(name).distinct().singleOrNull()
+            ?: error("ULTRA_KERNEL_TASK_PROFILE_TARGET_UNCHECKED_TRACE:SYMBOL:$name")
+        fun field(name: String) = layout.fields[name]
+            ?: error("ULTRA_KERNEL_TASK_PROFILE_TARGET_UNCHECKED_TRACE:FIELD:$name")
+        fun word(at: Int) = UltraKernelA64.le32Bits(kernel, at)
+        fun move(to: Int, from: Int) = 0xaa0003e0.toInt() or (from shl 16) or to
+        fun branch(at: Int) = at + UltraKernelA64.signExtend(((word(at) ushr 5) and 0x7ffff).toLong(), 19).toInt() * 4
+        fun load(at: Int, to: Int, from: Int, offset: Int): Boolean {
+            val raw = word(at)
+            return (offset == 0 && (raw == (0xc8dffc00.toInt() or (from shl 5) or to) ||
+                raw == (0xf8bfc000.toInt() or (from shl 5) or to))) ||
+                offset >= 0 && offset % 8 == 0 && offset / 8 <= 4095 &&
+                raw == (0xf9400000.toInt() or ((offset / 8) shl 10) or (from shl 5) or to)
+        }
+        val start = unique("__traceiter_sys_enter"); val end = symbols.nextOffset(start) ?: kernel.size
+        val point = unique("__tracepoint_sys_enter"); val pointEnd = symbols.nextOffset(point) ?: kernel.size
+        val raw = symbols as? UltraKernelKallsymsTable
+            ?: error("ULTRA_KERNEL_TASK_PROFILE_TARGET_UNCHECKED_TRACE:SYMBOL_SOURCE")
+        need(start >= 0 && start % 4 == 0 && end <= kernel.size && end > start && end - start <= 65536 &&
+            point >= 0 && point % 8 == 0 && point.toLong() + field("tracepoint.__size").widthBytes <= pointEnd &&
+            pointEnd <= kernel.size, "BOUNDS")
+        val iterator = field("tracepoint.iterator"); val funcs = field("tracepoint.funcs")
+        need(iterator.widthBytes == 8 && funcs.widthBytes == 8 && iterator.offsetBytes != funcs.offsetBytes, "POINTER_FIELDS")
+        val entry = ByteBuffer.wrap(kernel, point + iterator.offsetBytes, 8).order(ByteOrder.LITTLE_ENDIAN).long - raw.textBase
+        need(entry == start.toLong() || entry == UltraKernelLegacyCfi.canonicalEntry(kernel, symbols, "__traceiter_sys_enter").canonicalOffset.toLong(), "ITERATOR")
+        val address = point + funcs.offsetBytes
+        val bases = (start until end - 4 step 4).filter { at ->
+            val a = word(at); val b = word(at + 4); val register = a and 31
+            if (!UltraKernelA64.isAdrp(a) || b and 0xffc00000.toInt() != 0x91000000.toInt() ||
+                b and 31 != register || (b ushr 5) and 31 != register) false else {
+                val immediate = (((a ushr 5) and 0x7ffff).toLong() shl 2) or ((a ushr 29) and 3).toLong()
+                (at.toLong() and -4096L) + (UltraKernelA64.signExtend(immediate, 21) shl 12) +
+                    ((b ushr 10) and 4095) == address.toLong()
+            }
+        }
+        need(bases.size == 1, "FUNCS_ADDRESS")
+        val first = bases.single(); val base = word(first) and 31
+        need(first + 13 * 4 <= end, "LOOP_BOUNDS")
+        val node = word(first + 8) and 31
+        need(base in 3..17 && node in 19..28 && load(first + 8, node, base, 0) &&
+            word(first + 12) and 0xff00001f.toInt() == (0xb4000000.toInt() or node), "LIST_LOAD")
+        val saves = listOf(first + 16, first + 20).associate { at -> ((word(at) ushr 16) and 31) to (word(at) and 31) }
+        need(saves.keys == setOf(1, 2) && (saves.values + node).distinct().size == 3 && saves.values.all { it in 19..28 } &&
+            listOf(first + 16, first + 20).all { word(it) == move(word(it) and 31, (word(it) ushr 16) and 31) }, "ARGUMENT_SAVE")
+        val callback = field("tracepoint_func.func"); val data = field("tracepoint_func.data")
+        val stride = field("tracepoint_func.__size").widthBytes
+        val callLoad = first + 24; val fn = word(callLoad) and 31
+        need(fn in 3..17 && callback.widthBytes == 8 && data.widthBytes == 8 && stride in 16..256 && stride % 8 == 0, "RECORD")
+        val pair = word(callLoad) and 0xffc00000.toInt() == 0xa9400000.toInt()
+        val call: Int
+        if (pair) {
+            need((word(callLoad) ushr 5) and 31 == node && (word(callLoad) ushr 10) and 31 == 0 &&
+                UltraKernelA64.signExtend(((word(callLoad) ushr 15) and 127).toLong(), 7) * 8 == callback.offsetBytes.toLong() &&
+                data.offsetBytes == callback.offsetBytes + 8 && word(first + 28) == move(1, saves.getValue(1)) &&
+                word(first + 32) == move(2, saves.getValue(2)), "PAIR_ARGUMENTS")
+            call = first + 36
+        } else {
+            need(load(callLoad, fn, node, callback.offsetBytes) && word(first + 28) == move(1, saves.getValue(1)) &&
+                load(first + 32, 0, node, data.offsetBytes) && word(first + 36) == move(2, saves.getValue(2)), "CALL_ARGUMENTS")
+            call = first + 40
+        }
+        val advance = call + 4; val again = call + 8; val tail = call + 12
+        need(tail < end && word(call) == (0xd63f0000.toInt() or (fn shl 5)) &&
+            word(advance) == (0xf8400c00.toInt() or (stride shl 12) or (node shl 5) or fn) &&
+            word(again) and 0xff00001f.toInt() == (0xb5000000.toInt() or fn) && branch(again) == callLoad &&
+            branch(first + 12) == tail, "LOOP_EDGES")
+        fun stackInstruction(value: Int, loading: Boolean): Boolean {
+            val rn = (value ushr 5) and 31; val rt = value and 31; val rt2 = (value ushr 10) and 31
+            val pairMemory = value and 0x3a000000 == 0x28000000 && value ushr 30 == 2 &&
+                value and (1 shl 22) != 0 == loading && rn == 31 && rt in 19..30 && rt2 in 19..30
+            val singleMemory = value and 0x3a000000 == 0x38000000 && value ushr 30 == 3 &&
+                value and (1 shl 22) != 0 == loading && rn in setOf(18, 31) && rt in 19..30
+            return pairMemory || singleMemory
+        }
+        for (at in start until first step 4) need(word(at) in setOf(0xd503233f.toInt(), 0xd503237f.toInt(),
+            0xd503245f.toInt(), 0xd50324df.toInt(), UltraKernelA64.NOP, 0x910003fd.toInt()) ||
+            stackInstruction(word(at), false), "PROLOGUE")
+        var finish = tail
+        while (finish < end && word(finish) != UltraKernelA64.RET && word(finish) !in setOf(0xd65f0bff.toInt(), 0xd65f0fff.toInt())) {
+            need(word(finish) in setOf(0x2a1f03e0, 0xd50323bf.toInt(), 0xd50323ff.toInt(), UltraKernelA64.NOP) ||
+                stackInstruction(word(finish), true), "EPILOGUE")
+            finish += 4
+        }
+        need(finish < end, "RETURN")
+        return buildJsonObject { put("caller", "__traceiter_sys_enter"); put("start", start); put("bytes", end - start)
+            put("sha256", UltraKernelSpec.sha256(kernel.copyOfRange(start, end))); put("callOffset", call)
+            put("funcsPointerOffset", address); put("recordBytes", stride); put("funcOffset", callback.offsetBytes)
+            put("dataOffset", data.offsetBytes); put("machineAbiQualified", true); put("targetCfiTypeIdQualified", false) }
+    }
+
     fun derive(kernel: ByteArray, symbols: UltraKernelSymbols,
         facts: UltraKernelManagerClaimPayload.TaskProfileFacts): Proof =
         derive(kernel, symbols, requireNotNull(facts.implementation), facts.cfiMode)
 
-    /** Claim ELF and init_boot module consume exactly the same per-Image proof. */
+    /** Claim ELF and init_boot module consume the same five qualifications.
+     * The verified normal loader may supply native module layout when Image BTF is absent. */
     fun derive(kernel: ByteArray, symbols: UltraKernelSymbols, impl: Implementation,
-        cfiMode: String): Proof {
+        cfiMode: String, normalModuleLoader: Boolean = false): Proof {
         require(cfiMode in setOf("none", "kcfi", "legacy-lto-cfi")) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_CFI_MODE" }
         require(symbols.imageSize == kernel.size && impl.present) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_IMPLEMENTATION" }
         val missing = linkedMapOf<String, String>()
@@ -389,14 +587,24 @@ internal object UltraKernelTaskProfileTarget {
             catch (error: Exception) { missing[name] = error.message ?: error.javaClass.simpleName }
         }
         fun json(values: Map<String, String>) = JsonObject(values.mapValues { JsonPrimitive(it.value) })
-        val needed = setOf("task_struct.__size", "task_struct.stack", "task_struct.thread_info", "task_struct.tasks", "task_struct.thread_node",
+        val needed = setOf("task_struct.__size", "task_struct.thread_info", "task_struct.tasks", "task_struct.thread_node",
             "thread_info.flags", "thread_info.syscall_work", "signal_struct.thread_head", "pt_regs.__size", "pt_regs.regs",
             "pt_regs.syscallno", "tracepoint.__size", "tracepoint.funcs", "tracepoint_func.__size", "tracepoint_func.func",
             "tracepoint_func.data", "kretprobe.__size", "kretprobe.handler", "kretprobe.entry_handler", "kretprobe.kp.addr",
-            "kretprobe.maxactive", "kretprobe.nmissed")
-        val layout = UltraKernelBtf.abi(kernel, symbols, needed, setOf("thread_info.syscall_work"))
+            "kretprobe.maxactive", "kretprobe.nmissed", "tracepoint.iterator", "list_head.__size", "list_head.next", "list_head.prev")
+        val imageBtf = symbols.offsetsOf("__start_BTF").isNotEmpty() || symbols.offsetsOf("__stop_BTF").isNotEmpty()
+        val nativeLayout = if (!imageBtf && normalModuleLoader && cfiMode == "legacy-lto-cfi") impl.nativeLayout else null
+        val layout = if (nativeLayout != null) UltraKernelLayout(nativeLayout.getValue("fields").jsonObject.mapValues { (_, value) ->
+            val item = value.jsonObject
+            UltraKernelLayoutField(item.getValue("offsetBytes").jsonPrimitive.int,
+                item.getValue("widthBytes").jsonPrimitive.int, item.getValue("ownerSizeBytes").jsonPrimitive.int,
+                "module-dwarf-derived-btf")
+        }) else UltraKernelBtf.abi(kernel, symbols, needed, setOf("thread_info.syscall_work"))
             ?: error("ULTRA_KERNEL_TASK_PROFILE_TARGET_BTF")
         fun field(name: String) = layout.fields[name] ?: error("ULTRA_KERNEL_TASK_PROFILE_TARGET_FIELD:$name")
+        fun signature(name: String): String? = if (nativeLayout != null)
+            nativeLayout.getValue("fields").jsonObject[name]?.jsonObject?.get("signature")?.jsonPrimitive?.content
+            else UltraKernelBtf.memberSignature(kernel, symbols, name.substringBefore('.'), name.substringAfter('.'))
         val taskInfo = field("task_struct.thread_info")
         val flags = field("thread_info.flags")
         val taskFlags = taskInfo.offsetBytes + flags.offsetBytes
@@ -406,7 +614,7 @@ internal object UltraKernelTaskProfileTarget {
             require(listOf("CONFIG_ARM64", "CONFIG_64BIT", "CONFIG_THREAD_INFO_IN_TASK").all(::enabled) &&
                 flags.widthBytes == 8 && flags.offsetBytes % 8 == 0 && taskFlags % 8 == 0 &&
                 taskInfo.widthBytes == flags.ownerSizeBytes &&
-                UltraKernelBtf.memberSignature(kernel, symbols, "thread_info", "flags") == "i8:64") {
+                signature("thread_info.flags") == "i8:64") {
                 "ULTRA_KERNEL_TASK_PROFILE_TARGET_FLAGS64"
             }
             val explicit = UltraKernelBtf.enumValue(kernel, symbols, "TIF_KSU_DISABLE_ESCAPE_WITH_ROOT")
@@ -418,11 +626,10 @@ internal object UltraKernelTaskProfileTarget {
         }
         proof("rcu") {
             val head = field("signal_struct.thread_head"); val node = field("task_struct.thread_node")
-            val list = UltraKernelBtf.selectedStructure(kernel, symbols, "list_head", setOf("next", "prev"))
-                ?: error("ULTRA_KERNEL_TASK_PROFILE_TARGET_LIST_BTF")
             require(taskInfo.widthBytes == flags.ownerSizeBytes && head.widthBytes == 16 && node.widthBytes == 16 &&
-                list.bytes == 16 && list.members.getValue("next").offset == 0 && list.members.getValue("prev").offset == 8 &&
-                list.members.values.all { it.bytes == 8 } && head.offsetBytes % 8 == 0 && node.offsetBytes % 8 == 0) {
+                field("list_head.__size").widthBytes == 16 && field("list_head.next").offsetBytes == 0 &&
+                field("list_head.prev").offsetBytes == 8 && listOf("list_head.next", "list_head.prev").all { field(it).widthBytes == 8 } &&
+                head.offsetBytes % 8 == 0 && node.offsetBytes % 8 == 0) {
                 "ULTRA_KERNEL_TASK_PROFILE_TARGET_RCU_EMBEDDED_LIST"
             }
             buildJsonObject { put("embeddedThreadInfo", true); put("threadHeadOffset", head.offsetBytes)
@@ -433,7 +640,7 @@ internal object UltraKernelTaskProfileTarget {
             val types = abi.getValue("types").jsonObject
             val expected = types.mapValues { it.value.jsonObject.getValue("signature").jsonPrimitive.content }
             require(types.keys.containsAll(setOf("list_head", "rwlock_t")) &&
-                UltraKernelBtf.typeSignatures(kernel, symbols, expected.keys) == expected &&
+                (nativeLayout != null || UltraKernelBtf.typeSignatures(kernel, symbols, expected.keys) == expected) &&
                 abi["listHeadBytes"]?.jsonPrimitive?.intOrNull == 16 &&
                 abi["listHeadAlignment"]?.jsonPrimitive?.intOrNull == 8 &&
                 abi["rwlockBytes"] == types.getValue("rwlock_t").jsonObject["bytes"]) {
@@ -452,6 +659,7 @@ internal object UltraKernelTaskProfileTarget {
                 put("implementationSourceSha256", impl.sourceSha256) }
         }
         proof("cfi") {
+            var uncheckedTrace: JsonObject? = null
             if (cfiMode == "legacy-lto-cfi") {
                 require(UltraKernelLegacyModuleRoute.required(kernel) &&
                     impl.normalizeIntegers == enabled("CONFIG_CFI_ICALL_NORMALIZE_INTEGERS")) {
@@ -465,19 +673,28 @@ internal object UltraKernelTaskProfileTarget {
                     }) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_LEGACY_OWNER" }
                 val callers = legacy.getValue("callerTypeSets").jsonObject
                 require(callers.isNotEmpty()) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_LEGACY_CALLERS" }
-                for ((caller, types) in callers) {
-                    val ids = types.jsonArray.map { it.jsonPrimitive.content }.toSet()
-                    require(ids.isNotEmpty() && ids.all { it.matches(Regex("[0-9a-f]{16}")) } &&
-                        UltraKernelLegacyCfi.slowpathCallsites(kernel, symbols, caller).map { it.typeIdHex }.toSet() == ids) {
-                        "ULTRA_KERNEL_TASK_PROFILE_TARGET_LEGACY_CALLER:$caller"
-                    }
-                }
                 val members = legacy.getValue("members").jsonObject
                 val callsites = legacy.getValue("callbackCallsites").jsonObject
                 val required = setOf("msu_task_profile_sys_enter", "msu_task_profile_marker_entry", "msu_task_profile_marker_return")
                 require(members.keys == required && callsites.keys == required) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_LEGACY_CALLBACKS" }
+                val unchecked = legacyUncheckedTrace(impl, "msu_task_profile_sys_enter", members.getValue("msu_task_profile_sys_enter").jsonObject)
+                for ((caller, types) in callers) {
+                    val ids = types.jsonArray.map { it.jsonPrimitive.content }.toSet()
+                    require((ids.isNotEmpty() || caller == "__traceiter_sys_enter" && unchecked != null) &&
+                        ids.all { it.matches(Regex("[0-9a-f]{16}")) } &&
+                        UltraKernelLegacyCfi.slowpathCallsites(kernel, symbols, caller).map { it.typeIdHex }.toSet() == ids) {
+                        "ULTRA_KERNEL_TASK_PROFILE_TARGET_LEGACY_CALLER:$caller"
+                    }
+                }
                 for ((name, element) in members) {
                     val member = element.jsonObject
+                    if (legacyUncheckedTrace(impl, name, member) != null) {
+                        uncheckedTrace = verifyUncheckedTrace(kernel, symbols, layout)
+                        if (imageBtf) require(listOf("__bpf_trace_sys_enter", "trace_event_raw_event_sys_enter").all {
+                            UltraKernelBtf.functionSignature(kernel, symbols, it) == impl.signatures.getValue(name)
+                        }) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_LEGACY_TRACE_SIGNATURE" }
+                        continue
+                    }
                     val id = member.getValue("typeIdHex").jsonPrimitive.content
                     require(id.matches(Regex("[0-9a-f]{16}")) && member["symbol"]?.jsonPrimitive?.content == name &&
                         member["proof"]?.jsonPrimitive?.content == "actual-relocated-module-checker-path" &&
@@ -488,7 +705,7 @@ internal object UltraKernelTaskProfileTarget {
                         } }) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_LEGACY_TYPE64:$name" }
                 }
                 for ((member, callback) in mapOf("handler" to "msu_task_profile_marker_return", "entry_handler" to "msu_task_profile_marker_entry"))
-                    require(UltraKernelBtf.memberSignature(kernel, symbols, "kretprobe", member) == "*" + impl.signatures.getValue(callback)) {
+                    require(signature("kretprobe.$member") == "*" + impl.signatures.getValue(callback)) {
                         "ULTRA_KERNEL_TASK_PROFILE_TARGET_LEGACY_MARKER_TYPE:$member"
                     }
             } else UltraKernelResidentAbi.verifyCfi(kernel, cfiMode, impl.normalizeIntegers)
@@ -502,6 +719,7 @@ internal object UltraKernelTaskProfileTarget {
             }
             buildJsonObject { put("mode", cfiMode); put("normalizeIntegers", impl.normalizeIntegers)
                 put("callbackCount", 3)
+                uncheckedTrace?.let { put("uncheckedTrace", it) }
                 impl.legacyCfi?.let { put("legacyModuleChecker", it) } }
         }
         proof("syscallTracepoint") {
@@ -524,14 +742,17 @@ internal object UltraKernelTaskProfileTarget {
                 "ULTRA_KERNEL_TASK_PROFILE_TARGET_SYSCALL_TABLE_RANGE"
             }
             for ((nr, function) in listOf(trace[9] to "__arm64_sys_execve", trace[10] to "__arm64_sys_execveat")) {
-                val entry = symbols.offsetsOf(function).singleOrNull()
-                    ?: error("ULTRA_KERNEL_TASK_PROFILE_TARGET_SYSCALL_FUNCTION:$function")
+                val entry = if (cfiMode == "legacy-lto-cfi")
+                    UltraKernelLegacyCfi.canonicalEntry(kernel, symbols, function).canonicalOffset
+                    else symbols.offsetsOf(function).singleOrNull()
+                        ?: error("ULTRA_KERNEL_TASK_PROFILE_TARGET_SYSCALL_FUNCTION:$function")
                 val pointer = ByteBuffer.wrap(kernel, syscallTable + nr * 8, 8).order(ByteOrder.LITTLE_ENDIAN).long
                 require(pointer == rawSymbols.textBase + entry) { "ULTRA_KERNEL_TASK_PROFILE_TARGET_SYSCALL_NUMBER:$function" }
             }
             val generic = enabled("CONFIG_GENERIC_ENTRY")
             val member = field(if (generic) "thread_info.syscall_work" else "thread_info.flags")
-            val branch = UltraKernelTaskProfileCode.workBit(kernel, symbols, taskInfo.offsetBytes + member.offsetBytes, generic)
+            val branch = UltraKernelTaskProfileCode.workBit(kernel, symbols, taskInfo.offsetBytes + member.offsetBytes,
+                generic, field("tracepoint.funcs").offsetBytes)
             workMember = branch.member; workBit = branch.bit
             val abi = impl.nativeAbi; val rwBytes = abi.getValue("rwlockBytes").jsonPrimitive.int
             val rwAlign = abi.getValue("rwlockAlignment").jsonPrimitive.int
@@ -551,19 +772,12 @@ internal object UltraKernelTaskProfileTarget {
                 put("dispatcher", branch.function); put("branchOffset", branch.branch); put("traceReference", branch.traceReference)
                 put("functionSha256", branch.functionSha256); put("registrationPendingRuntimeOpen", true) }
         }
-        proof("cloneExec") {
-            require(field("task_struct.stack").widthBytes == 8 &&
-                field("task_struct.stack").offsetBytes % 8 == 0 &&
-                UltraKernelBtf.memberSignature(kernel, symbols, "task_struct", "stack") == "*v") {
-                "ULTRA_KERNEL_TASK_PROFILE_TARGET_STACK_POINTER"
-            }
-            val paths = UltraKernelTaskProfileCode.prove(kernel, symbols, taskFlags, field("task_struct.__size").widthBytes, field("task_struct.stack").offsetBytes)
-            buildJsonObject { put("scope", "actual-architecture-copy-and-exec-reset-paths")
-                put("functions", json(paths.functions)); put("calls", JsonArray(paths.calls.map(::JsonPrimitive)))
-                put("stores", JsonArray(paths.stores.map(::JsonPrimitive))) }
-        }
+        // Clone/exec keep the fixed KernelSU native lifecycle; no extra Image CFG qualification.
         val document = buildJsonObject { put("schema", PROOF_SCHEMA); put("slot63Contract", SLOT_CONTRACT)
             put("targetSha256", sha); put("configSha256", configSha); put("implementationSourceSha256", impl.sourceSha256)
+            put("layoutOrigin", if (nativeLayout != null) "module-dwarf-derived-btf" else "target-image-btf")
+            put("targetImageBtf", imageBtf); put("normalModuleLoader", normalModuleLoader)
+            nativeLayout?.let { put("nativeLayoutSha256", UltraKernelSpec.sha256(it.toString().toByteArray(Charsets.UTF_8))) }
             put("proofs", JsonObject(evidence)); put("missing", json(missing)) }
         return Proof(sha, configSha, UltraKernelSpec.sha256(document.toString().toByteArray(Charsets.UTF_8)),
             workMember, workBit, markerWords, document, missing)

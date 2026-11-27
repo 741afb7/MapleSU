@@ -21,12 +21,11 @@ unsigned occurrences(const std::string& text, const char* prefix) {
     return result;
 }
 }
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*) {}
 extern "C" void __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c(const char*) {}
 void helper_log(helper_context*, const char* message) { logs.emplace_back(message); }
 void helper_log_error(helper_context*, const char* message, helper_i64) { logs.emplace_back(message); }
 namespace maplesu::module_runtime {
-Result run_single(const char*, const char*, const maplesu::module::SdkVersion&) { ++runs; return reply; }
+Result run_single(const char*, const maplesu::module::SdkVersion&) { ++runs; return reply; }
 }
 int main() {
     helper_context context{};
@@ -52,6 +51,6 @@ int main() {
     check(run("boot-close") == HELPER_EXIT_ENVIRONMENT, "skipped callback still requires worker cleanup");
     reply = {};
     check(run("boot-root") == HELPER_EXIT_ENVIRONMENT && runs == 0, "failed root does not run module");
-    check(run("", false) == HELPER_EXIT_OK && runs == 1, "legacy worker path retained");
+    check(run("", false) == HELPER_EXIT_ENVIRONMENT && runs == 0, "unbound worker never falls back to a credential");
     std::cout << "PASS single helper close: 7 causal groups\n";
 }

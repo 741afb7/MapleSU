@@ -6,8 +6,7 @@
 #include "su_retention_store.h"
 #include "su_uid_copies.h"
 #include "su_auth_result_private.h"
-extern "C" KModErr maplesu_prepare_su_exec(const char*);
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
+extern "C" KModErr maplesu_prepare_su_exec();
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
@@ -109,7 +108,7 @@ KModErr maplesu::su_auth::detail::write_allowlist(
         const std::vector<std::string>& packages, const char* required_package, bool refresh_existing,
         ResultV1& result) {
     using namespace kernel_module;
-    const auto prepared = maplesu_prepare_su_exec(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    const auto prepared = maplesu_prepare_su_exec();
     if (is_failed(prepared)) return fail(result, prepared, Phase::WriterPrepare);
     auto mappings = android_pkgmap::read_pkg_uids_from_packages_list(packages, "/data/system/packages.list");
     if (required_package || refresh_existing) {
@@ -165,7 +164,7 @@ KModErr maplesu::su_auth::detail::write_allowlist(
         }
         if (same) {
             error = maplesu_sync_su_copies_from_control(
-                __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), control);
+                control);
             if (is_failed(error)) set_delivery(result, Delivery::Unknown);
             return fail(result, error, Phase::WriterCopySync);
         }
@@ -194,12 +193,12 @@ KModErr maplesu::su_auth::detail::write_allowlist(
         }
     }
     const std::vector<uint32_t> copy_uids(table.begin(), table.end() - 1);
-    error = maplesu_sync_su_copies(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), copy_uids);
+    error = maplesu_sync_su_copies(copy_uids);
     if (is_failed(error)) {
         fail(result, error, Phase::WriterCopySync);
         set_delivery(result, Delivery::Unknown);
         const auto restored = maplesu_sync_su_copies_from_control(
-            __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), control);
+            control);
         recover(result, Phase::WriterRestoreCopies, restored);
         if (replacement) recover(result, Phase::WriterFreeUnpublished, free_kernel_mem(replacement));
         return finish(result, is_failed(restored) ? restored : error);

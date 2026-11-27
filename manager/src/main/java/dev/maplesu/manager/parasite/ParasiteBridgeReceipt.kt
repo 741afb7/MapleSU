@@ -58,7 +58,6 @@ object ParasiteBridgeCodes {
     const val UNAVAILABLE = "MAPLESU_BRIDGE_UNAVAILABLE"
     const val UNPARSEABLE = "MAPLESU_BRIDGE_UNPARSEABLE"
     const val EXCEPTION = "MAPLESU_BRIDGE_EXCEPTION"
-    const val ROOT_KEY_ABSENT = "MAPLESU_ULTRA_ROOT_KEY_ABSENT"
 }
 
 /** native 绑定异常（端口把 code 映射为 `ULTRA_*` 四码）。 */
@@ -90,24 +89,24 @@ object ParasiteBridgeReceiptParser {
 
 /** 三 JNI 调用的可注入替身（主机测试不加载 native 库）。 */
 interface ParasiteNativeCall {
-    fun precheck(rootKey: String, targetPidCmdline: String): String?
-    fun implantApp(rootKey: String, targetPidCmdline: String, soPath: String): String?
-    fun implantSuEnv(rootKey: String, targetPidCmdline: String, soPath: String, suDir: String): String?
+    fun precheck(targetPidCmdline: String): String?
+    fun implantApp(targetPidCmdline: String, soPath: String): String?
+    fun implantSuEnv(targetPidCmdline: String, soPath: String, suDir: String): String?
 }
 
 /**
  * 把 bridge 回执适配为 [ParasiteUltraApi]：
  * - 回执缺失/不可解析/`ok=false` → 抛 [ParasiteUltraApiException]（不伪造成功）；
  * - `data.dynlibs` 的 `unknown` 状态 → 抛错（不默认 not_running）；
- * - rootKey 为空 → `MAPLESU_ULTRA_ROOT_KEY_ABSENT`。
+ * - 授权由原生当前任务通道核验。
  */
 class ParasiteUltraApiAdapter(
     private val native: ParasiteNativeCall,
 ) : ParasiteUltraApi {
 
-    override fun precheckApp(rootKey: ByteArray, targetPidCmdline: String): Map<String, AppDynlibStatus> {
+    override fun precheckApp(targetPidCmdline: String): Map<String, AppDynlibStatus> {
         val receipt = requireReceipt(
-            native.precheck(requireKey(rootKey), targetPidCmdline), "parasite_precheck_app",
+            native.precheck(targetPidCmdline), "parasite_precheck_app",
         )
         val result = linkedMapOf<String, AppDynlibStatus>()
         for (dynlib in receipt.dynlibs) {
@@ -131,32 +130,23 @@ class ParasiteUltraApiAdapter(
         return result
     }
 
-    override fun implantApp(rootKey: ByteArray, targetPidCmdline: String, soPath: String): Int {
+    override fun implantApp(targetPidCmdline: String, soPath: String): Int {
         requireReceipt(
-            native.implantApp(requireKey(rootKey), targetPidCmdline, soPath), "parasite_implant_app",
+            native.implantApp(targetPidCmdline, soPath), "parasite_implant_app",
         )
         return 0
     }
 
     override fun implantSuEnv(
-        rootKey: ByteArray,
         targetPidCmdline: String,
         soPath: String,
         suDir: String,
     ): Int {
         requireReceipt(
-            native.implantSuEnv(requireKey(rootKey), targetPidCmdline, soPath, suDir),
+            native.implantSuEnv(targetPidCmdline, soPath, suDir),
             "parasite_implant_su_env",
         )
         return 0
-    }
-
-    private fun requireKey(rootKey: ByteArray): String {
-        if (rootKey.isEmpty()) {
-            throw ParasiteUltraApiException(ParasiteBridgeCodes.ROOT_KEY_ABSENT, "rootKey empty")
-        }
-        // 48 字符 ASCII rootKey 只在进程内转成 String，用于 JNI 入参；不落盘/不日志。
-        return String(rootKey, Charsets.US_ASCII)
     }
 
     private fun requireReceipt(raw: String?, operation: String): ParasiteBridgeReceipt {

@@ -99,7 +99,7 @@ KModErr install_owner_hook(uint64_t kaddr, const void* buffer, uint32_t size,
                           const RequestSharedBool* dependencies = nullptr, uint32_t count = 0,
                           const OwnedHookActor* actor = nullptr, bool* actor_transferred = nullptr) {
     if (output) *output = nullptr;
-    // Both authenticated backends use the same kernel-owned 64-instance pool
+    // Both authenticated backends use the kernel-owned 64-instance pool
     // and overflow provider, with one owner spanning original and callback.
     if (actor_transferred) *actor_transferred = false;
     if (actor && (after || !actor_transferred ||

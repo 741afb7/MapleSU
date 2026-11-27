@@ -1,6 +1,5 @@
 package dev.maplesu.manager.runtime.ultra
 
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import org.json.JSONObject
 
 /** A control receipt is not proof that the SDK channel or environment works. */
@@ -10,7 +9,7 @@ internal object UltraBootSdkGateway {
     private val BASE = Regex("0xffff[0-9a-f]{12}")
 
     class Receipt(val bootId: String, val state: Int, val error: Int,
-                  val capabilities: Int, val kernelBase: String, val key: String) {
+                  val capabilities: Int, val kernelBase: String) {
         val ready: Boolean get() = state == 1 && error == 0 && capabilities and 3 == 3
         val environment: Boolean get() = ready && capabilities and 4 != 0
         override fun toString() = "UltraBootSdkGateway(state=$state, error=$error, capabilities=$capabilities)"
@@ -26,13 +25,11 @@ internal object UltraBootSdkGateway {
         val error = json.getInt("error")
         val capabilities = json.getInt("capabilities")
         val base = json.getString("kernelBase")
-        val key = json.getString("key")
         if (state !in 0..3 || capabilities and 7.inv() != 0) return null
         if (state == 1 && error == 0) {
-            if (!BASE.matches(base) || capabilities and 3 != 3 ||
-                !UltraKernelCredential.isValid(key) || !UltraKernelCredential.of(key).sdkMetadataValid) return null
-        } else if (key.isNotEmpty() || base != "0x0000000000000000" || capabilities != 0) return null
-        Receipt(bootId, state, error, capabilities, base, key)
+            if (!BASE.matches(base) || capabilities and 3 != 3) return null
+        } else if (base != "0x0000000000000000" || capabilities != 0) return null
+        Receipt(bootId, state, error, capabilities, base)
     }.getOrNull()
 
     interface Port {
@@ -61,7 +58,7 @@ internal object UltraBootSdkGateway {
             if (receipt.state == 0 && receipt.error == 0) {
                 // EMPTY is a live kernel receipt: bootstrap has not entered INITIALIZING.
                 // A failed userspace preflight must not poison the whole boot. The
-                // resident state machine still prevents a second allocation or key.
+                // resident state machine still prevents a second allocation.
                 if (!alreadySubmitted && !port.markSubmitted()) return fail("SDK_BOOTSTRAP_GUARD_STORE_FAILED")
                 if (!port.current()) return fail("SESSION_CHANGED")
                 submitted = true

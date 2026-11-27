@@ -4,16 +4,15 @@ namespace maplesu {
 enum class SdkCallAccess { Local, Read, Exclusive, Isolated };
 SdkCallAccess sdk_call_access(const char* operation);
 
-struct SdkKeyContext {
-    char key[1024]{};
-    bool assigned = false;
+struct SdkCallContext {
     bool retry_interrupted_wait = true;
+    bool owns_transport = true;
     int process_error = 0;
     int owner_pid = 0;
 };
 
-// Known calls own their key/transport and conflict only on the resources they
-// actually share. Unknown entries retain the conservative legacy exclusive path.
+// Known calls own their transport and conflict only on the resources they
+// actually share. Unknown entries retain conservative exclusive admission.
 // Isolated calls retain their own bounded worker/slot and real deadline.
 class SdkCallScope final {
 public:
@@ -27,10 +26,9 @@ private:
     SdkCallAccess access_;
     unsigned read_mask_ = 0;
     unsigned write_mask_ = 0;
-    bool request_key_ = false;
+    bool owned_transport_ = false;
     bool acquired_ = false;
-    SdkKeyContext context_;
-    SdkKeyContext* previous_ = nullptr;
-    SdkKeyContext* previous_call_ = nullptr;
+    SdkCallContext context_;
+    SdkCallContext* previous_call_ = nullptr;
 };
 }

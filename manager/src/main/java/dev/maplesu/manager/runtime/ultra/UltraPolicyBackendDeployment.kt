@@ -5,6 +5,7 @@ import com.maplesu.core.BuildConfig
 import dev.maplesu.manager.modules.ModuleToolDeployment
 import dev.maplesu.manager.runtime.UltraRootCommandReceipt
 import java.io.File
+import java.util.concurrent.CancellationException
 
 internal object UltraPolicyBackendDeployment {
     // Executed only before submitting a new helper. Page reads and startup
@@ -14,7 +15,9 @@ internal object UltraPolicyBackendDeployment {
         // receive this build's standard policy gate before the new helper starts.
         val toolsScript = try {
             ModuleToolDeployment.script(context)
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            if (error is InterruptedException) Thread.currentThread().interrupt()
             return "MODULE_TOOLS_ASSET_UNAVAILABLE"
         }
         // Keep the scoped SDK identity used by installation preparation. The full
@@ -31,7 +34,9 @@ internal object UltraPolicyBackendDeployment {
             val receipt = client.publishPolicyBackend(expected, bytes)
             if (receipt.succeeded && receipt.string("sha256") == expected) null
             else "POLICY_BACKEND_PUBLICATION_FAILED"
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            if (error is InterruptedException) Thread.currentThread().interrupt()
             "POLICY_BACKEND_ASSET_UNVERIFIED"
         }
     }
@@ -74,7 +79,12 @@ internal object UltraPolicyBackendDeployment {
             }
             if (!completed.output.contains("MAPLESU_TOOL_SEPOLICY:updated ") ||
                 !completed.output.contains("MAPLESU_TOOL_KSUD:updated ")) return "MODULE_POLICY_TOOLS_NOT_REPORTED"
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            if (error is InterruptedException) {
+                Thread.currentThread().interrupt()
+                return "MAPLESU_SDK_INTERRUPTED"
+            }
             return "MODULE_TOOLS_PUBLICATION_FAILED"
         }
         return null

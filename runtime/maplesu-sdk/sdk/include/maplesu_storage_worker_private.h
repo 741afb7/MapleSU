@@ -18,7 +18,7 @@ public:
     ~WorkerScope() { close(); }
     WorkerScope(const WorkerScope&) = delete;
     WorkerScope& operator=(const WorkerScope&) = delete;
-    bool owner_mode() const { return !kernel_module::maplesu_request_auth_legacy(auth_); }
+    bool owner_mode() const { return kernel_module::maplesu_request_auth_authenticated(auth_); }
 
     KModErr root() {
         scope_.reset();

@@ -23,7 +23,7 @@ static bool running_ready;
 
 static u32 btf_word(const u8 *p)
 { return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24; }
-static u32 btf_kind(const u8 *t) { return btf_word(t + 4) >> 24 & 31; }
+static u32 msu_btf_kind(const u8 *t) { return btf_word(t + 4) >> 24 & 31; }
 static u32 btf_count(const u8 *t) { return btf_word(t + 4) & 65535; }
 static const u8 *btf_type(u32 id)
 {
@@ -45,7 +45,7 @@ static int btf_resolve(u32 id, u32 *resolved)
         if (!id) { *resolved = 0; return 0; }
         t = btf_type(id);
         if (!t) return -EINVAL;
-        kind = btf_kind(t);
+        kind = msu_btf_kind(t);
         if (kind != 8 && kind != 9 && kind != 10 && kind != 11 && kind != 18) {
             *resolved = id;
             return 0;
@@ -64,7 +64,7 @@ static int btf_size(u32 id, unsigned int depth, u32 *bytes)
     if (error) return error;
     if (!resolved) { *bytes = 0; return 0; }
     t = btf_type(resolved);
-    switch (btf_kind(t)) {
+    switch (msu_btf_kind(t)) {
     case 2: *bytes = 8; return 0;
     case 1: case 4: case 5: case 6: case 16: case 19:
         *bytes = btf_word(t + 8); return 0;
@@ -83,7 +83,7 @@ static int btf_record(const u8 *t, u32 remaining, u32 *bytes)
     u32 extra, count;
     if (remaining < 12) return -EINVAL;
     count = btf_count(t);
-    switch (btf_kind(t)) {
+    switch (msu_btf_kind(t)) {
     case 1: case 14: case 17: extra = 4; break;
     case 3: extra = 12; break;
     case 4: case 5: case 15: case 19: extra = count * 12; break;
@@ -166,7 +166,7 @@ static int btf_field(u32 id, const char *path, u32 prefix, unsigned int depth,
     error = btf_resolve(id, &resolved);
     if (error) return error;
     t = btf_type(resolved);
-    if (!t || (btf_kind(t) != 4 && btf_kind(t) != 5)) return -EOPNOTSUPP;
+    if (!t || (msu_btf_kind(t) != 4 && msu_btf_kind(t) != 5)) return -EOPNOTSUPP;
     for (i = 0; i < btf_count(t); ++i) {
         const u8 *m = t + 12 + i * 12;
         const char *name = btf_name(btf_word(m));
@@ -190,7 +190,7 @@ static int btf_field(u32 id, const char *path, u32 prefix, unsigned int depth,
         if (offset > btf_word(t + 8) || size > btf_word(t + 8) - offset ||
             prefix > ~0U - offset) return -EINVAL;
         if (!*name) {
-            if (btf_kind(mt) != 4 && btf_kind(mt) != 5) continue;
+            if (msu_btf_kind(mt) != 4 && msu_btf_kind(mt) != 5) continue;
             error = btf_field(member, path, prefix + offset, depth + 1, &field);
             if (error == -ENOENT) continue;
             if (error) return error;
@@ -198,12 +198,12 @@ static int btf_field(u32 id, const char *path, u32 prefix, unsigned int depth,
             error = btf_field(member, dot + 1, prefix + offset, depth + 1, &field);
             if (error) return error;
         } else {
-            if (btf_kind(mt) == 1) {
+            if (msu_btf_kind(mt) == 1) {
                 u32 encoding = btf_word(mt + 12);
                 if ((encoding >> 16 & 255) || (u64)(encoding & 255) != (u64)size * 8) return -EOPNOTSUPP;
             }
             field.offset = prefix + offset; field.bytes = size;
-            field.kind = btf_kind(mt); field.type_id = value;
+            field.kind = msu_btf_kind(mt); field.type_id = value;
         }
         if (++matches != 1) return -ENOTUNIQ;
         selected = field;
@@ -224,11 +224,11 @@ static int btf_credential_id(u32 *output)
     int error = msu_runtime_btf_field("task_struct", "cred", &anchor);
     if (error) return error;
     t = btf_type(anchor.type_id);
-    if (!t || btf_kind(t) != 2 || anchor.bytes != 8) return -EPROTO;
+    if (!t || msu_btf_kind(t) != 2 || anchor.bytes != 8) return -EPROTO;
     error = btf_resolve(btf_word(t + 8), &resolved);
     if (error) return error;
     t = btf_type(resolved);
-    if (!t || btf_kind(t) != 4 || !btf_word(t + 8)) return -EPROTO;
+    if (!t || msu_btf_kind(t) != 4 || !btf_word(t + 8)) return -EPROTO;
     name = btf_name(btf_word(t));
     if (!name || strcmp(name, "cred")) return -EPROTO;
     *output = resolved;
@@ -259,14 +259,14 @@ int msu_runtime_btf_field(const char *structure, const char *member,
         struct msu_runtime_btf_field candidate;
         u32 resolved;
         int error;
-        if (btf_kind(t) != 4 && btf_kind(t) != 5 && btf_kind(t) != 8) continue;
+        if (msu_btf_kind(t) != 4 && msu_btf_kind(t) != 5 && msu_btf_kind(t) != 8) continue;
         name = btf_name(btf_word(t));
         if (!name) return -EINVAL;
         if (strcmp(name, structure)) continue;
         error = btf_resolve(id, &resolved);
         if (error) return error;
         t = btf_type(resolved);
-        if (!t || (btf_kind(t) != 4 && btf_kind(t) != 5) || !btf_word(t + 8)) continue;
+        if (!t || (msu_btf_kind(t) != 4 && msu_btf_kind(t) != 5) || !btf_word(t + 8)) continue;
         error = btf_field(id, member, 0, 0, &candidate);
         if (error) return error;
         candidate.owner_bytes = btf_word(t + 8);
@@ -291,14 +291,14 @@ int msu_runtime_btf_type_id(const char *structure, u32 *output)
         const char *name;
         u32 resolved;
         int error;
-        if (btf_kind(t) != 4 && btf_kind(t) != 5 && btf_kind(t) != 8) continue;
+        if (msu_btf_kind(t) != 4 && msu_btf_kind(t) != 5 && msu_btf_kind(t) != 8) continue;
         name = btf_name(btf_word(t));
         if (!name) return -EINVAL;
         if (strcmp(name, structure)) continue;
         error = btf_resolve(id, &resolved);
         if (error) return error;
         t = btf_type(resolved);
-        if (!t || ((btf_kind(t) == 4 || btf_kind(t) == 5) && !btf_word(t + 8))) continue;
+        if (!t || ((msu_btf_kind(t) == 4 || msu_btf_kind(t) == 5) && !btf_word(t + 8))) continue;
         if (selected && selected != resolved) return -ENOTUNIQ;
         selected = resolved;
     }
@@ -323,7 +323,7 @@ int msu_runtime_btf_type_size(const char *structure, u32 *output)
         const char *name;
         u32 bytes;
         int error;
-        if (btf_kind(t) != 4 && btf_kind(t) != 5 && btf_kind(t) != 8) continue;
+        if (msu_btf_kind(t) != 4 && msu_btf_kind(t) != 5 && msu_btf_kind(t) != 8) continue;
         name = btf_name(btf_word(t));
         if (!name) return -EINVAL;
         if (strcmp(name, structure)) continue;
@@ -349,7 +349,7 @@ int msu_runtime_btf_type(u32 id, struct msu_runtime_btf_type *output)
     error = btf_resolve(id, &next.id);
     if (error) return error;
     if (!next.id) { next.name = ""; *output = next; return 0; }
-    t = btf_type(next.id); next.kind = btf_kind(t);
+    t = btf_type(next.id); next.kind = msu_btf_kind(t);
     next.name = btf_name(btf_word(t));
     if (!next.name) return -EINVAL;
     error = btf_size(next.id, 0, &next.bytes);
@@ -369,8 +369,8 @@ static int btf_prototype_id(u32 id, u32 *output)
         if (error) return error;
         t = btf_type(resolved);
         if (!t) return -EINVAL;
-        if (btf_kind(t) == 13) { *output = resolved; return 0; }
-        if (btf_kind(t) != 2 && btf_kind(t) != 12) return -EOPNOTSUPP;
+        if (msu_btf_kind(t) == 13) { *output = resolved; return 0; }
+        if (msu_btf_kind(t) != 2 && msu_btf_kind(t) != 12) return -EOPNOTSUPP;
         id = btf_word(t + 8);
     }
     return -ELOOP;
@@ -406,7 +406,7 @@ int msu_runtime_btf_function_id(const char *name, u32 *output)
     for (id = 1; id <= running.count; ++id) {
         const u8 *t = btf_type(id);
         const char *symbol;
-        if (btf_kind(t) != 12) continue;
+        if (msu_btf_kind(t) != 12) continue;
         symbol = btf_name(btf_word(t));
         if (!symbol) return -EINVAL;
         if (strcmp(symbol, name)) continue;
@@ -435,7 +435,7 @@ int msu_runtime_btf_function(const char *name, struct msu_runtime_btf_function *
         const char *symbol;
         struct msu_runtime_btf_function next;
         int error;
-        if (btf_kind(t) != 12) continue;
+        if (msu_btf_kind(t) != 12) continue;
         symbol = btf_name(btf_word(t));
         if (!symbol) return -EINVAL;
         if (strcmp(symbol, name)) continue;
@@ -464,7 +464,7 @@ int msu_runtime_btf_function_entry(u32 prototype_id, unsigned long (*lookup)(con
         const u8 *t = btf_type(id);
         const char *name;
         unsigned long address;
-        if (btf_kind(t) != 12) continue;
+        if (msu_btf_kind(t) != 12) continue;
         if (btf_word(t + 8) != expected) {
             struct msu_runtime_btf_function candidate;
             /* Parameter names can give identical callback types different BTF
@@ -490,7 +490,7 @@ int msu_runtime_btf_enum(const char *name, s64 *output)
     if (!smp_load_acquire(&running_ready)) return -ENOENT;
     for (id = 1; id <= running.count; ++id) {
         const u8 *t = btf_type(id);
-        u32 kind = btf_kind(t), i;
+        u32 kind = msu_btf_kind(t), i;
         if (kind != 6 && kind != 19) continue;
         for (i = 0; i < btf_count(t); ++i) {
             const u8 *entry = t + 12 + i * (kind == 6 ? 8 : 12);

@@ -28,8 +28,8 @@ class ModeSwitchDataPreservationTest {
     fun populatedModesRoundTripWhileTheInstallerLockRemainsHeld() {
         val roots = roots
         val key16 = "a1b2c3d4e5f60718"
-        val credential = "7".repeat(48).toByteArray()
-        val paths = ModeSwitchDataPaths.fromLocal(rootKey = key16 + "9".repeat(32), credential = credential)
+        val paths = ModeSwitchDataPaths.fromLocal(ultraDirectory = "/data/$key16",
+            previousPublication = "/data/${"7".repeat(16)}")
         val stage = FileSwitchMoveStage(roots, paths.entries(WorkMode.LITE), paths.entries(WorkMode.KSU))
         paths.entries(WorkMode.LITE).forEach { write(roots.live("${it.livePath}/state"), it.livePath) }
         val lock = roots.live("${MoveSet.INSTALLER_ROOT}/install.lock")
@@ -101,7 +101,7 @@ class ModeSwitchDataPreservationTest {
     fun privateDirectoryFailuresAreRedactedInResultsManifestAndJournal() {
         val key16 = "a1b2c3d4e5f60718"
         val path = "/data/$key16"
-        val paths = ModeSwitchDataPaths.fromLocal(rootKey = key16 + "9".repeat(32))
+        val paths = ModeSwitchDataPaths.fromLocal(ultraDirectory = path)
         val stage = FileSwitchMoveStage(roots, paths.entries(WorkMode.LITE), emptyList())
         write(roots.live("$path/config"), "live")
         write(File(roots.store(MoveSet.storePathFor(WorkMode.LITE, path)), "config"), "store")

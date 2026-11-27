@@ -1,35 +1,30 @@
 // Maintainable reconstruction of member 73; production adoption is separate.
 #include "kernel_module_kit_umbrella.h"
 
-#include <sys/utsname.h>
 
+#include <sys/utsname.h>
+#include <functional>
+#include <memory>
+#include <sstream>
+#include <vector>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <functional>
-#include <memory>
 #include <random>
-#include <sstream>
 #include <string>
-#include <vector>
 
 #include "module_base_kernel_func_executor.h"
 #include "module_base_kernel_mem.h"
 #include "module_err_def.h"
+#include "maplesu_request_identity.h"
 
 namespace kernel_module {
-KModErr get_append_package_kallsyms_kaddr(uint64_t& out_addr);
 KModErr get_append_package_run_fake_proc_path_addr(uint64_t& out_addr);
-KModErr execute_kernel_asm_func_with_buf(const uint8_t* buf, uint32_t size, uint64_t& out_result);
-KModErr read_kernel_mem(uint64_t kaddr, void* out, uint32_t size);
-KModErr get_kernel_base_vaddr(uint64_t& out_base);
 }  // namespace kernel_module
 
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
 
 
-// 把 “主.次.补丁” 形式的版本号切成最多三段整数，不足三段补 0。
 static std::vector<int> myparse_version(const char* ver) {
     std::vector<int> parts;
     std::stringstream ss{std::string(ver)};
@@ -650,7 +645,7 @@ KModErr PatchAvcDenied::patch_avc_denied() {
         return KModErr::ERR_MODULE_AVC_DENIED_PATCH;
     }
 
-    {
+    if (kernel_module::maplesu_request_auth_legacy(kernel_module::maplesu_request_auth_state())) {
     SymbolLookupSilentGuard_c67c0e4fed21dd11b34c67e0a5b878c8 symbol_lookup_guard;
     (void)symbol_lookup_guard;
 
@@ -1872,6 +1867,9 @@ KModErr PatchAvcDenied::patch_avc_denied() {
     }
 
     }  // Restore symbol-lookup logging before installing the hook, as in the original.
+    // Owner uses the selected append descriptor; LegacyKey resolves its historical target above.
+    if (m_avc_denied_addr_ && (m_avc_denied_addr_ < UINT64_C(0xffff000000000000) ||
+        (m_avc_denied_addr_ & 3))) return KModErr::ERR_MODULE_NOT_KADDR;
     if (m_avc_denied_addr_ == 0) {
         return KModErr::OK;
     }

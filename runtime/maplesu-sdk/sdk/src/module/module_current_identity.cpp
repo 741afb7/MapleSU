@@ -1,78 +1,55 @@
-// module current identity implementation.
-//
-#include <cstddef>
+// Module identity is non-secret; authority belongs to the calling task.
 #include <cerrno>
 #include <cstring>
 #include <pthread.h>
+#include "maplesu_request_private.h"
 
 extern "C" __attribute__((weak, visibility("hidden"))) void maplesu_hook_fork_prepare() noexcept;
 extern "C" __attribute__((weak, visibility("hidden"))) void maplesu_hook_fork_complete() noexcept;
-
-static char maplesu_module_root_key_nL3sM35dAvzoDMNDUIolFXfHD1lRQix3[1024] = {};
-static char maplesu_module_id32_5a4a7cf17e65ead4c6e67885dde9c46d[1024] =
-    "GEfQdKmhZSkuWJI2rs21JO39Xmp8XcZg";
-
 namespace {
-pthread_mutex_t root_key_mutex = PTHREAD_MUTEX_INITIALIZER;
-int root_key_fork_error = EAGAIN;
-thread_local char root_key_snapshot[1024] = {};
-
-void root_key_before_fork() {
-    if (maplesu_hook_fork_prepare) maplesu_hook_fork_prepare();
-    pthread_mutex_lock(&root_key_mutex);
-}
-void root_key_after_fork() {
-    pthread_mutex_unlock(&root_key_mutex);
-    if (maplesu_hook_fork_complete) maplesu_hook_fork_complete();
-}
-
-// Register before SDK work starts, without a function-local initialization guard
-// that a fork child could inherit while another thread initializes it.
-__attribute__((constructor)) void initialize_root_key_storage() {
-    root_key_fork_error = pthread_atfork(root_key_before_fork, root_key_after_fork, root_key_after_fork);
-}
-
-bool lock_root_key() {
-    const int error = root_key_fork_error ? root_key_fork_error : pthread_mutex_lock(&root_key_mutex);
-    if (!error) return true;
-    errno = error;
-    return false;
+char module_id32[1024] = "GEfQdKmhZSkuWJI2rs21JO39Xmp8XcZg";
+// Only explicitly selected historical clients consume this thread's credential.
+thread_local char legacy_credential[1024] = {};
+int identity_fork_error = EAGAIN;
+void before_fork() { if (maplesu_hook_fork_prepare) maplesu_hook_fork_prepare(); }
+void after_fork() { if (maplesu_hook_fork_complete) maplesu_hook_fork_complete(); }
+__attribute__((constructor)) void initialize_identity() {
+    identity_fork_error = pthread_atfork(before_fork, after_fork, after_fork);
 }
 }
-
-// Keep the legacy 1023-character truncation and padding contract. Copy first so
-// setting from this thread's last getter snapshot never aliases the authority.
 extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(
-    const char* root_key) {
-    char candidate[1024] = {};
-    if (root_key) strncpy(candidate, root_key, sizeof(candidate) - 1);
-    if (!lock_root_key()) return;
-    memcpy(maplesu_module_root_key_nL3sM35dAvzoDMNDUIolFXfHD1lRQix3, candidate, sizeof(candidate));
-    pthread_mutex_unlock(&root_key_mutex);
+    const char* credential) {
+    char candidate[sizeof(legacy_credential)] = {};
+    if (credential) std::strncpy(candidate, credential, sizeof(candidate) - 1);
+    std::memcpy(legacy_credential, candidate, sizeof(candidate));
 }
-
-// Stable across other threads' setters. A later getter on this same thread
-// refreshes the snapshot; callers retaining an identity must copy its bytes.
 extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW() {
-    if (!lock_root_key()) {
-        memset(root_key_snapshot, 0, sizeof(root_key_snapshot));
-        return root_key_snapshot;
-    }
-    memcpy(root_key_snapshot, maplesu_module_root_key_nL3sM35dAvzoDMNDUIolFXfHD1lRQix3,
-        sizeof(root_key_snapshot));
-    pthread_mutex_unlock(&root_key_mutex);
-    return root_key_snapshot;
+    return legacy_credential;
 }
-
-extern "C" void __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c(
-    const char* id32) {
-    strncpy(maplesu_module_id32_5a4a7cf17e65ead4c6e67885dde9c46d, id32, 1023);
+namespace kernel_module {
+KModErr maplesu_request_select_legacy(const char* credential) {
+    const size_t length = credential ? strnlen(credential, sizeof(legacy_credential)) : 0;
+    if (length < 16 || length >= sizeof(legacy_credential))
+        return KModErr::ERR_MODULE_ROOT_KEY;
+    // Copy first because the supplied value may alias this thread's getter.
+    char candidate[sizeof(legacy_credential)] = {};
+    std::memcpy(candidate, credential, length);
+    const auto error = maplesu_request_set_auth_mode(RequestAuthMode::LegacyKey);
+    if (is_failed(error)) return error;
+    std::memcpy(legacy_credential, candidate, sizeof(candidate));
+    return KModErr::OK;
 }
-
-extern "C" const char* __get_current_module_id32_1b0494ae8a788541db46b82cc1f0577c() {
-    return maplesu_module_id32_5a4a7cf17e65ead4c6e67885dde9c46d;
+void maplesu_request_clear_legacy() {
+    volatile char* bytes = legacy_credential;
+    for (size_t i = 0; i < sizeof(legacy_credential); ++i) bytes[i] = 0;
 }
-
+}
+extern "C" void __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c(const char* id32) {
+    if (!id32) return;
+    std::strncpy(module_id32, id32, sizeof(module_id32) - 1);
+    module_id32[sizeof(module_id32) - 1] = 0;
+}
+extern "C" const char* __get_current_module_id32_1b0494ae8a788541db46b82cc1f0577c() { return module_id32; }
 extern "C" __attribute__((visibility("hidden"))) int maplesu_identity_fork_status() noexcept {
-    return root_key_fork_error;
+    return identity_fork_error;
 }

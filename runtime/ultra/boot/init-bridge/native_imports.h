@@ -101,7 +101,10 @@ extern typeof(&free_nsproxy) msu_native_free_nsproxy;
 extern typeof(&task_work_add) msu_native_task_work_add;
 #endif
 #ifdef MSU_SU_NONROOT_NATIVE
-extern int path_mount(const char *dev_name, struct path *path,
+#ifndef MSU_PATH_MOUNT_PATH_QUALIFIER
+#error path_mount target type selection required
+#endif
+extern int path_mount(const char *dev_name, MSU_PATH_MOUNT_PATH_QUALIFIER struct path *path,
     const char *type_page, unsigned long flags, void *data_page);
 extern int path_umount(struct path *path, int flags);
 extern typeof(&path_mount) msu_native_path_mount;

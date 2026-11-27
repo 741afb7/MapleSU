@@ -700,9 +700,8 @@ class ProductionHiddenModeBackend(
     /**
      * 把「撤销授权所需的身份材料」写到 root-only 文件（`recovery/identity.json`，0600）。
      *
-     * <p>为什么必须是激活时写：WebUI 一键解除寄生唯一拿不到的东西就是**App 作用域**的
-     * androidId（daemon 进程只能读到系统值）⇒ 不落盘就永远卡在 `revoke_su_auth`（真机 D1）。
-     * 这一步放在 **su 授权成功之后**：此时「宿主已可被本 App 提权」已成立，撤销步才有意义。
+     * <p>激活时记录当前管理器包名与 fullUID，供已获授权的 daemon 恢复、撤销时核对。
+     * 这一步放在 **su 授权成功之后**，保留既有恢复记录格式，不保存可复用凭据。
      *
      * <p>调用方在 Ultra 真卸载前要求 identity=ok；缺失或写失败必须回滚宿主改动。
      */

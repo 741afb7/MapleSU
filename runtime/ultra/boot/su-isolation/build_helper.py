@@ -41,7 +41,6 @@ def main():
     assert original[old_at:old_at+old_entry['sh_size']]==old_entry.data()
     module=0x11cf50
     assert original[offset(module):offset(module)+33]==b'GEfQdKmhZSkuWJI2rs21JO39Xmp8XcZg\0'
-    root_key=meta['keyAddress'];assert root_key==0x2ca66
     rxid,rx=max(loads,key=lambda row:row[1]['p_vaddr']);assert rx['p_flags']==5
     start=(rx['p_vaddr']+max(rx['p_memsz'],len(original)-rx['p_offset'])+15)&~15
     backend=describe_backend(a.backend)
@@ -58,7 +57,7 @@ def main():
         assert result.returncode==0,result.stdout+result.stderr
     dyn=image.get_section_by_name('.dynsym');plt=image.get_section_by_name('.plt')['sh_addr']
     defs={dyn.get_symbol(r['r_info_sym']).name:plt+32+16*i for i,r in enumerate(image.get_section_by_name('.rela.plt').iter_relocations())}
-    defs.update(original_selinux_initializer=meta['originalSelinuxInitializer'],original_module_loader=meta['originalModuleLoader'],original_root_key=root_key,policy_ready_slot=meta['readySlot'],original_module_id=module,original_su_init_success=0xf5f14,original_su_init_error=0xf53fc)
+    defs.update(original_selinux_initializer=meta['originalSelinuxInitializer'],original_module_loader=meta['originalModuleLoader'],policy_ready_slot=meta['readySlot'],original_module_id=module,original_su_init_success=0xf5f14,original_su_init_error=0xf53fc)
     common=['--target=aarch64-linux-android21','-Oz','-ffreestanding','-fno-builtin','-fPIC','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Wall','-Wextra','-Werror']
     def link(target,sources,va,entry,identity):
         folder=out/target;folder.mkdir();write_identity(folder/'environment_backend_identity.h',identity)
@@ -105,7 +104,7 @@ def main():
     (out/'candidate-helper.elf').write_bytes(result)
     meta.update(helperSha256=sha(result),helperNormalizedSha256=sha(normalized),helperBuildId=build_id.hex(),helperBytes=len(result),backend=dict(backend,path=str(a.backend)))
     (out/'policy-entry.json').write_text(json.dumps(meta,indent=2)+'\n')
-    report=dict(schemaVersion=1,baselineHelperSha256=PIN,helperSha256=sha(result),helperNormalizedSha256=sha(normalized),helperBuildId=build_id.hex(),helperBytes=len(result),backend=dict(backend,path=str(a.backend)),keySlotPreserved=True,productionInputsModified=False,deviceAccess=False,baselinePolicyReproduced=True,policyEntryAddressesPreserved=True,dynamicMetadataPreserved=True,oldUnwindMetadataPreserved=True,newRuntime='paired backend DSO handles TLS and exception unwind; append contains C and tail/continuation adapters only',extension=dict(address=start,offset=at,bytes=len(extension),sha256=sha(extension)),patches=[dict(address=addr,offset=offset(addr),baselineHex=original[offset(addr):offset(addr)+len(code)].hex(),candidateHex=code.hex()) for addr,code in patches.items()],symbols={k:v for k,v in symbols.items() if k.startswith('maplesu_')},knownBoundaries=dict(packagesVectorStackOffset=0x40,controlStackOffset=0x58,writerErrorCleanup=0xf53fc,writerSuccess=0xf5f14,moduleAddress=module,keySlotAddress=root_key),sourceSha256={str(p):sha(p.read_bytes()) for p in (Path(__file__).resolve(),HERE/'helper_su_entry.S',HERE/'helper_su_loader.c',HERE/'helper_su_backend.cpp',HERE/'CMakeLists.txt')},status='candidate; callback replay, real DSO loading and device reboot acceptance pending')
+    report=dict(schemaVersion=1,baselineHelperSha256=PIN,helperSha256=sha(result),helperNormalizedSha256=sha(normalized),helperBuildId=build_id.hex(),helperBytes=len(result),backend=dict(backend,path=str(a.backend)),keySlotPreserved=True,productionInputsModified=False,deviceAccess=False,baselinePolicyReproduced=True,policyEntryAddressesPreserved=True,dynamicMetadataPreserved=True,oldUnwindMetadataPreserved=True,newRuntime='paired backend DSO handles TLS and exception unwind; append contains C and tail/continuation adapters only',extension=dict(address=start,offset=at,bytes=len(extension),sha256=sha(extension)),patches=[dict(address=addr,offset=offset(addr),baselineHex=original[offset(addr):offset(addr)+len(code)].hex(),candidateHex=code.hex()) for addr,code in patches.items()],symbols={k:v for k,v in symbols.items() if k.startswith('maplesu_')},knownBoundaries=dict(packagesVectorStackOffset=0x40,controlStackOffset=0x58,writerErrorCleanup=0xf53fc,writerSuccess=0xf5f14,moduleAddress=module),sourceSha256={str(p):sha(p.read_bytes()) for p in (Path(__file__).resolve(),HERE/'helper_su_entry.S',HERE/'helper_su_loader.c',HERE/'helper_su_backend.cpp',HERE/'CMakeLists.txt')},status='candidate; callback replay, real DSO loading and device reboot acceptance pending')
     (out/'build.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps({k:report[k] for k in ('helperSha256','helperBytes','keySlotPreserved','baselinePolicyReproduced','status')},indent=2))
 

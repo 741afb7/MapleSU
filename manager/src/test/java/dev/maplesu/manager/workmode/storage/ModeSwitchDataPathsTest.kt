@@ -11,26 +11,17 @@ class ModeSwitchDataPathsTest {
     private val key16 = "a1b2c3d4e5f60718"
     private val rootKey = key16 + "9".repeat(32)
 
-    @Test
-    fun derivesUltraPathsFromExistingLocalCredentialsWithoutChangingThem() {
-        val credential = "7".repeat(48).toByteArray()
-        val original = credential.copyOf()
-        val source = ModeSwitchDataPaths.fromLocal(rootKey = rootKey, credential = credential)
-        val entries = source.entries(WorkMode.LITE)
-
-        assertEquals(setOf("/data/$key16", "/data/3737373737373737", "/data/${Hashes.sha256(credential).take(16)}"),
-            entries.map { it.livePath }.toSet())
-        assertTrue(entries.all { it.owner == WorkMode.LITE && it.expectedShape == MoveEntry.REAL_DIR })
+    @Test fun usesOnlyTheVerifiedLocatorAndNeverDerivesASecretDirectory() {
+        val source = ModeSwitchDataPaths.fromLocal(ultraDirectory = "/data/$key16")
+        assertEquals(listOf("/data/$key16"), source.entries(WorkMode.LITE).map { it.livePath })
         assertTrue(source.entries(WorkMode.KSU).isEmpty())
-        assertTrue(original.contentEquals(credential))
-        credential.fill(0)
-        assertEquals(3, source.entries(WorkMode.LITE).size)
+        assertTrue(ModeSwitchDataPaths.fromLocal().entries(WorkMode.LITE).isEmpty())
     }
 
     @Test
     fun keepsKnownPreviousPublicationAndPersistedRuntimeDirectoryAndDeduplicatesThem() {
         val source = ModeSwitchDataPaths.fromLocal(
-            rootKey = rootKey,
+            ultraDirectory = "/data/$key16",
             previousPublication = "/data/$key16",
             runtimeDirectory = "/data/0123456789abcdef",
         )
@@ -58,9 +49,8 @@ class ModeSwitchDataPathsTest {
     @Test
     fun rejectsInvalidPublishedAndCredentialPathsWithoutQuotingTheirContents() {
         val errors = listOf(
-            runCatching { ModeSwitchDataPaths.fromLocal(rootKey = "$rootKey/injected") }.exceptionOrNull(),
-            runCatching { ModeSwitchDataPaths.fromLocal(rootKey = "/".repeat(48)) }.exceptionOrNull(),
-            runCatching { ModeSwitchDataPaths.fromLocal(credential = ByteArray(47)) }.exceptionOrNull(),
+            runCatching { ModeSwitchDataPaths.fromLocal(ultraDirectory = "/data/$key16/injected") }.exceptionOrNull(),
+            runCatching { ModeSwitchDataPaths.fromLocal(ultraDirectory = "/".repeat(48)) }.exceptionOrNull(),
             runCatching { ModeSwitchDataPaths.fromLocal(previousPublication = "/data/$key16/../adb") }.exceptionOrNull(),
             runCatching { ModeSwitchDataPaths.fromLocal(runtimeDirectory = "/data/adb") }.exceptionOrNull(),
         )

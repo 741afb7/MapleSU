@@ -48,7 +48,6 @@ import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -85,7 +84,6 @@ fun SuperUserPagerMaterial(
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
     val listState = rememberLazyListState()
     val searchListState = rememberLazyListState()
-    val refreshTick = remember { mutableIntStateOf(0) }
     val pullToRefreshState = rememberPullToRefreshState()
 
     var localSearchText by remember { mutableStateOf(uiState.searchStatus.searchText) }
@@ -320,7 +318,6 @@ fun SuperUserPagerMaterial(
             onRefresh = {
                 haptic.performHapticFeedback(HapticFeedbackType.VirtualKey)
                 actions.onRefresh()
-                refreshTick.intValue++
             },
             state = pullToRefreshState,
             indicator = {
@@ -340,7 +337,6 @@ fun SuperUserPagerMaterial(
                 uiState.sortConfig,
                 uiState.showSystemApps,
                 uiState.showOnlyPrimaryUserApps,
-                refreshTick.intValue,
                 isBusy = { latestRefreshing.value },
             ) { latestGroupedApps.value }
 
@@ -396,7 +392,7 @@ fun SuperUserPagerMaterial(
                         }
                     }
                     SegmentedItem(index = index, count = uiState.groupedApps.size) {
-                        Column {
+                        Column(modifier = Modifier.animateItem()) {
                             GroupItem(
                                 group = group,
                                 selected = expanded,

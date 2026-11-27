@@ -115,6 +115,7 @@ fun HomePagerMaterial(
     ultra: UltraWordmarkState? = null,
     // Ultra 环境版本与更新提示；非 Ultra / 隐藏时为 null。
     ultraEnvironment: UltraEnvironmentUpdatePanel? = null,
+    showInstalledKernelUpdate: Boolean = false,
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
     // 「旧版 7kimisu」提示卡要用它拉起系统卸载界面(v2.2)
@@ -219,11 +220,16 @@ fun HomePagerMaterial(
             ThemeHomeStatus(state, actions) { MaterialStatusCard(
                 state = state,
                 actions = actions,
-                ultraVersionLabel = ultraEnvironment?.let { ultraEnvironmentLabel(it.version) },
+                ultraVersionLabel = if (state.ultraBrandVisible) ultraEnvironmentLabel(ultraEnvironment?.version) else null,
             ) }
             // 「发现 Ultra 环境更新」：紧贴状态卡下方，写法与交互同 KSU 的管理器更新卡。
-            if (ultraEnvironment != null) {
+            if (ultraEnvironment != null && !showInstalledKernelUpdate) {
                 UltraEnvironmentUpdateCardMaterial(ultraEnvironment)
+            }
+            if (showInstalledKernelUpdate) {
+                SegmentedColumn(content = listOf {
+                    com.maplesu.core.ui.screen.settings.InstalledUltraUpgradeRowMaterial()
+                })
             }
             // 首页「切换工作模式」入口（Material）——紧贴状态卡下方，整行 tonal 按钮。
             // 可见性/可用性全部来自 workModeSwitch（ModeRuntime.active 判定 + 切换事务 + 隐身），
@@ -357,7 +363,8 @@ internal fun MaterialStatusCard(
         }
         val statusSummary = when {
             ksuActive -> stringResource(R.string.home_working_version,
-                ultraVersionLabel ?: stringResource(R.string.maplesu_backend_version, state.kernelUAPIVersion ?: 1))
+                if (state.ultraBrandVisible) ultraVersionLabel ?: ultraEnvironmentLabel(null)
+                    else stringResource(R.string.maplesu_backend_version, state.kernelUAPIVersion ?: 1))
             // 有 root 但没有认主 → 直达安装
             notInstalled && state.managerNotRecognized && state.isRootAvailable ->
                 stringResource(R.string.home_can_install_summary)

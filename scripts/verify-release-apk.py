@@ -2,7 +2,11 @@
 """Verify a delivered Release APK against its build outputs and recorded SDK/bridge inputs."""
 import argparse
 from datetime import datetime, timezone
+import gzip
 import hashlib
+import io
+import lzma
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -132,10 +136,13 @@ def verify_claim_assets(archive, names, execution, receipt):
     for family, row in payloads.items():
         check_file(family + '/claim.so', row)
         if manifest['schemaVersion'] == 2:
-            require(row.get('metadataEncoding') == 'gzip-chunks-v1', 'CLAIM_METADATA_ENCODING: ' + family)
+            encoding = row.get('metadataEncoding')
+            require(encoding in ('gzip-chunks-v1', 'xz-chunks-v1'), 'CLAIM_METADATA_ENCODING: ' + family)
+            codec = 'xz' if encoding == 'xz-chunks-v1' else 'gzip'
             chunks = row.get('chunks')
             require(isinstance(chunks, list) and 1 <= len(chunks) <= 8, 'CLAIM_METADATA_CHUNKS: ' + family)
             aggregate = hashlib.sha256()
+            encoded = bytearray()
             size = 0
             for chunk in chunks:
                 require(isinstance(chunk, dict) and isinstance(chunk.get('path'), str) and
@@ -144,10 +151,30 @@ def verify_claim_assets(archive, names, execution, receipt):
                         'CLAIM_METADATA_CHUNK: ' + family)
                 body = check_file(chunk['path'], chunk)
                 aggregate.update(body)
+                encoded.extend(body)
                 size += len(body)
                 require(size <= 4194304, 'CLAIM_METADATA_SIZE: ' + family)
-            require(size == row.get('gzipBytes') and aggregate.hexdigest() == row.get('gzipSha256'),
+            require(size == row.get(codec + 'Bytes') and aggregate.hexdigest() == row.get(codec + 'Sha256'),
                     'CLAIM_METADATA_AGGREGATE: ' + family)
+            decoded_bytes = row.get('decodedBytes')
+            require(type(decoded_bytes) is int and 0 < decoded_bytes <= 32 * 1048576,
+                    'CLAIM_METADATA_DECODED_SIZE: ' + family)
+            try:
+                if codec == 'xz':
+                    decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=32 * 1048576)
+                    decoded = decoder.decompress(encoded, max_length=decoded_bytes + 1)
+                    require(decoder.eof and not decoder.unused_data, 'CLAIM_METADATA_DECODE: ' + family)
+                else:
+                    with gzip.GzipFile(fileobj=io.BytesIO(encoded)) as decoder:
+                        decoded = decoder.read(decoded_bytes + 1)
+            except (OSError, EOFError, lzma.LZMAError) as error:
+                raise ValueError('CLAIM_METADATA_DECODE: ' + family) from error
+            require(len(decoded) == decoded_bytes and digest(decoded) == row.get('decodedSha256'),
+                    'CLAIM_METADATA_DECODED_IDENTITY: ' + family)
+            payload = json.loads(decoded)
+            require(isinstance(payload, dict) and payload.get('bytes') == row['bytes'] and
+                    payload.get('sha256') == row['sha256'] and 'metadataEncoding' not in payload,
+                    'CLAIM_METADATA_PAYLOAD_IDENTITY: ' + family)
         if 'support' in row:
             overrides = row['support']
             require(isinstance(overrides, dict) and set(overrides) == {'bootstrap'},
@@ -188,7 +215,91 @@ def verify_claim_assets(archive, names, execution, receipt):
     receipt['claimAssetBindings'] = bindings
 
 
-def verify_bridge_input_binding(item, declared, bundle, bundled):
+def bridge_transformation_proof(execution, bundle):
+    """Bind host-only proof to the exact catalog variant consumed by the APK."""
+    plan_row, proof_row = execution.get('bridgeCatalogPlan'), execution.get('bridgeTransformationProof')
+    if plan_row is None and proof_row is None:
+        return None
+    require(isinstance(plan_row, dict) and isinstance(proof_row, dict), 'INIT_BOOT_BRIDGE_PROOF_BINDING')
+    plan_path = Path(plan_row['path'])
+    plan, plan_record = load_bound_json(plan_path, 'INIT_BOOT_BRIDGE_CATALOG_PLAN_CHANGED')
+    require(plan_record == matches(plan_path, plan_row) and
+            plan.get('schema') == 'maplesu-init-bridge-catalog-plan/1', 'INIT_BOOT_BRIDGE_PROOF_CATALOG')
+    manifest = record(bundle / 'manifest.json')
+    require(plan.get('defaultManifestSha256') == manifest['sha256'], 'INIT_BOOT_BRIDGE_PROOF_VARIANT')
+    variants = []
+    for row in plan['variants']:
+        source = (plan_path.parent / row['bundle']).resolve()
+        if record(source / 'manifest.json')['sha256'] == manifest['sha256']:
+            variants.append(source)
+    require(len(variants) == 1, 'INIT_BOOT_BRIDGE_PROOF_VARIANT')
+    source, = variants
+    proof_path = source / 'MODULE-INPUT-CHECK.json'
+    require(Path(proof_row['path']).resolve() == proof_path, 'INIT_BOOT_BRIDGE_PROOF_SOURCE')
+    sources = record(bundle / 'BUNDLE-SOURCES.json')
+    matches(source / 'manifest.json', manifest)
+    source_record = matches(source / 'BUNDLE-SOURCES.json', sources)
+    proof, proof_record = load_bound_json(proof_path, 'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF_CHANGED')
+    require(proof_record == matches(proof_path, proof_row), 'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF_CHANGED')
+    return dict(proof=proof, record=proof_record, sourceBindings=[plan_record, source_record,
+                record(source / 'manifest.json')])
+
+
+def verify_bridge_reference_projection(bundle):
+    manifest = load(bundle / 'manifest.json')
+    if manifest.get('schemaVersion') != 3:
+        return None
+    spec = importlib.util.spec_from_file_location('release_reference_facts',
+            ROOT / 'runtime/ultra/boot/init-bridge/reference_facts.py')
+    producer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(producer)
+    catalog = load(bundle / 'catalog.json')
+    require(catalog.get('schema') == 'maplesu-init-bridge-catalog/1', 'INIT_BOOT_COMPACT_CATALOG')
+    bindings = []
+    for row in catalog['variants']:
+        root = bundle / row['prefix']
+        current = load(root / 'manifest.json')
+        require(current.get('schemaVersion') == 3 and current.get('kind') == 'target-template' and
+                not ({'targetBoot', 'btf', 'btfSha256'} & current.keys()), 'INIT_BOOT_COMPACT_SCHEMA')
+        sources = load(root / current['bundleSources'])
+        producer.verify_projection(root, current, sources, catalog['sourceGenerationSha256'])
+        bindings.append(record(root / current['referenceFacts']))
+    require(not any(path.name in {'target-boot.img', 'target.btf'} for path in bundle.rglob('*')),
+            'INIT_BOOT_REFERENCE_IMAGE_PUBLISHED')
+    return bindings
+
+
+def replay_bridge_transformation(bundled, target, layout):
+    """Replay the producer, rather than accepting only a host report's hashes."""
+    data, identities = {}, []
+    for name, row in bundled.items():
+        path = Path(row['path'])
+        identities.append(matches(path, row))
+        data[name] = path.read_bytes()
+        require(len(data[name]) == row['bytes'] and digest(data[name]) == row['sha256'],
+                'INIT_BOOT_BRIDGE_REPLAY_INPUT_CHANGED')
+    spec = importlib.util.spec_from_file_location('release_bridge_producer',
+            ROOT / 'runtime/ultra/boot/init-bridge/package.py')
+    producer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(producer)
+    config = producer.config_values(data['target_config'])
+    contract = json.loads(data['target_contract'])
+    if contract.get('abiEvidence', {}).get('method') == 'same-kmi-module-loader':
+        checked = producer.inspect_module(data['bridge'], contract['kernelRelease'], config,
+                                          data['symvers'], contract)
+        sys.path.insert(0, str(ROOT / 'tools/specgen'))
+        from specgen.kallsyms import decode
+        derived, replayed, _ = producer.compiled_native_layouts_api().bind(
+            data['bridge'], config, data['kernel_image'], contract, checked, decode(data['kernel_image']))
+    else:
+        derived, replayed = producer.bind_runtime_layouts(data['bridge'], data.get('btf'),
+                                                         config, data['kernel_image'])
+    require(derived == target.read_bytes() and replayed == layout, 'INIT_BOOT_BRIDGE_TRANSFORMATION_REPLAY')
+    for row in identities:
+        require(record(Path(row['path'])) == row, 'INIT_BOOT_BRIDGE_REPLAY_INPUT_CHANGED')
+
+
+def verify_bridge_input_binding(item, declared, bundle, bundled, host_proof=None):
     name = item['name']
     actual = matches(Path(item['path']), item)
     require(isinstance(declared, dict) and {'bytes', 'sha256', 'bundledAs'} <= set(declared) and
@@ -223,15 +334,37 @@ def verify_bridge_input_binding(item, declared, bundle, bundled):
     binding['bundledFile'] = packaged
     if changed and name == 'bridge':
         require(relative == 'bridge.ko', 'INIT_BOOT_BRIDGE_TRANSFORMATION_PATH')
-        proof, proof_record = load_bound_json(bundle / 'MODULE-INPUT-CHECK.json',
-                                            'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF_CHANGED')
+        if host_proof is None:
+            proof, proof_record = load_bound_json(bundle / 'MODULE-INPUT-CHECK.json',
+                                                'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF_CHANGED')
+        else:
+            proof, proof_record = host_proof['proof'], host_proof['record']
         layout = proof.get('runtimeLayoutBinding', {})
         require(layout.get('present') is True and layout.get('bound') is True and
-                layout.get('sourceModuleSha256') == actual['sha256'] and
-                layout.get('derivedModuleSha256') == packaged['sha256'] and
-                layout.get('targetBtfSha256') == bundled.get('btf', {}).get('sha256') and
                 packaged['size'] == actual['size'], 'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF')
-        binding.update(transformation='target-btf-runtime-layout', transformationProof=proof_record)
+        compiled = layout.get('compiledNativeLayout')
+        if compiled is not None:
+            require(isinstance(compiled, dict) and
+                    compiled.get('method') == 'same-kmi-ddk-compiled-native-tables' and
+                    compiled.get('sourceModuleSha256') == actual['sha256'] and
+                    compiled.get('derivedModuleSha256') == packaged['sha256'] and
+                    compiled.get('targetKernelSha256') == bundled['kernel_image']['sha256'] and
+                    compiled.get('compilerLayoutIsTargetBtf') is False and
+                    layout.get('compilerLayoutIsTargetBtf') is False and
+                    layout.get('runtimeOrDeviceAccepted') is False,
+                    'INIT_BOOT_BRIDGE_COMPILED_TRANSFORMATION_PROOF')
+            transformation = 'same-kmi-ddk-compiled-native-tables'
+        else:
+            require(layout.get('sourceModuleSha256') == actual['sha256'] and
+                    layout.get('derivedModuleSha256') == packaged['sha256'] and
+                    'btf' in bundled and layout.get('targetBtfSha256') == bundled['btf']['sha256'],
+                    'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF')
+            transformation = 'target-btf-runtime-layout'
+        replay_bridge_transformation(bundled, target, layout)
+        binding.update(transformation=transformation, transformationProof=proof_record,
+                       transformationReplayed=True)
+        if host_proof is not None:
+            binding['transformationProofSources'] = host_proof['sourceBindings']
     elif changed and name == 'session-abi':
         require(relative == 'session-abi.json', 'INIT_BOOT_BRIDGE_TRANSFORMATION_PATH')
         source, source_record = load_bound_json(Path(item['path']), 'INIT_BOOT_BRIDGE_SESSION_SOURCE_CHANGED')
@@ -395,7 +528,7 @@ def verify(args, receipt):
 
     inputs = execution['bridgeInputs']
     input_names = {row['name'] for row in inputs}
-    expected_inputs = BRIDGE_INPUTS | ({'session-abi', 'task-profile-abi'} & input_names)
+    expected_inputs = (BRIDGE_INPUTS - {'btf'}) | ({'btf', 'session-abi', 'task-profile-abi'} & input_names)
     require(len(inputs) == len(expected_inputs) and input_names == expected_inputs,
             'INIT_BOOT_BRIDGE_INPUT_SET_MISMATCH')
     bundled_document, bundled_record = load_bound_json(bundle_sources_path, 'INIT_BOOT_BRIDGE_SOURCES_INPUT_CHANGED')
@@ -416,13 +549,18 @@ def verify(args, receipt):
     else:
         require(not (bundle / 'task-profile-abi.json').exists(), 'INIT_BOOT_BRIDGE_TASK_PROFILE_ABI_UNBOUND')
     receipt['bridgeInputBindings'] = []
+    receipt['referenceFactsProjections'] = verify_bridge_reference_projection(bundle)
+    host_proof = bridge_transformation_proof(execution, bundle)
     for item in inputs:
         declared = bundled[item['name'].replace('-', '_')]
-        binding = verify_bridge_input_binding(item, declared, bundle, bundled)
+        binding = verify_bridge_input_binding(item, declared, bundle, bundled, host_proof)
         if 'transformationProof' in binding:
-            require(any(row['source'] == binding['transformationProof']
-                        for row in receipt['initBootBridgeAssets']),
-                    'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF_CHANGED')
+            if 'transformationProofSources' not in binding:
+                require(any(row['source'] == binding['transformationProof']
+                            for row in receipt['initBootBridgeAssets']),
+                        'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF_CHANGED')
+            for row in [binding['transformationProof'], *binding.get('transformationProofSources', [])]:
+                require(record(Path(row['path'])) == row, 'INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF_CHANGED')
         receipt['bridgeInputBindings'].append(binding)
     class_file = base / 'intermediates/built_in_kotlinc/release/compileReleaseKotlin/classes/com/maplesu/core/ui/webui/ModuleWebUIActivity.class'
     require(b'$$$$$NON_LOCAL_RETURN$$$$$' not in class_file.read_bytes(), 'NON_LOCAL_RETURN_MARKER_REMAINS')

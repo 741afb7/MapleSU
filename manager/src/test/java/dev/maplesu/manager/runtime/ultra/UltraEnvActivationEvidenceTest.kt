@@ -53,7 +53,7 @@ class UltraEnvActivationEvidenceTest {
     private fun evidence(
         port: FakePort,
         outputDir: File = File(tmp.root, "files-${sequence++}").apply { mkdirs() },
-        rootKeyPresent: Boolean = true,
+        ownerIdentityPresent: Boolean = true,
         mode: String? = "LITE",
         snapshot: UltraProbeSnapshot = UltraProbeSnapshot("Running", "state=Running", 1234L, 1_699_999_999_000L),
         dataDir: UltraDataDirProbe = UltraDataDirProbe(
@@ -66,7 +66,7 @@ class UltraEnvActivationEvidenceTest {
     ): UltraEnvActivationEvidence = UltraEnvActivationEvidence.forTest(
         port = port,
         snapshot = { snapshot },
-        rootKeyPresent = { rootKeyPresent },
+        ownerIdentityPresent = { ownerIdentityPresent },
         dataDirProbe = { dataDir },
         outputDir = { outputDir },
         currentMode = { mode },
@@ -188,19 +188,19 @@ class UltraEnvActivationEvidenceTest {
     fun jsonNeverContainsRootKeyMaterial() {
         val key = "A1B2C3D4E5F60718".repeat(3) // 48 chars，模拟 Ultra rootKey
         assertEquals(48, key.length)
-        val result = evidence(FakePort(), rootKeyPresent = true).collect()
+        val result = evidence(FakePort(), ownerIdentityPresent = true).collect()
         val json = result.json!!
         assertFalse("root key must never appear", json.contains(key))
         assertFalse("key prefix (rootKey16) must never appear", json.contains(key.take(16)))
         assertTrue(json.contains("\"present\": true"))
-        assertTrue(json.contains("\"pathTemplate\": \"/data/<rootKey16>/\""))
+        assertTrue(json.contains("\"pathTemplate\": \"/data/<deployment>/\""))
         // 只允许出现路径模板，不允许出现真实 /data/<key16> 路径
         assertFalse(json.contains("/data/${key.take(16)}"))
     }
 
     @Test
     fun absentRootKeyIsRecordedAsFalse() {
-        val result = evidence(FakePort(), rootKeyPresent = false).collect()
+        val result = evidence(FakePort(), ownerIdentityPresent = false).collect()
         assertTrue(result.json!!.contains("\"present\": false"))
     }
 
@@ -238,7 +238,7 @@ class UltraEnvActivationEvidenceTest {
             "\"state\": \"Running\"",
             "\"activation\"",
             "\"criteria\"",
-            "\"rootKey\"",
+            "\"ownerIdentity\"",
             "\"dataDir\"",
             "\"entries\"",
         ).forEach { fragment ->

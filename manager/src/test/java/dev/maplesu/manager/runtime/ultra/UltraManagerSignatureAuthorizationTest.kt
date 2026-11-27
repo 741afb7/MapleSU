@@ -1,121 +1,138 @@
 package dev.maplesu.manager.runtime.ultra
 
-import dev.maplesu.manager.runtime.authorization.ApplicationIdentity
+import dev.maplesu.manager.runtime.authorization.*
 import org.junit.Assert.*
 import org.junit.Test
 
+/** Signed installation facts constrain the full-UID authority; a signer alone never renews a grant. */
 class UltraManagerSignatureAuthorizationTest {
     private val name = "dev.maplesu.manager"
-    private val signers = setOf("a".repeat(64))
-    private val trust = UltraReinstallTrust(name, 0, signers)
-    private fun identity(uid: Int = 10999, signer: String = "a") =
-        ApplicationIdentity(uid, name, listOf(name), setOf(signer.repeat(64)), 10, 11, "/data/app/new/base.apk")
+    private fun identity(uid: Int = 10999, signer: String = "a", installed: Long = 10) =
+        ApplicationIdentity(uid, name, listOf(name), setOf(signer.repeat(64)), installed, installed + 1, "/data/app/new/base.apk")
+    private fun authority(record: ApplicationIdentity = identity()) = AuthorizationSnapshot(
+        true, mapOf(record.uid to record), rev = 4, uidRev = mapOf(record.uid to 4L))
 
-    private class State(var packages: List<String>?) {
-        val events = mutableListOf<String>()
-        var grantError = "OK"
-        var revokeError = "OK"
-        fun refresh(trust: UltraReinstallTrust, current: () -> ApplicationIdentity?) =
-            UltraManagerSignatureAuthorization.refresh(trust, current,
-                { events += "read"; packages },
-                { events += "grant"; if (grantError == "OK") packages = (packages.orEmpty() + trust.packageName).distinct(); grantError },
-                { events += "revoke"; if (revokeError == "OK") packages = packages.orEmpty() - trust.packageName; revokeError },
-                { events += "refresh"; "OK" })
+    private class Port : UltraAllowlistPort {
+        override val supportsUidProfiles = true
+        var current: ApplicationIdentity? = null
+        var profiles: Map<Int, SuUidProfile>? = emptyMap()
+        var writeError: String? = null
+        val writes = mutableListOf<SuUidProfile>()
+        override fun uidProfiles() = profiles
+        override fun identity(uid: Int) = current?.takeIf { it.uid == uid }
+        override fun packages(): Set<String> = error("Full UID observation required")
+        override fun setAllowed(packageName: String, allowed: Boolean): UltraAuthorizationAttempt = error("Full UID mutation required")
+        override fun setAllowed(uid: Int, packageName: String, allowed: Boolean): UltraAuthorizationAttempt {
+            val profile = SuUidProfile(uid, allowed, packageName)
+            writes += profile
+            writeError?.let { return UltraAuthorizationAttempt.local(it) }
+            profiles = profiles.orEmpty() + (uid to profile)
+            return UltraAuthorizationAttempt.local().withReadback(true)
+        }
+    }
+    private fun port(current: ApplicationIdentity? = identity()) = Port().apply {
+        this.current = current
+        profiles = mapOf(10999 to SuUidProfile(10999, true, name),
+            2000 to SuUidProfile(2000, true, "com.android.shell"))
     }
 
-    @Test fun sameSignerReinstallGetsTheCurrentUidAndRetainsOtherGrants() {
-        val state = State(listOf("other.app", name))
-        assertEquals("OK", state.refresh(trust) { identity() })
-        assertEquals(listOf("read", "grant", "read"), state.events)
-        assertTrue("other.app" in state.packages.orEmpty())
+    @Test fun sameSignerReinstallRequiresACurrentExplicitGrant() {
+        val current = identity(uid = 11001, installed = 20)
+        val port = port(current)
+        assertTrue(UltraAllowlistMirror(port).apply(authority()).ok)
+        assertFalse(port.profiles!![10999]!!.allow)
+        assertTrue(port.profiles!![2000]!!.allow)
+        assertTrue(port.writes.none { it.allow })
+        assertTrue(UltraAllowlistMirror(port).apply(authority(current)).ok)
+        assertTrue(port.profiles!![11001]!!.allow)
     }
 
-    @Test fun differentlySignedOrOtherUserManagerIsRevokedBeforeAnyUidRefresh() {
+    @Test fun differentlySignedOrOtherUserManagerIsRevokedWithoutNameRemapping() {
         for (current in listOf(identity(signer = "b"), identity(uid = 110999))) {
-            val state = State(listOf("other.app", name))
-            assertEquals("OK", state.refresh(trust) { current })
-            assertEquals(listOf("read", "revoke", "read"), state.events)
-            assertEquals(listOf("other.app"), state.packages)
+            val port = port(current)
+            assertTrue(UltraAllowlistMirror(port).apply(authority()).ok)
+            assertEquals(listOf(SuUidProfile(10999, false, name)), port.writes)
         }
     }
 
-    @Test fun unknownIdentityRevokesOnceAndRemainsPendingWithoutRebuildingTheTable() {
-        val state = State(listOf("other.app", name))
-        repeat(4) {
-            assertEquals("MANAGER_IDENTITY_PENDING", state.refresh(trust) { null })
-        }
-        assertEquals(listOf("read", "revoke", "read", "read", "read", "read"), state.events)
-        assertEquals(listOf("other.app"), state.packages)
-        assertEquals("OK", state.refresh(trust) { identity() })
-        assertEquals(1, state.events.count { it == "grant" })
-        assertEquals(1, state.events.count { it == "revoke" })
-        assertFalse("refresh" in state.events)
+    @Test fun unknownIdentityRevokesOnceAndNeverRebuildsByPackageName() {
+        val port = port(null)
+        val mirror = UltraAllowlistMirror(port)
+        repeat(4) { assertTrue(mirror.apply(authority()).ok) }
+        assertEquals(listOf(SuUidProfile(10999, false, name)), port.writes)
+        assertFalse(ManagerSuperuserPolicy.decide(authority(), 10999, null).allowed)
     }
 
-    @Test fun unknownIdentityWithoutAManagerGrantOnlyReads() {
-        val state = State(listOf("other.app"))
-        repeat(20) {
-            assertEquals("MANAGER_IDENTITY_PENDING", state.refresh(trust) { null })
-        }
-        assertEquals(List(20) { "read" }, state.events)
+    @Test fun unknownIdentityWithoutAManagerGrantDoesNotWrite() {
+        val port = port(null).apply { profiles = emptyMap() }
+        repeat(20) { assertTrue(UltraAllowlistMirror(port).apply(AuthorizationSnapshot.empty()).ok) }
+        assertTrue(port.writes.isEmpty())
     }
 
-    @Test fun absentManagerGrantNeverGetsReaddedByName() {
-        val state = State(listOf("other.app"))
-        assertEquals("OK", state.refresh(trust) { identity(signer = "b") })
-        assertEquals(listOf("read", "refresh"), state.events)
+    @Test fun absentManagerGrantNeverGetsReaddedBySignerOrName() {
+        val port = port(identity()).apply { profiles = emptyMap() }
+        assertTrue(UltraAllowlistMirror(port).apply(AuthorizationSnapshot(true, emptyMap())).ok)
+        assertTrue(port.writes.isEmpty())
     }
 
-    @Test fun failedRevocationDoesNotPublishAnUntrustedUidTable() {
-        val state = State(listOf(name)).apply { revokeError = "WRITE_FAILED" }
-        assertEquals("WRITE_FAILED", state.refresh(trust) { identity(signer = "b") })
-        assertEquals(listOf("read", "revoke"), state.events)
+    @Test fun failedRevocationRetainsItsFirstErrorAndNoGrantIsSubmitted() {
+        val port = port(identity(signer = "b")).apply { writeError = "WRITE_FAILED" }
+        val result = UltraAllowlistMirror(port).apply(authority())
+        assertFalse(result.ok)
+        assertTrue(result.detail, result.detail.contains("WRITE_FAILED"))
+        assertEquals(listOf(SuUidProfile(10999, false, name)), port.writes)
+        assertTrue(port.profiles!![10999]!!.allow)
     }
 
     @Test fun unreadableListAndFailedGrantAreNotAcceptedAsRestored() {
-        val unreadable = State(null)
-        assertEquals("MANAGER_AUTH_LIST_UNREADABLE", unreadable.refresh(trust) { identity() })
-        assertEquals(listOf("read"), unreadable.events)
-        val denied = State(listOf(name)).apply { grantError = "ADD_FAILED" }
-        assertEquals("ADD_FAILED", denied.refresh(trust) { identity() })
-        assertEquals(listOf("read", "grant"), denied.events)
+        val unreadable = port().apply { profiles = null }
+        assertFalse(UltraAllowlistMirror(unreadable).apply(authority()).ok)
+        assertTrue(unreadable.writes.isEmpty())
+        val denied = port().apply { writeError = "ADD_FAILED" }
+        val result = UltraAllowlistMirror(denied).apply(authority())
+        assertFalse(result.ok)
+        assertTrue(result.detail, result.detail.contains("ADD_FAILED"))
+        assertEquals(1, denied.writes.size)
     }
 
-    @Test fun replacementDuringGrantIsRevokedAndDoesNotTriggerAnotherNameRemap() {
-        val state = State(listOf(name))
-        var reads = 0
-        assertEquals("MANAGER_IDENTITY_CHANGED", state.refresh(trust) {
-            if (++reads == 1) identity() else identity(signer = "b")
-        })
-        assertEquals(listOf("read", "grant", "read", "revoke"), state.events)
-        assertFalse(name in state.packages.orEmpty())
+    @Test fun replacementInvalidatesTheIdentityReadBeforeAnotherMutation() {
+        val scope = Any()
+        val old = identity()
+        val observation = mapOf(old.uid to old)
+        var live = true
+        assertTrue(currentIdentityReadMatches(scope, scope, 4, 4, observation, old.uid, name, true) { live })
+        live = false
+        assertFalse(currentIdentityReadMatches(scope, scope, 4, 4, observation, old.uid, name, true) { live })
+        val port = port(identity(signer = "b"))
+        assertTrue(UltraAllowlistMirror(port).apply(authority()).ok)
+        assertFalse(port.profiles!![old.uid]!!.allow)
     }
 
-    @Test fun backupNeedsThePinnedSignerEvenWhenNoKeySuAlreadyWorks() {
-        for (anchor in listOf(null, trust)) {
-            for (current in listOf(null, identity(), identity(signer = "b"), identity(uid = 110999))) {
-                var reads = 0
-                val recovered = UltraManagerSignatureAuthorization.recover(anchor, { current }) { reads++; "secret" }
-                val valid = anchor != null && current == identity()
-                assertEquals(if (valid) "secret" else null, recovered)
-                assertEquals(if (valid) 1 else 0, reads)
-            }
+    @Test fun ownerTransportNeverOverridesDisabledOrRevokedStandardSu() {
+        val record = identity()
+        for (snapshot in listOf(authority().copy(enabled = false), authority().copy(
+                tombs = listOf(SuperuserTomb(record.uid, name, 5, 100))))) {
+            assertFalse(ManagerSuperuserPolicy.decide(snapshot, record.uid, record).allowed)
+            assertTrue(SuperuserOps.currentIdentityObservation(snapshot) { record }.grants.isEmpty())
         }
     }
 
-    @Test fun backupDiscardsTheCandidateWhenInstallationChangesDuringRead() {
-        var reads = 0
-        assertNull(UltraManagerSignatureAuthorization.recover(trust,
-            { if (++reads == 1) identity() else identity(signer = "b") }, { "secret" }))
+    @Test fun installationChangingDuringObservationDoesNotKeepTheStoredGrant() {
+        val record = identity()
+        val changed = identity(installed = 20)
+        assertTrue(SuperuserOps.currentIdentityObservation(authority(record)) { changed }.grants.isEmpty())
+        assertEquals(SuCodes.AUTH_IDENTITY_CHANGED, ManagerSuperuserPolicy.decide(authority(record), record.uid, changed).reason)
     }
 
-    @Test fun savedTrustConfigRequiresTheFixedPackageAndACompleteSigningSet() {
-        val config = """{"schema":1,"userId":0,"packageName":"$name","signers":["${"a".repeat(64)}"]}"""
-        assertTrue(requireNotNull(UltraReinstallTrust.fromConfig(config)).allows(10999, identity()))
-        for (invalid in listOf("{}", config.replace("$name", "other.app"),
-            config.replace("${"a".repeat(64)}", "bad"), config.replace("[\"${"a".repeat(64)}\"]", "[]"),
-            config.replace("\"userId\":0", "\"userId\":-1"), config.replace("\"schema\":1", "\"schema\":2"))) {
-            assertNull(invalid, UltraReinstallTrust.fromConfig(invalid))
+    @Test fun authorityRequiresTheCompleteSigningAndPackageMemberSet() {
+        val record = identity()
+        assertTrue(record.matches(identity()))
+        assertFalse(record.matches(identity(signer = "b")))
+        val shared = ApplicationIdentity(record.uid, listOf(record.members.getValue(name),
+            ApplicationIdentity.Installation("other.app", record.signers, 10, 11, "/data/app/other/base.apk")))
+        assertFalse(record.matches(shared))
+        assertThrows(IllegalArgumentException::class.java) {
+            ApplicationIdentity(record.uid, name, listOf(name), emptySet(), 10, 11, "/data/app/base.apk")
         }
     }
 }

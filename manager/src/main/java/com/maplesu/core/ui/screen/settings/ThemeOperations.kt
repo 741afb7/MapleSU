@@ -22,6 +22,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.maplesu.core.ksuApp
 import com.maplesu.core.theme.*
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,40 +44,74 @@ class ThemeOperations(private val saved: SavedStateHandle) : ViewModel() {
     val state = mutable.asStateFlow()
     private var operation: Job? = null
     private var editOperation: Job? = null
+    private var pendingPreparation: Job? = null
+    private var preparation: Job? = null
+    private var previewRequest = 0L
     init {
         runOperation {
             repository.recover()
             saved.get<String>("prepared")?.let { path ->
                 val directory = java.io.File(path)
-                if (java.io.File(directory, "original.json").isFile) {
-                    val restored = withContext(Dispatchers.IO) {
+                val restored = withContext(Dispatchers.IO) {
+                    if (!java.io.File(directory, "original.json").isFile) null else {
                         val json = org.json.JSONObject(java.io.File(directory, "original.json").readText())
                         val files = java.io.File(directory, "assets").listFiles()?.associateBy { it.name }.orEmpty()
                         val normalized = ThemeDocument.normalize(json, files)
                         PreparedTheme(path, ThemeMetadata.read(json), normalized.second + ThemeAssetValidation.warnings(files))
                     }
-                    mutable.value = mutable.value.copy(prepared = restored)
-                } else { saved.remove<String>("prepared"); saved.remove<String>("identity") }
+                }
+                if (restored != null) mutable.value = mutable.value.copy(prepared = restored)
+                else { saved.remove<String>("prepared"); saved.remove<String>("identity") }
             }
         }
     }
-    fun prepare(uri: Uri, identity: String = "") {
-        viewModelScope.launch {
-            operation?.join()
-            if (mutable.value.prepared == null) runOperation {
-                val prepared = repository.prepare(uri)
+    fun prepare(uri: Uri, identity: String = "", metadata: ThemeMetadata? = null) {
+        val request = ++previewRequest
+        pendingPreparation?.cancel()
+        preparation?.cancel()
+        val previous = operation
+        if (!mutable.value.busy || previous === preparation) clearPrepared()?.let { discard(it, request) }
+        pendingPreparation = viewModelScope.launch {
+            previous?.join()
+            if (request != previewRequest) return@launch
+            clearPrepared()?.let { discard(it, request) }
+            runOperation {
+                val prepared = repository.prepare(uri, metadata)
                 saved["prepared"] = prepared.path
                 saved["identity"] = identity
                 mutable.value = mutable.value.copy(prepared = prepared)
             }
+            preparation = operation
         }
     }
     fun cancel() {
-        if (mutable.value.busy) return
-        mutable.value.prepared?.let { repository.discard(it) }
+        val request = ++previewRequest
+        pendingPreparation?.cancel()
+        // A committed apply/reset transaction retains its original busy protection.
+        if (mutable.value.busy && operation !== preparation) return
+        preparation?.cancel()
+        val prepared = clearPrepared()
+        mutable.value = ThemeOperationState()
+        prepared?.let { discard(it, request) }
+    }
+    private fun clearPrepared(): PreparedTheme? {
+        val prepared = mutable.value.prepared
         saved.remove<String>("prepared")
         saved.remove<String>("identity")
-        mutable.value = ThemeOperationState()
+        mutable.value = mutable.value.copy(prepared = null)
+        return prepared
+    }
+    private fun discard(prepared: PreparedTheme, request: Long) {
+        // Capture this preview before launching: later imports own different staging paths.
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            withContext(NonCancellable) {
+                try { repository.discard(prepared) }
+                catch (e: Exception) {
+                    android.util.Log.e("ThemeOperations", "Theme preview cleanup failed", e)
+                    if (request == previewRequest) error(e)
+                }
+            }
+        }
     }
     fun apply() {
         val prepared = mutable.value.prepared ?: return
@@ -122,7 +158,7 @@ class ThemeOperations(private val saved: SavedStateHandle) : ViewModel() {
     fun languageApplied() { mutable.value = mutable.value.copy(localeToApply = null, localeRequest = 0L) }
     fun dismissExport() { mutable.value = mutable.value.copy(exportedUri = null) }
     private fun runOperation(block: suspend () -> Unit) {
-        if (operation?.isActive == true) return
+        if (operation?.isCompleted == false) return
         val pendingEdits = editOperation
         mutable.value = mutable.value.copy(busy = true, error = null)
         operation = viewModelScope.launch {
@@ -158,10 +194,12 @@ fun ThemeOperationsHost(content: @Composable () -> Unit) {
         content()
         state.prepared?.let { prepared ->
             ThemeDialog(stringResource(R.string.theme_package_import), operations::cancel, confirm = if (state.busy) stringResource(R.string.theme_applying) else stringResource(R.string.theme_apply), enabled = !state.busy, onConfirm = operations::apply) {
-                val preview = remember(prepared.path) {
-                    val assets = java.io.File(prepared.path,"assets").listFiles()?.associateBy { it.name }.orEmpty()
-                    val config = runCatching { org.json.JSONObject(java.io.File(prepared.path,"applied.json").readText()) }.getOrDefault(org.json.JSONObject())
-                    ThemeDocument.seedImage(config,assets) ?: ThemeResourcePolicy.select("background",assets)
+                val preview by produceState<java.io.File?>(null, prepared.path) {
+                    value = withContext(Dispatchers.IO) {
+                        val assets = java.io.File(prepared.path,"assets").listFiles()?.associateBy { it.name }.orEmpty()
+                        val config = runCatching { org.json.JSONObject(java.io.File(prepared.path,"applied.json").readText()) }.getOrDefault(org.json.JSONObject())
+                        ThemeDocument.seedImage(config,assets) ?: ThemeResourcePolicy.select("background",assets,config)
+                    }
                 }
                 if (preview != null) Box(Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(16.dp))
                     .testTag("theme-import-preview")) {

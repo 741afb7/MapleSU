@@ -4,7 +4,6 @@
 #include <fstream>
 #include <unistd.h>
 
-extern "C" const char maplesu_helper_root_key_token[4096];
 
 // Authenticated kernel/storage operations are boundary seams; bootstrap entry
 // points are recording stubs in test_boot.cpp. WorkerScope and boot/session
@@ -40,8 +39,8 @@ std::string events() {
 namespace kernel_module {
 uint64_t maplesu_request_auth_state() { return auth_state; }
 KModErr maplesu_request_set_auth_mode(RequestAuthMode mode) {
-    boot_fixture::event("select-helper");
-    auth_state = (auth_state + 4) | static_cast<unsigned>(mode);
+    boot_fixture::event(mode == RequestAuthMode::EarlyHelper ? "select-helper" : "select-root");
+    auth_state = ((auth_state & ~UINT64_C(3)) + 4) | static_cast<unsigned>(mode);
     return KModErr::OK;
 }
 KModErr maplesu_request_helper_vendor(uint64_t action, unsigned, maplesu_installation_state_v3& state) {
@@ -86,6 +85,10 @@ CleanupReceiptScope::~CleanupReceiptScope() noexcept { errno = saved_errno_; }
 }
 namespace default_modules::module_root {
 KModErr set_current_root(bool privileged) {
+    if (kernel_module::maplesu_request_manager_mode() && session_process != getpid()) {
+        boot_fixture::event("root-open");
+        session_process = getpid();
+    }
     boot_fixture::event("root");
     if (kernel_module::maplesu_request_helper_mode() &&
         (privileged || session_process != getpid() ||
@@ -115,13 +118,6 @@ KModErr StorageScope::select_module(const char* module_id) {
     return KModErr::OK;
 }
 KModErr current_context(StorageContext& out) {
-    if (kernel_module::maplesu_request_auth_legacy(auth_state)) {
-        out = {};
-        std::memcpy(out.locator.kernel_component, maplesu_helper_root_key_token, 16);
-        std::memcpy(out.locator.system_component, maplesu_helper_root_key_token, 16);
-        out.locator.system_component[16] = out.locator.kernel_component[0];
-        return KModErr::OK;
-    }
     if (!current_scope || session_process != getpid()) return KModErr::ERR_MODULE_ROOT_KEY;
     out = current_scope->context_;
     return KModErr::OK;

@@ -116,7 +116,9 @@
     "src/maplesu/module/path_contract.h",
     "src/maplesu_core/module_webui_host.h",
     "include/maplesu_storage_worker_private.h",
-    "src/payload/webui_loader/src/startup_receipt.h"
+    "src/payload/webui_loader/src/startup_receipt.h",
+    "src/maplesu/webui/loader_compatibility.h",
+    "include/module_base_kernel_request.h"
   ],
   "nativeModuleCarrierMigration": {
     "date": "2026-11-16",
@@ -140,5 +142,13 @@
     ],
     "payloadPairing": "Requires rebuilding src/payload/webui_loader together with member62; old payload rejects Owner argc10 without replay",
     "deviceVerified": false
+  },
+  "nativeLegacyCompatibility": {
+    "date": "2026-11-26",
+    "status": "source-implemented-artifact-and-device-pending",
+    "protocol": "Original Owner directory and receipt records are preserved; an explicit versioned argument selects the separate 64-byte historical credential record on the same anonymous FD.",
+    "payloadSelection": "Inspect the actual installed ELF: use its credential extension, or retain its original Owner path only for a complete historical installed slot matching the explicitly configured Key. A mismatch remains an error.",
+    "evidence": "docs/development/ultra-keyless-20261124/issue-regression-20261126/LEGACY-MODULE-ABI.md",
+    "historicalSelfCheck": "The older recovery, equivalence and integration entries above describe their own snapshots; they are not this change's validation receipt."
   }
 }

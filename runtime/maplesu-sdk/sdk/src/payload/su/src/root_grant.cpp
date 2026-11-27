@@ -2,8 +2,6 @@
 //
 #include "root_grant.h"
 #include "../su_session_receipt.h"
-#include "module_err_def.h"
-#include "maplesu_root_private.h"
 
 #include <cerrno>
 #include <climits>
@@ -23,7 +21,7 @@ namespace {
 
 static_assert(sizeof(msu_su_session_receipt) == 64, "su receipt ABI size");
 
-// An incomplete scan must never turn a revoked session into a legacy grant.
+// An incomplete scan must never turn a revoked session into a new grant.
 bool find_session_fd(int& session_fd) {
     DIR* directory = ::opendir("/proc/self/fd");
     if (directory == nullptr) return false;
@@ -88,15 +86,10 @@ bool validate_session_receipt(int fd) {
     return true;
 }
 
-bool key_is_well_formed(const char* root_key) {
-    if (root_key == nullptr) return false;
-    const size_t length = strnlen(root_key, 1024);
-    return length >= 16 && length < 1024;
-}
 
 }  // namespace
 
-bool acquire_root(const char* root_key) {
+bool acquire_root() {
     int session_fd = -1;
     if (!find_session_fd(session_fd)) return false;
     if (session_fd >= 0) {
@@ -107,22 +100,8 @@ bool acquire_root(const char* root_key) {
         return valid;
     }
     if (getuid() == 0 && geteuid() == 0) return true;
-    if (!key_is_well_formed(root_key)) {
-        errno = EINVAL;
-        return false;
-    }
-
-    // The installed gateway accepts the SDK's complete authenticated requests,
-    // not the historical truncated-key exec path. Use this generation's actual
-    // credential/environment implementation; the private UID copy still owns
-    // access, and inherited native sessions never enter this legacy branch.
-    errno = 0;
-    if (default_modules::module_root::set_current_root_for_su(root_key) != KModErr::OK) {
-        if (!errno) errno = EPERM;
-        return false;
-    }
-    if (getuid() != 0 || geteuid() != 0) { errno = EPERM; return false; }
-    return true;
+    errno = EPERM;
+    return false;
 }
 
 bool set_identity(unsigned int uid, unsigned int gid,

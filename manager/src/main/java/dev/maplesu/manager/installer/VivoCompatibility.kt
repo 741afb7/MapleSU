@@ -20,7 +20,7 @@ object VivoCompatibility {
 
     fun prepare(context: Context, mode: WorkMode, candidate: InstallCandidateImage,
                 sources: Map<String, File>, log: (String) -> Unit = {},
-                @Suppress("UNUSED_PARAMETER") operationId: String = dev.maplesu.manager.runtime.ultra.UltraInstallCredentials.IMAGE_EXPORT_OPERATION): InstallCandidateImage {
+                @Suppress("UNUSED_PARAMETER") operationId: String = dev.maplesu.manager.runtime.ultra.UltraInstallTransactions.IMAGE_EXPORT_OPERATION): InstallCandidateImage {
         val companions = LinkedHashMap(candidate.compatibilityImages)
         sources["vendor_boot"]?.let { vendor ->
             val directory = File(context.cacheDir, "vivo-${UUID.randomUUID()}").apply { check(mkdirs()) }

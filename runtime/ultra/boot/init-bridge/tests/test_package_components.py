@@ -41,7 +41,7 @@ COMMON_SOURCES = ("runtime/ultra/identity/kernel/manager_management.c",
 
 
 def module_bytes(*, release=RELEASE, producers=PRODUCERS, marker=True, namespace=True):
-    tags = ["vermagic=" + release + " SMP modversions", "parmtype=credential:string"]
+    tags = ["vermagic=" + release + " SMP modversions"]
     if marker:
         tags.append("maplesu_runtime_facts=1")
     if namespace:

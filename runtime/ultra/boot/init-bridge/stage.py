@@ -10,6 +10,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import sys
 
 
 HOST_RUNTIME_UNITS = ("manager_installation_state", "manager_su_runtime_factory", "manager_su_gate",
@@ -63,9 +64,12 @@ def seccomp_release_traits(source):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("repo-root", "host-overlay", "core-overlay", "su-overlay", "kernel-source",
-                 "kernel-build", "out"):
+    for name in ("repo-root", "kernel-source", "kernel-build", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
+    for name in ("host-overlay", "core-overlay", "su-overlay"):
+        parser.add_argument("--" + name, type=Path)
+    parser.add_argument("--current-source-selection", type=Path)
+    parser.add_argument("--current-source-selection-sha256")
     parser.add_argument("--core-selection", type=Path)
     parser.add_argument("--host-selection", type=Path)
     parser.add_argument("--runtime-candidate", type=Path)
@@ -80,6 +84,20 @@ def main():
     parser.add_argument("--seccomp-source-selection", type=Path)
     parser.add_argument("--seccomp-source-selection-sha256")
     args = parser.parse_args()
+    if bool(args.current_source_selection) != bool(args.current_source_selection_sha256):
+        raise ValueError("ULTRA_BRIDGE_CURRENT_SELECTION_PAIR")
+    current_selection = bool(args.current_source_selection)
+    if current_selection:
+        if any((args.host_overlay, args.core_overlay, args.su_overlay, args.core_selection,
+                args.host_selection, args.runtime_candidate, args.runtime_successor,
+                args.su_selection, args.runtime_layout_source_selection,
+                args.runtime_layout_source_selection_sha256)):
+            raise ValueError("ULTRA_BRIDGE_CURRENT_SELECTION_MODE_CONFLICT")
+        if not args.runtime_facts and not args.target_kmi:
+            raise ValueError("ULTRA_BRIDGE_CURRENT_SELECTION_TARGET_MODE_REQUIRED")
+        args.host_overlay = args.core_overlay = args.su_overlay = args.repo_root
+    elif not all((args.host_overlay, args.core_overlay, args.su_overlay)):
+        raise ValueError("ULTRA_BRIDGE_LEGACY_OVERLAY_ROOTS_REQUIRED")
     if args.require_resident_text_owner_kmi and not args.target_kmi:
         raise ValueError("ULTRA_BRIDGE_KMI_RESIDENT_TARGET_REQUIRED")
     candidate = Path(__file__).resolve().parents[4]
@@ -110,6 +128,28 @@ def main():
         if any(generated_from[-1][key] != reference[key] for key in ("bytes", "sha256")):
             raise ValueError("ULTRA_BRIDGE_SELECTION_REFERENCE_IDENTITY:" + reference["path"])
         return data
+
+    if current_selection:
+        sys.path.insert(0, str(args.repo_root.resolve() / "scripts"))
+        try:
+            from claim_current_sources import read_current_source_selection
+            current = read_current_source_selection(args.repo_root, args.current_source_selection,
+                                                   args.current_source_selection_sha256)
+        finally:
+            sys.path.pop(0)
+        capture_bytes(args.current_source_selection)
+        runtime_identity = dict(generated_from[-1])
+        runtime_layout_identity = dict(runtime_identity, repositoryPath=
+            args.current_source_selection.resolve().relative_to(args.repo_root.resolve()).as_posix())
+        for row in current["files"]:
+            relative, reference = row["logicalPath"], row["after"]
+            if relative in bindings and bindings[relative][0] != reference:
+                raise ValueError("ULTRA_BRIDGE_CURRENT_SOURCE_COLLISION:" + relative)
+            bindings[relative] = (reference, "current-source-selection")
+        generated_from.extend(identity(resolve_reference(row["after"])) for row in current["files"])
+        generated_from.extend(identity(resolve_reference(row)) for row in current["tools"])
+        runtime_selection = {"currentSourceSelection": runtime_layout_identity}
+        runtime_successors.append(runtime_layout_identity)
 
     if args.runtime_candidate and (not args.core_selection or not args.su_selection):
         raise ValueError("ULTRA_BRIDGE_RUNTIME_FORMAL_INPUTS")
@@ -607,7 +647,8 @@ def main():
         if not selected or any(selected[0][key] != reference[key] for key in ("bytes", "sha256")):
             raise ValueError("ULTRA_BRIDGE_RUNTIME_SUCCESSOR_SU_GENERATION:" + name)
 
-    with_runtime_layout = False
+    with_runtime_layout = current_selection
+    seen = set(bindings) if current_selection else set()
     if bool(args.runtime_layout_source_selection) != bool(args.runtime_layout_source_selection_sha256):
         raise ValueError("ULTRA_BRIDGE_RUNTIME_LAYOUT_SELECTION_PAIR")
     if args.runtime_layout_source_selection:
@@ -677,6 +718,8 @@ def main():
 
     def select(relative, destination, overlays, included_by=None):
         binding = bindings.get(relative)
+        if current_selection and not binding and relative != "fs/mount.h":
+            raise ValueError("ULTRA_BRIDGE_CURRENT_MEMBER_MISSING:" + relative)
         if runtime_selection and relative.startswith("runtime/ultra/identity/kernel/") and not binding and not included_by:
             raise ValueError("ULTRA_BRIDGE_RUNTIME_MEMBER_MISSING:" + relative)
         if args.su_selection and (relative.startswith(su_prefix) or relative == session_receipt) and not binding:
@@ -932,6 +975,14 @@ def main():
     feature = {"MSU_RESOLVER_FS_HAS_LOCK": int(lock), "MSU_RESOLVER_FS_SEQLOCK": int(sequence[0] == "seqlock_t"),
                "MSU_MANAGEMENT_EXECMEM_ALLOC_RW": int(bool(re.search(r"\bexecmem_alloc_rw\s*\(", execmem))),
                "MSU_MANAGEMENT_TASK_STATE_VERIFIED": int("manager_task_state" in core_units)}
+    path_mount_helper = candidate / "scripts/policy_path_mount.py"
+    path_mount_tools = {}
+    exec(compile(capture(path_mount_helper), str(path_mount_helper), "exec"), path_mount_tools)
+    path_mount_header = args.kernel_source / "fs/internal.h"
+    path_mount_const = path_mount_tools["path_mount_path_const"](capture_bytes(path_mount_header))
+    path_mount_api = {"method": "actual-kernel-private-header", "pathConst": path_mount_const,
+                      "source": generated_from[-1]}
+    feature["MSU_PATH_MOUNT_PATH_CONST"] = path_mount_const
     seccomp_api = None
     if bool(args.seccomp_source_selection) != bool(args.seccomp_source_selection_sha256):
         raise ValueError("ULTRA_BRIDGE_SECCOMP_SOURCE_SELECTION_PAIR")
@@ -996,7 +1047,8 @@ def main():
             raise ValueError("ULTRA_BRIDGE_CRED_UCOUNTS_CONTRACT")
         feature["MSU_MANAGEMENT_CRED_UCOUNTS"] = int(bool(fields))
     content["host/msu_resolver_build_config.h"] = ("#ifndef MSU_INIT_BRIDGE_FEATURE_CONFIG\n#define MSU_INIT_BRIDGE_FEATURE_CONFIG\n" +
-        "".join("#define %s %d\n" % row for row in feature.items()) + "#endif\n").encode()
+        "".join("#define %s %d\n" % row for row in feature.items()) +
+        path_mount_tools["path_mount_qualifier_define"](path_mount_const) + "#endif\n").encode()
     content["boot_sdk_layout.h"] = ("#define MSU_BS_STATIC_BOOTSTRAP 0\n#define MSU_BS_ENVIRONMENT 1\n"
         "#define MSU_BS_EXECVE_REG 1\n#define MSU_BS_EXECVE_CHAR 0\n"
         "#define MSU_BS_ALLOCATOR_NOPROF 0\n#define MSU_BS_PAGE_BYTES %d\n" % pages[0]).encode()
@@ -1024,7 +1076,7 @@ def main():
             "CFLAGS_host/su_nonroot_mount_source.o += -I$(src)/native-private\n").encode()
     if kmi_contract and kmi_contract.get("abiEvidence", {}).get("method") == "same-kmi-module-loader":
         selected_features = {name: int(bool(feature.get(name, 0))) for name in
-                             ("MSU_MANAGEMENT_RESIDENT_TEXT_OWNER", "MSU_MANAGEMENT_CRED_UCOUNTS")}
+                             ("MSU_MANAGEMENT_RESIDENT_TEXT_OWNER", "MSU_MANAGEMENT_CRED_UCOUNTS", "MSU_PATH_MOUNT_PATH_CONST")}
         selected_features.update(MSU_SU_EXEC_SESSION_NATIVE=int(with_session), MSU_SU_NONROOT_NATIVE=int(with_nonroot))
         if selected_features != kmi_contract.get("nativeImportsFeatures"):
             raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_SELECTED_FEATURES")
@@ -1165,7 +1217,7 @@ int msu_init_bridge_installation_init(const maplesu_host_instance *host, const u
     if execmem_header.is_file() != execmem_present:
         raise ValueError("ULTRA_BRIDGE_GENERATION_INPUT_CHANGED:" + str(execmem_header))
     receipt = {"inputs": rows, "generatedFrom": generated_from,
-               "seccompReleaseApi": seccomp_api,
+               "seccompReleaseApi": seccomp_api, "pathMountApi": path_mount_api,
                "formalDeploymentSelections": formal_selections,
                "formalRuntimeSelections": runtime_selection, "formalSuSelections": su_selections,
                "formalSuSourceEvolution": su_source_evolution,
@@ -1179,7 +1231,7 @@ int msu_init_bridge_installation_init(const maplesu_host_instance *host, const u
                "generatedFactoryBinding": [identity(output / name, content[name]) for name in
                    ("native_factory_bind.c", "native_factory_bind.h") if factory_binding],
                "selectedHostRuntimeObjects": runtime_objects,
-               "credentialMode": "module-parameter", "pageBytes": pages[0],
+               "credentialMode": "keyless", "pageBytes": pages[0],
                "selectedCoreDependencyObjects": core_objects, "runtimeLayoutSelected": with_runtime_layout,
                "runtimeFactsSelected": args.runtime_facts, "wholeCoreSnapshotSelected": False,
                "selectedCorePrivateIncludes": [row for row in rows if "includedBy" in row],

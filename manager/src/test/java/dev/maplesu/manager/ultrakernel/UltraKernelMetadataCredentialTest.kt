@@ -35,11 +35,11 @@ class UltraKernelMetadataCredentialTest {
         }
     }
 
-    @Test fun sdkLocatorMatchesTheFinalPlacedEnvelopeOnTheReportedImage() {
+    @Test fun explicitLegacySdkLocatorMatchesTheFinalPlacedEnvelopeOnTheReportedImage() {
         val boot = java.io.File("../Boot_Research/簌/boot.img")
         org.junit.Assume.assumeTrue(boot.isFile)
         val kernel = UltraKernelPlan.readKernel(boot)
-        val plan = UltraKernelSpecGenerator().generate(kernel, UltraKernelCredential.of("Aa1".repeat(16)))
+        val plan = legacyPlan(kernel, UltraKernelCredential.of("Aa1".repeat(16)))
         val credential = requireNotNull(plan.credential)
         assertNotNull("SDK metadata delta must be encoded in the generated identity", credential.metadataDisplacement)
         val envelope = plan.records.single { it.role == "free_initmem+0x0" }
@@ -60,7 +60,7 @@ class UltraKernelMetadataCredentialTest {
     @Test fun aBoundPlanReencodesNewCredentialsWithoutLosingItsMetadataBinding() {
         val boot = java.io.File("../Boot_Research/簌/boot.img")
         org.junit.Assume.assumeTrue(boot.isFile)
-        val plan = UltraKernelSpecGenerator().generate(boot, UltraKernelCredential.of("Aa1".repeat(16)))
+        val plan = legacyPlan(UltraKernelPlan.readKernel(boot), UltraKernelCredential.of("Aa1".repeat(16)))
         val rebound = plan.rebind(UltraKernelCredential.of("Bb2".repeat(16)))
         assertEquals(plan.credential!!.metadataDisplacement, rebound.credential!!.metadataDisplacement)
         assertNotEquals(plan.credential, rebound.credential)
@@ -69,5 +69,22 @@ class UltraKernelMetadataCredentialTest {
             assertArrayEquals(path, rebound.records[slot.recordIndex].replacement.copyOfRange(
                 slot.offsetInRecord, slot.offsetInRecord + path.size))
         }
+    }
+
+    private fun legacyPlan(kernel: ByteArray, credential: UltraKernelCredential): UltraKernelPlan {
+        val symbols = UltraKernelExecveEntry.resolve(UltraKernelKallsymsTable.decode(kernel), kernel)
+        val rendered = UltraKernelRecipe.k22().renderDetailed(symbols, kernel, credential,
+            preservedMetadataDisplacement = credential.metadataDisplacement)
+        val envelope = rendered.records.single { it.role == "free_initmem+0x0" }
+        val executor = rendered.records.single { it.role == "__drm_printfn_coredump+0x0" }
+        val displacement = credential.metadataDisplacement ?: Math.toIntExact(
+            envelope.site.toLong() + 4 - executor.site - UltraKernelBodies.EXECUTOR_CALL_OFFSET)
+        val records = rendered.records.map {
+            UltraKernelPlan.PatchRecord(it.role, it.site.toLong(), it.original, it.replacement)
+        }
+        val plan = UltraKernelPlan.fromRecords(UltraKernelSpec.releaseOf(kernel), records,
+            credential = credential, baseKernelSha256 = UltraKernelSpec.sha256(kernel),
+            sdkMetadataDisplacement = displacement, layout = rendered.layout).rebind(credential)
+        return plan.withDerived(plan.apply(kernel).derived)
     }
 }

@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Ultra SDK 端口：四码映射 / 参数校验 / 不崩 / 成功路径参数透传。 */
+/** Ultra SDK 端口：可用性映射 / 参数校验 / 不崩 / 免 Key 参数透传。 */
 class ParasiteSdkPortTest {
     private class FakeApi(
         var precheckResult: Map<String, AppDynlibStatus> = emptyMap(),
@@ -16,24 +16,23 @@ class ParasiteSdkPortTest {
     ) : ParasiteUltraApi {
         val calls = mutableListOf<String>()
         var precheckCmdline: String? = null
-        var implantArgs: Triple<String, String, ByteArray>? = null
+        var implantArgs: Pair<String, String>? = null
 
-        override fun precheckApp(rootKey: ByteArray, targetPidCmdline: String): Map<String, AppDynlibStatus> {
+        override fun precheckApp(targetPidCmdline: String): Map<String, AppDynlibStatus> {
             calls += "precheck"
             precheckCmdline = targetPidCmdline
             if (throws) throw UnsupportedOperationException("binding TODO")
             return precheckResult
         }
 
-        override fun implantApp(rootKey: ByteArray, targetPidCmdline: String, soPath: String): Int {
+        override fun implantApp(targetPidCmdline: String, soPath: String): Int {
             calls += "implantApp"
-            implantArgs = Triple(targetPidCmdline, soPath, rootKey)
+            implantArgs = targetPidCmdline to soPath
             if (throws) throw UnsupportedOperationException("binding TODO")
             return implantCode
         }
 
         override fun implantSuEnv(
-            rootKey: ByteArray,
             targetPidCmdline: String,
             soPath: String,
             suDir: String,
@@ -44,33 +43,29 @@ class ParasiteSdkPortTest {
         }
     }
 
-    private val rootKey = ByteArray(48) { 'k'.code.toByte() }
     private val api = FakeApi()
 
     private fun runningPort(api: ParasiteUltraApi = this.api) = UltraLinkedParasiteSdkPort(
         api = api,
-        rootKeyProvider = { rootKey },
         availabilityProvider = { UltraAvailability.RUNNING },
     )
 
     @Test
-    fun unavailablePortReturnsFourDistinctCodes() {
+    fun unavailablePortReturnsDistinctCodes() {
         val codes = listOf(
             UltraAvailability.RUNNING.unavailableCode(),
             UltraAvailability.NOT_RUNNING.unavailableCode(),
             UltraAvailability.UNLINKED.unavailableCode(),
-            UltraAvailability.NO_ROOT_KEY.unavailableCode(),
         )
         assertEquals(
             listOf(
                 ParasiteCodes.ULTRA_UNAVAILABLE,
                 ParasiteCodes.ULTRA_NOT_RUNNING,
                 ParasiteCodes.ULTRA_API_UNLINKED,
-                ParasiteCodes.ULTRA_ROOT_KEY_UNAVAILABLE,
             ),
             codes,
         )
-        assertEquals(4, codes.distinct().size)
+        assertEquals(3, codes.distinct().size)
     }
 
     @Test
@@ -168,27 +163,25 @@ class ParasiteSdkPortTest {
     }
 
     @Test
-    fun runningWithoutRootKeyIsStructuredFailure() {
+    fun runningPrecheckNeedsOnlyBusinessArguments() {
         val port = UltraLinkedParasiteSdkPort(
             api = api,
-            rootKeyProvider = { null },
             availabilityProvider = { UltraAvailability.RUNNING },
         )
         assertEquals(
-            ParasiteCodes.ULTRA_ROOT_KEY_UNAVAILABLE,
+            ParasiteCodes.NO_ELIGIBLE_DYNLIB,
             (port.precheck("cmd") as ParasiteSdkResult.Failed).code,
         )
     }
 
     @Test
-    fun notRunningShortCircuitsEvenWithRootKey() {
+    fun notRunningShortCircuitsBeforeNative() {
         val port = UltraLinkedParasiteSdkPort(
             api = api,
-            rootKeyProvider = { rootKey },
-            availabilityProvider = { UltraAvailability.NO_ROOT_KEY },
+            availabilityProvider = { UltraAvailability.NOT_RUNNING },
         )
         assertEquals(
-            ParasiteCodes.ULTRA_ROOT_KEY_UNAVAILABLE,
+            ParasiteCodes.ULTRA_NOT_RUNNING,
             (port.precheck("cmd") as ParasiteSdkResult.Failed).code,
         )
         assertTrue(api.calls.isEmpty())
@@ -201,7 +194,6 @@ class ParasiteSdkPortTest {
         assertTrue(result is ParasiteSdkResult.Ok)
         assertEquals("com.example.host", api.implantArgs!!.first)
         assertEquals("/data/app/lib/libfoo.so", api.implantArgs!!.second)
-        assertEquals(48, api.implantArgs!!.third.size)
 
         assertEquals(ParasiteSdkResult.Ok(), port.implantSuEnv("cmd", "/so", "/su"))
         assertNull((port.precheck("cmd") as ParasiteSdkResult.Failed).detail.takeIf { false })

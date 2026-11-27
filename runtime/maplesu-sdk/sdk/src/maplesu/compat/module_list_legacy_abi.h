@@ -23,8 +23,6 @@ static_assert(alignof(module_record) == 1);
 #endif
 }  // namespace maplesu::sdk
 
-extern "C" const char*
-__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(void);
 extern "C" __attribute__((visibility("hidden")))
 void maplesu_system_directory(std::string& out);
 
@@ -40,7 +38,4 @@ using maplesu::sdk::write_errcode_from_child;
 using maplesu::sdk::write_transfer_data_from_child;
 using maplesu::sdk::read_errcode_from_child;
 using maplesu::sdk::read_transfer_data_from_child;
-static inline const char* current_root_key() {
-    return __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-}
 }  // namespace maplesu::compat

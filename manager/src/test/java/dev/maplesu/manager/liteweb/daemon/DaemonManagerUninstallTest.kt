@@ -9,7 +9,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import dev.maplesu.manager.litehidden.RecoveryIdentity
-import dev.maplesu.manager.runtime.ultra.UltraRecoveryKey
 
 class DaemonManagerUninstallTest {
     @get:Rule val temp = TemporaryFolder()
@@ -91,16 +90,17 @@ class DaemonManagerUninstallTest {
         assertFalse(script.contains("TOKEN"))
     }
 
-    @Test fun freshRecoveryReadinessRequiresIdentityKeyAndReadableSdk() {
+    @Test fun freshRecoveryReadinessRequiresProtectedIdentityAndReadableSdk() {
         val identity = requireNotNull(RecoveryIdentity.of("0123456789abcdef", "dev.maplesu.manager", 10489))
-        val sealed = UltraRecoveryKey.seal("K".repeat(48), identity.androidId, identity.packageName)
-        val sdk = DaemonUltraSdkResult.Ready(dev.maplesu.manager.runtime.ultra.UltraRuntimeClient(), "identity")
+        val sdk = DaemonUltraSdkResult.Ready(dev.maplesu.manager.runtime.ultra.UltraRuntimeClient(), "current-task")
         var calls = 0
-        assertTrue(DaemonManagerRecoveryReadiness({ identity.toJson() }, { sealed }, { calls++; true }, { sdk }).ready())
+        assertTrue(DaemonManagerRecoveryReadiness({ identity.toJson() }, { calls++; true }, { sdk }).ready())
         assertEquals(1, calls)
-        assertFalse(DaemonManagerRecoveryReadiness({ null }, { sealed }, { calls++; true }, { sdk }).ready())
-        assertFalse(DaemonManagerRecoveryReadiness({ identity.toJson() }, { "corrupt" }, { calls++; true }, { sdk }).ready())
+        assertFalse(DaemonManagerRecoveryReadiness({ null }, { calls++; true }, { sdk }).ready())
+        assertFalse(DaemonManagerRecoveryReadiness({ "corrupt" }, { calls++; true }, { sdk }).ready())
         assertEquals(1, calls)
-        assertFalse(DaemonManagerRecoveryReadiness({ identity.toJson() }, { sealed }, { false }, { sdk }).ready())
+        assertFalse(DaemonManagerRecoveryReadiness({ identity.toJson() }, { false }, { sdk }).ready())
+        assertFalse(DaemonManagerRecoveryReadiness({ identity.toJson() }, { error("SDK unavailable") },
+            { DaemonUltraSdkResult.Unavailable("BACKEND_UNAVAILABLE", "fixture") }).ready())
     }
 }

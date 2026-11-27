@@ -2,7 +2,6 @@ package dev.maplesu.manager.ultra
 
 import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import dev.maplesu.manager.runtime.ultra.UltraAuthorization
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import dev.maplesu.manager.runtime.ultra.UltraSuChannel
@@ -31,7 +30,7 @@ class UltraSelfHealChannelAndroidTest {
         evidence.put("suBeforeWhitelist", probe.rootUid())
         evidence.put("suBeforeFailure", probe.lastFailure)
 
-        val client = UltraRuntimeClient { UltraRootKeyStore.read(context) }
+        val client = UltraRuntimeClient()
         val snapshot = client.suAuthSnapshot()
         evidence.put("suAuthListOk", snapshot.ok)
         evidence.put("suAuthListSdkError", snapshot.receipt.sdkError)

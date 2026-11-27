@@ -114,17 +114,13 @@ class EnvironmentProbesAdapter(private val context: Context) : EnvironmentProbes
     private fun computeUltraFingerprint(): String? {
         if (ksuNormal() == true) return null
         if (HookRootExecutor.production(context.applicationContext).available()) return "hook:ready"
-        // Last chance before the resolver publishes NotInstalled. A reinstall may
-        // have lost all app preferences while the environment/key backup survives.
-        // The current channel was already read before SU; avoid repeating Unknown
-        // observations here before recovery changes the credentials.
-        // Recovery checks the current key, saved image candidates, then broker/backup, and
-        // refreshes the live SDK state. Neither a saved key nor Root alone is a mode.
+        // Reconcile the current signed installation before the resolver decides absence.
+        // Recovery rechecks the live identity and state; preferences never authorize a mode.
         dev.maplesu.manager.runtime.ultra.UltraIdentityRecovery.recover(context.applicationContext)
         UltraEnvironmentProbe.refresh(context.applicationContext, force = false)
         val observed = UltraEnvironmentProbe.currentSnapshot(context)
         return UltraEnvironmentProbe.recoveryFingerprint(observed.state, UltraEnvironmentProbe.isSafeMode(context),
-            observed.kernelRootVerified, observed.kernelChannelAbsent)
+            observed.kernelRootVerified, observed.kernelChannelAbsent, observed.detail)
     }
 
     override fun ksuNormal(): Boolean? {

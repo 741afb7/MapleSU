@@ -30,6 +30,7 @@ unsigned msu_management_lock;
 #define raw_spin_lock_irqsave(lock,flags) do { (void)(lock);(flags)=0; } while(0)
 #define raw_spin_unlock_irqrestore(lock,flags) do { (void)(lock);(void)(flags); } while(0)
 #define READ_ONCE(value) (value)
+#define MSU_DYN_FIELD(value,type,field) ((value)->field)
 bool nmi = false, fail_allocation = false;
 unsigned allocated = 0, released = 0, scheduled = 0;
 std::set<void*> allocations;
@@ -39,6 +40,8 @@ msu_private_return_owner* kmalloc(std::size_t bytes,unsigned) { if(fail_allocati
 void kfree(void* p) { if(!p)return;assert(allocations.erase(p));++released;std::free(p); }
 void get_task_struct(task_struct* task) { ++task->refs; }
 void put_task_struct(task_struct* task) { assert(task->refs>1);--task->refs; }
+#define msu_dynamic_get_task_struct get_task_struct
+#define msu_dynamic_put_task_struct put_task_struct
 void schedule_work(unsigned*) { ++scheduled; }
 #define pr_err(...) ((void)0)
 

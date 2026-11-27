@@ -27,7 +27,7 @@ class RootExecutionHookConcurrencyTest {
                 return RootExecResult(backend, 0, script)
             }
         }
-        val router = RootExecutionRouter(null, null, modeProvider = { WorkMode.LITE }, hook = hook)
+        val router = RootExecutionRouter(null, modeProvider = { WorkMode.LITE }, hook = hook)
         val workers = Executors.newFixedThreadPool(3)
         try {
             val installing = workers.submit<RootExecResult> { router.execute("install") }
@@ -68,7 +68,7 @@ class RootExecutionHookConcurrencyTest {
             override fun available() = true
             override fun run(script: String) = RootExecResult(backend, 0, script)
         }
-        val router = RootExecutionRouter(null, ultra, modeProvider = { WorkMode.LITE },
+        val router = RootExecutionRouter(ultra, modeProvider = { WorkMode.LITE },
             ultraIdentity = { true }, hook = hook)
         val worker = Executors.newSingleThreadExecutor()
         try {
@@ -106,7 +106,7 @@ class RootExecutionHookConcurrencyTest {
             override fun available() = true
             override fun run(script: String) = RootExecResult(backend, 0, script)
         }
-        val router = RootExecutionRouter(null, null, modeProvider = {
+        val router = RootExecutionRouter(null, modeProvider = {
             mode.get().also { if (Thread.currentThread().name == "queued-root") selected.countDown() }
         }, ksuProvider = { ksu }, hook = hook)
         val first = Executors.newSingleThreadExecutor()
@@ -138,7 +138,7 @@ class RootExecutionHookConcurrencyTest {
                 return RootExecResult(backend, 0, script)
             }
         }
-        val router = RootExecutionRouter(null, null, modeProvider = { WorkMode.LITE }, hook = hook)
+        val router = RootExecutionRouter(null, modeProvider = { WorkMode.LITE }, hook = hook)
         val result = runBlocking(PageReadDeadline.context(0)) { router.executeHook("expired") }
         assertFalse(result.ok)
         assertEquals("ROOT_EXECUTION_BUSY", result.detail)

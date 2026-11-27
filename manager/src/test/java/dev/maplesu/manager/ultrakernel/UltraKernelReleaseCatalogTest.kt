@@ -92,35 +92,22 @@ class UltraKernelReleaseCatalogTest {
     }
 
     @Test
-    fun unknownReleaseIsRefusedWithKnownReleaseList() {
-        val workspace = UltraKernelReleaseFixtures.tempWorkspace("ultrakernel-unsupported")
-        workspaces += workspace
-        val flow = UltraKernelFlow(
-            workspace,
-            UltraKernelReleaseFixtures.releaseAssets(
-                UltraKernelReleaseFixtures.meta(release = UltraKernelReleaseFixtures.OTHER_RELEASE),
-                directory = UltraKernelReleaseFixtures.OTHER_RELEASE,
-            ),
+    fun explicitSelectionReportsUnsupportedReleaseWithItsKnownReleaseList() {
+        val assets = UltraKernelReleaseFixtures.releaseAssets(
+            UltraKernelReleaseFixtures.meta(release = UltraKernelReleaseFixtures.OTHER_RELEASE),
+            directory = UltraKernelReleaseFixtures.OTHER_RELEASE,
         )
-        val boot = bootIn(workspace, UltraKernelReleaseFixtures.RELEASE)
-
         val error = assertThrows(UltraKernelReleaseUnsupportedException::class.java) {
-            flow.prepare(boot)
+            flow(assets).selectForRelease("UNREADABLE")
         }
-        // Since the recipe renderer exists, "no asset" no longer means "unsupported": the release
-        // may be generatable, so what is actually missing is the 48 byte device credential. The
-        // exception type stays catchable for callers written before generation existed.
-        assertEquals("ULTRA_KERNEL_CREDENTIAL_REQUIRED", error.code)
-        assertEquals(UltraKernelReleaseFixtures.RELEASE, error.kernelRelease)
+        assertEquals("ULTRA_KERNEL_RELEASE_UNSUPPORTED", error.code)
+        assertEquals("UNREADABLE", error.kernelRelease)
         assertTrue(error.knownReleases.contains(UltraKernelReleaseFixtures.OTHER_RELEASE))
-        assertTrue(error.message!!.startsWith(
-            "ULTRA_KERNEL_CREDENTIAL_REQUIRED:${UltraKernelReleaseFixtures.RELEASE}"))
         assertTrue(error.message!!.contains(UltraKernelReleaseFixtures.OTHER_RELEASE))
-        assertTrue(error.message!!.contains("48B"))
     }
 
     @Test
-    fun noAssetPlusCredentialAttemptsGenerationAndStillRefusesExplicitly() {
+    fun noAssetDiagnosesMissingSymbolsBeforeGenerationAndLeavesNoCandidate() {
         val workspace = UltraKernelReleaseFixtures.tempWorkspace("ultrakernel-generate")
         workspaces += workspace
         val flow = UltraKernelFlow(
@@ -133,17 +120,13 @@ class UltraKernelReleaseCatalogTest {
         val boot = bootIn(workspace, UltraKernelReleaseFixtures.RELEASE)
         val notices = ArrayList<String>()
 
-        // A credential is present, so the flow takes the generation path. The fixture kernel has no
-        // `kallsyms` table, so generation must fail closed with a generate code - never fall back to
-        // another release, and never produce a candidate.
+        // Routing and generation both require target symbols. This input has no kallsyms, so the
+        // route check must stop before generation notices or candidate writes, without a Key gate.
         val error = assertThrows(UltraKernelGenerateException::class.java) {
-            flow.prepare(boot, UltraKernelPlanFixtures.credential()) { notices += it }
+            flow.prepare(boot) { notices += it }
         }
         assertEquals(UltraKernelGenerateCodes.KALLSYMS, error.code)
-        assertTrue(
-            "the user must be told a plan is being generated: $notices",
-            notices.any { it.contains("现场生成") },
-        )
+        assertTrue("routing failed before generation started", notices.isEmpty())
         assertEquals(
             "nothing may be written when generation fails",
             0,

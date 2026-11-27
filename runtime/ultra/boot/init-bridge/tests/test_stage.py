@@ -56,6 +56,10 @@ class StageChecks(unittest.TestCase):
         for name in ("module/maplesu_boot_sdk.c", "module/boot_sdk_call.S", "module/boot_sdk_protocol.h",
                      "module/boot_sdk_allocator.h", "boot_sdk_abi.h"):
             self.files[self.repo / "jailbreak-providers/root-loader" / name] = name.encode()
+        self.files[self.candidate / "scripts/policy_path_mount.py"] = (
+            Path(__file__).resolve().parents[5] / "scripts/policy_path_mount.py").read_bytes()
+        self.files[root / "kernel/source/fs/internal.h"] = (
+            b"int path_mount(const char *, struct path *, const char *, unsigned long, void *);\n")
         self.files[root / "kernel/build/.config"] = b"CONFIG_ARM64_4K_PAGES=y\n"
         self.files[root / "kernel/source/include/linux/fs_struct.h"] = (
             b"struct fs_struct { seqlock_t seq; } __randomize_layout;\n")
@@ -105,7 +109,7 @@ class StageChecks(unittest.TestCase):
         self.assertNotIn(self.output / "bridge_credential.c", self.files)
         self.assertNotIn(self.output / "bridge_credential.h", self.files)
         self.assertNotIn(b"bridge_credential.o", self.files[self.output / "Kbuild"])
-        self.assertEqual(receipt["credentialMode"], "module-parameter")
+        self.assertEqual(receipt["credentialMode"], "keyless")
         self.assertNotIn("credentialSha256", receipt)
         self.assertFalse(any("credential" in path.name and not path.name.startswith("manager_") for path in self.reads))
         self.assertFalse(any(path.suffix == ".ko" for path in self.files))
@@ -322,7 +326,7 @@ class StageChecks(unittest.TestCase):
         self.assertNotIn("-DMSU_SU_NAMESPACE_NATIVE_VERIFIED=1", kbuild)
         self.assertNotIn("MSU_MANAGEMENT_PUBLICATION_GATE_VERIFIED", kbuild)
         self.assertFalse(any("su_native_reader_abi.h" in name for name in selected))
-        self.assertEqual(receipt["credentialMode"], "module-parameter")
+        self.assertEqual(receipt["credentialMode"], "keyless")
 
     def test_missing_any_formal_su_member_leaves_no_success_receipt(self):
         for unit in self.su_units:
@@ -1197,6 +1201,34 @@ int main(void)
                 str(output / "fixture.c"), "-o", str(binary)], env=environment, capture_output=True, text=True, timeout=25)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             subprocess.run([str(binary)], env=environment, check=True, timeout=5)
+
+
+    def test_path_mount_qualifier_and_evidence_follow_captured_header(self):
+        source = next(path for path in self.files if path.as_posix().endswith("kernel/source/fs/internal.h"))
+        for const in (0, 1):
+            with self.subTest(path_const=const):
+                self.setUp()
+                self.files[source] = ("int path_mount(const char *, %sstruct path *, const char *, unsigned long, void *);\n" % ("const " if const else "")).encode()
+                receipt = self.run_stage()
+                header = self.files[self.output / "host/msu_resolver_build_config.h"]
+                self.assertIn(("#define MSU_PATH_MOUNT_PATH_CONST %d\n" % const).encode(), header)
+                self.assertIn(("#define MSU_PATH_MOUNT_PATH_QUALIFIER " + ("const" if const else "") + "\n").encode(), header)
+                self.assertEqual(receipt["pathMountApi"]["pathConst"], const)
+                self.assertEqual(receipt["pathMountApi"]["source"], stage.identity(source, self.files[source]))
+                self.assertIn(receipt["pathMountApi"]["source"], receipt["generatedFrom"])
+
+    def test_path_mount_missing_type_has_no_success_receipt(self):
+        source = next(path for path in self.files if path.as_posix().endswith("kernel/source/fs/internal.h"))
+        del self.files[source]
+        with self.assertRaises(FileNotFoundError):
+            self.run_stage()
+        self.assertNotIn(self.output / "SOURCE-SELECTION.json", self.files)
+
+    def test_path_mount_type_drift_has_no_success_receipt(self):
+        source = next(path for path in self.files if path.as_posix().endswith("kernel/source/fs/internal.h"))
+        with self.assertRaisesRegex(ValueError, "ULTRA_BRIDGE_GENERATION_INPUT_CHANGED:.*internal.h"):
+            self.run_stage(replace_after_read=source)
+        self.assertNotIn(self.output / "SOURCE-SELECTION.json", self.files)
 
 
 if __name__ == "__main__":

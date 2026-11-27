@@ -19,7 +19,6 @@ helper_context g_context;
 constexpr char builtin_storage_id[] = "GEfQdKmhZSkuWJI2rs21JO39Xmp8XcZg";
 
 KModErr acquire_worker_root(helper_context& context, maplesu::storage::WorkerScope& worker) {
-    if (!worker.owner_mode()) return maplesu::bootstrap::acquire_root(context.root_key);
     RETURN_IF_ERROR(worker.root());
     std::string directory;
     RETURN_IF_ERROR(maplesu::storage::current_kernel_directory(directory));
@@ -61,17 +60,8 @@ int read_self_path(helper_context& context, char* const argv[]) {
     return HELPER_OK;
 }
 helper_i64 locate(helper_context& context) {
-    const char* token = maplesu_helper_root_key_token;
     char expected[HELPER_PATH_MAX];
     helper_memcopy(context.module_id, HELPER_MODULE_ID, sizeof(HELPER_MODULE_ID));
-    if (strnlen(token, HELPER_KEY_LEN + 1) == HELPER_KEY_LEN) {
-        helper_memcopy(context.root_key, token, HELPER_KEY_LEN);
-        context.root_key[HELPER_KEY_LEN] = 0;
-        if (helper_data_dir_from_key(context.root_key, HELPER_KEY_LEN, context.env_dir, sizeof(context.env_dir)) == HELPER_OK &&
-            snprintf(expected, sizeof(expected), "%s/init", context.env_dir) > 0 &&
-            helper_streq(expected, context.self_path)) return HELPER_OK;
-    }
-    helper_memzero(context.root_key, sizeof(context.root_key));
     helper_memzero(context.env_dir, sizeof(context.env_dir));
     maplesu_installation_state_v3 installation{};
     const KModErr read = kernel_module::maplesu_request_helper_vendor(MAPLESU_INSTALLATION_READ, 0, installation);
@@ -213,7 +203,7 @@ int capability_result(helper_context& context, int result) {
 }
 int dispatch_boot_event(helper_context& context, const char* event, char* const envp[]);
 
-int boot_child(helper_context& context, maplesu::storage::WorkerScope* worker,
+int boot_child(helper_context& context, std::optional<maplesu::storage::WorkerScope>& worker,
                const char* before_modules = nullptr, char* const envp[] = nullptr) {
     helper_u32 length = 0;
     int result = context.ops.read_boot_id(context.boot_id, sizeof(context.boot_id), &length);
@@ -243,7 +233,7 @@ int boot_child(helper_context& context, maplesu::storage::WorkerScope* worker,
     int event_result = HELPER_EXIT_OK;
     try {
         if (before_modules) {
-            const KModErr core = maplesu::bootstrap::initialize_core(context);
+            const KModErr core = maplesu::bootstrap::initialize_core(context, worker);
             if (is_failed(core)) return helper_session_fail(&context, static_cast<int64_t>(core));
             // The actual post-fs-data consumer finishes common scripts, module
             // policy, properties and mounts before a native Zygisk host loads.
@@ -252,7 +242,7 @@ int boot_child(helper_context& context, maplesu::storage::WorkerScope* worker,
             const KModErr modules = maplesu::bootstrap::initialize_modules(context);
             if (is_failed(modules)) return helper_session_fail(&context, static_cast<int64_t>(modules));
         } else {
-            const KModErr initialized = maplesu::bootstrap::initialize(context);
+            const KModErr initialized = maplesu::bootstrap::initialize(context, worker);
             if (is_failed(initialized)) return helper_session_fail(&context, static_cast<int64_t>(initialized));
         }
     } catch (...) { return helper_session_fail(&context, HELPER_E_UNKNOWN); }
@@ -361,7 +351,7 @@ int dispatch_boot_event(helper_context& context, const char* event, char* const 
     return WEXITSTATUS(status);
 }
 
-int boot_event_child(helper_context& context, maplesu::storage::WorkerScope* worker,
+int boot_event_child(helper_context& context, std::optional<maplesu::storage::WorkerScope>& worker,
                      const char* event, char* const envp[]) {
     if (helper_streq(event, "post-fs-data")) return boot_child(context, worker, event, envp);
     const int initialized = boot_child(context, worker);
@@ -420,8 +410,8 @@ int helper_run_boot(const helper_ops* ops, int argc, char* const argv[], char* c
             else {
                 const int locked = take_lock(g_context, event);
                 if (locked) helper_log_error(&g_context, "bootstrap-lock rc=", locked);
-                else base_result = event ? boot_event_child(g_context, worker ? &*worker : nullptr, argv[2], envp) :
-                    boot_child(g_context, worker ? &*worker : nullptr);
+                else base_result = event ? boot_event_child(g_context, worker, argv[2], envp) :
+                    boot_child(g_context, worker);
             }
         } catch (...) { helper_log_error(&g_context, "boot-worker rc=", HELPER_E_UNKNOWN); }
         int result = capability_result(g_context, base_result);

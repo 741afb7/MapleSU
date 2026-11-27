@@ -1,6 +1,10 @@
 package com.maplesu.core.ui.util
 
 import java.io.File
+import java.nio.file.AccessDeniedException
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.nio.file.attribute.BasicFileAttributes
 
 /** App-owned evidence is collected even when the privileged channel is unavailable. */
 internal object BugreportDiagnostics {
@@ -29,19 +33,30 @@ internal object BugreportDiagnostics {
         val collection = StringBuilder().append("APP_PRIVATE_PERSISTED_EVIDENCE copiedAtMs=")
             .append(System.currentTimeMillis()).append(" bootScope=UNVERIFIED\n")
         fun copy(source: File, name: String) {
-            if (!source.isFile) {
-                collection.append("MISSING_OR_UNREADABLE ").append(name).append('\n')
+            val before = try {
+                Files.readAttributes(source.toPath(), BasicFileAttributes::class.java)
+            } catch (_: NoSuchFileException) {
+                collection.append("MISSING ").append(name).append('\n')
+                return
+            } catch (error: Exception) {
+                collection.append("UNREADABLE ").append(name).append(' ')
+                    .append(error.javaClass.simpleName).append('\n')
+                return
+            }
+            if (!before.isRegularFile) {
+                collection.append("NOT_REGULAR_FILE ").append(name).append('\n')
                 return
             }
             runCatching {
                 val target = File(destination, name)
                 target.parentFile?.mkdirs()
-                val beforeBytes = source.length()
-                val beforeModifiedAtMs = source.lastModified()
-                source.copyTo(target)
+                val beforeBytes = before.size()
+                val beforeModifiedAtMs = before.lastModifiedTime().toMillis()
+                Files.copy(source.toPath(), target.toPath())
                 val afterBytes = source.length()
                 val afterModifiedAtMs = source.lastModified()
-                collection.append("COPIED ").append(name).append(" bytes=").append(target.length())
+                collection.append(if (beforeBytes == 0L) "EMPTY " else "COPIED ")
+                    .append(name).append(" bytes=").append(target.length())
                     .append(" sourceBytesBefore=").append(beforeBytes)
                     .append(" sourceModifiedAtMsBefore=").append(beforeModifiedAtMs)
                     .append(" sourceBytesAfter=").append(afterBytes)
@@ -49,7 +64,8 @@ internal object BugreportDiagnostics {
                     .append(" metadataChanged=").append(beforeBytes != afterBytes || beforeModifiedAtMs != afterModifiedAtMs)
                     .append(" bootScope=UNVERIFIED\n")
             }.onFailure {
-                collection.append("COPY_FAILED ").append(name).append(' ')
+                collection.append(if (it is AccessDeniedException || it is SecurityException) "UNREADABLE " else "COPY_FAILED ")
+                    .append(name).append(' ')
                     .append(it.javaClass.simpleName).append('\n')
             }
         }

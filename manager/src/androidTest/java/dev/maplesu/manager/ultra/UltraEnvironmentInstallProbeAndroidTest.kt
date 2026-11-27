@@ -2,10 +2,8 @@ package dev.maplesu.manager.ultra
 
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.maplesu.manager.runtime.ultra.bridge.NativeBridge
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import org.json.JSONArray
 import org.json.JSONObject
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -35,18 +33,7 @@ class UltraEnvironmentInstallProbeAndroidTest {
     @Test
     fun hotloadActivationOnceThroughTheSdk() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("verifyUltraEnvInstall") == "true")
-        // A Boot-mode environment embeds the key in the kernel patch, so the app must use the
-        // exact key that was written there. Callers pass it explicitly; the store is updated so
-        // later reads (module install, uninstall) agree with the kernel.
         val arguments = InstrumentationRegistry.getArguments()
-        val suppliedKey = arguments.getString("ultraRootKey")?.trim()
-        val key = if (suppliedKey.isNullOrEmpty()) {
-            UltraRootKeyStore.read(context)
-        } else {
-            UltraRootKeyStore.write(context, suppliedKey)
-            suppliedKey
-        }
-        assertNotNull("provision a root key first, or pass -e ultraRootKey <48 chars>", key)
 
         val exploit = arguments.getString("ultraExploit", "MAGICA") ?: "MAGICA"
         val mode = arguments.getString("ultraMode", "HotLoad") ?: "HotLoad"
@@ -61,14 +48,11 @@ class UltraEnvironmentInstallProbeAndroidTest {
                 stream.fd.sync()
             }
         }
-        persist("begin", "mode=$mode exploit=$exploit key16=${key!!.take(16)}")
+        persist("begin", "mode=$mode exploit=$exploit")
 
         val evidence = JSONObject()
         evidence.put("mode", mode)
         evidence.put("exploit", exploit)
-        evidence.put("rootKey", key)
-        evidence.put("rootKey16", key!!.take(16))
-        evidence.put("rootKeyLength", key.length)
 
         // The state query is not required for installation, and on some kernel builds it is the
         // call that faults, so allow it to be skipped to test the install path on its own.
@@ -78,7 +62,7 @@ class UltraEnvironmentInstallProbeAndroidTest {
             null
         } else {
             persist("stateCalling", "about to call getEnvironmentState")
-            val parsed = parse(NativeBridge.getEnvironmentState(key!!))
+            val parsed = parse(NativeBridge.getEnvironmentState())
             persist("stateBefore", parsed?.toString() ?: "null")
             parsed
         }
@@ -87,7 +71,7 @@ class UltraEnvironmentInstallProbeAndroidTest {
         // The single activation attempt. No loop, no retry: a retried install with side
         // effects is exactly what the spec forbids.
         persist("installCalling", "about to call installEnvironment")
-        val installRaw = NativeBridge.installEnvironment(key!!, mode, exploit)
+        val installRaw = NativeBridge.installEnvironment(mode, exploit)
         persist("installReturned", installRaw)
         val install = parse(installRaw)
         evidence.put("installReceipt", installRaw)
@@ -99,7 +83,7 @@ class UltraEnvironmentInstallProbeAndroidTest {
         val samples = JSONArray()
         repeat(3) { index ->
             if (index > 0) Thread.sleep(2000)
-            val sample = parse(NativeBridge.getEnvironmentState(key!!))
+            val sample = parse(NativeBridge.getEnvironmentState())
             samples.put(
                 JSONObject()
                     .put("index", index)
@@ -110,10 +94,10 @@ class UltraEnvironmentInstallProbeAndroidTest {
         }
         evidence.put("stateSamples", samples)
 
-        val version = parse(NativeBridge.getInstalledEnvironmentVersion(key!!))
+        val version = parse(NativeBridge.getInstalledEnvironmentVersion())
         evidence.put("installedVersionReceipt", version?.toString() ?: "")
 
-        val list = parse(NativeBridge.getModuleList(key!!))
+        val list = parse(NativeBridge.getModuleList())
         evidence.put("moduleListErrorAfter", list?.optString("sdkError"))
 
         persist("stateSamples", samples.toString())

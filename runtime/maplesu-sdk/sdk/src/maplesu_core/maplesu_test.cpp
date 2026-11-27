@@ -152,12 +152,19 @@ static void failure(RootStatusResult& result, KModErr error, RootStatusPhase pha
     result.system_error = system_error;
 }
 
-const char* get_root_status_report(const char* root_key) {
+const char* get_root_status_report() {
     static thread_local std::string report;
     report.clear();
     last_result = RootStatusResult{};
     last_result.error = KModErr::OK;
     last_result.process = getpid();
+    errno = 0;
+    const KModErr admitted = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(admitted)) {
+        failure(last_result, admitted, RootStatusPhase::None, errno);
+        report = "get_root: FAILED\n\n\n";
+        return report.c_str();
+    }
     last_result.phase = RootStatusPhase::Fork;
     maplesu::sdk::fork_pipe_info pipe;
     errno = 0;
@@ -172,7 +179,7 @@ const char* get_root_status_report(const char* root_key) {
             result.phase = RootStatusPhase::Root;
             result.root_attempted = true;
             errno = 0;
-            result.root_error = maplesu::sdk::get_root(root_key);
+            result.root_error = maplesu::sdk::get_root();
             result.root_errno = errno;
             result.root_returned = true;
             result.error = result.root_error;
@@ -318,19 +325,11 @@ static std::function<KModErr(asmjit::a64::Assembler*, asmjit::a64::GpX&)> unsafe
 
 //   子进程：set_current_root(true) -> 写/删 ".boot_fail_protect" 标志文件
 //           （enabled=true 建文件并打 SELinux kernel 标签，false 删除）-> sync
-//   父进程：读回 errcode -> waitpid。root_key 校验失败返回 ERR_MODULE_ROOT_KEY，
+//   父进程：读回 errcode -> waitpid。当前安装身份失效返回 ERR_MODULE_ROOT_KEY，
 //           子进程无法读取错误码时 ERR_READ_CHILD_ERRCODE。
 namespace {
-KModErr select_test_identity(const char* key) {
-    const auto auth = kernel_module::maplesu_request_auth_state();
-    if (!kernel_module::maplesu_request_auth_usable(auth)) return KModErr::ERR_MODULE_ROOT_KEY;
-    if (kernel_module::maplesu_request_auth_authenticated(auth))
-        return key == nullptr ? KModErr::OK : KModErr::ERR_MODULE_ROOT_KEY;
-    if (!key) return KModErr::ERR_MODULE_ROOT_KEY;
-    const auto length = strnlen(key, 1024);
-    if (length < FOLDER_HEAD_ROOT_KEY_LEN || length == 1024) return KModErr::ERR_MODULE_ROOT_KEY;
-    __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
-    return KModErr::OK;
+KModErr select_test_identity() {
+    return kernel_module::maplesu_request_worker_admission();
 }
 
 KModErr finish_test_child(fork_pipe_info& pipe, KModErr error) {
@@ -345,8 +344,8 @@ KModErr finish_test_child(fork_pipe_info& pipe, KModErr error) {
 }
 
 template<class Operation>
-KModErr flag_worker(const char* key, const char* suffix, Operation operation) {
-    RETURN_IF_ERROR(select_test_identity(key));
+KModErr flag_worker(const char* suffix, Operation operation) {
+    RETURN_IF_ERROR(select_test_identity());
     fork_pipe_info pipe;
     KModErr error = KModErr::ERR_READ_CHILD_ERRCODE;
     if (fork_pipe_child_process(pipe)) {
@@ -369,8 +368,8 @@ KModErr flag_worker(const char* key, const char* suffix, Operation operation) {
     return finish_test_child(pipe, error);
 }
 
-KModErr set_flag(const char* key, const char* suffix, bool present) {
-    return flag_worker(key, suffix, [present](const std::string& path) {
+KModErr set_flag(const char* suffix, bool present) {
+    return flag_worker(suffix, [present](const std::string& path) {
         if (!present) {
             if (unlink(path.c_str()) != 0 && errno != ENOENT) return KModErr::ERR_MODULE_DEL_FILE;
         } else {
@@ -383,8 +382,8 @@ KModErr set_flag(const char* key, const char* suffix, bool present) {
     });
 }
 
-KModErr query_flag(const char* key, const char* suffix, bool& value) {
-    RETURN_IF_ERROR(select_test_identity(key));
+KModErr query_flag(const char* suffix, bool& value) {
+    RETURN_IF_ERROR(select_test_identity());
     fork_pipe_info pipe;
     KModErr error = KModErr::ERR_READ_CHILD_ERRCODE;
     if (fork_pipe_child_process(pipe)) {
@@ -419,33 +418,33 @@ KModErr query_flag(const char* key, const char* suffix, bool& value) {
 }
 } // namespace
 
-KModErr set_boot_fail_protect_enabled(const char* root_key, bool enabled) {
-    return set_flag(root_key, "init.boot_fail_protect", enabled);
+KModErr set_boot_fail_protect_enabled(bool enabled) {
+    return set_flag("init.boot_fail_protect", enabled);
 }
-bool is_boot_fail_protect_enabled(const char* root_key) {
+bool is_boot_fail_protect_enabled() {
     bool enabled = false;
-    (void)query_flag(root_key, "init.boot_fail_protect", enabled);
+    (void)query_flag("init.boot_fail_protect", enabled);
     return enabled;
 }
-KModErr set_adb_forced_disabled(const char* root_key, bool disabled) {
+KModErr set_adb_forced_disabled(bool disabled) {
     // Preserve the SDK's existing inverted file contract.
-    return set_flag(root_key, "adb_forced_disabled", !disabled);
+    return set_flag("adb_forced_disabled", !disabled);
 }
-bool is_adb_forced_disabled(const char* root_key) {
+bool is_adb_forced_disabled() {
     bool disabled = false;
-    (void)query_flag(root_key, "adb_forced_disabled", disabled);
+    (void)query_flag("adb_forced_disabled", disabled);
     return disabled;
 }
 
-const char* get_root_status_report(const char* root_key) {
-    return root_status_report::get_root_status_report(root_key);
+const char* get_root_status_report() {
+    return root_status_report::get_root_status_report();
 }
 
 //   与其它接口一样在 fork 子进程里执行；stdout/stderr 被重定向进字符串，
 //   结果与错误码通过 fork_pipe_info 回传，父进程调用回调把文本交给调用方。
-KModErr test_maplesu_basics_with_cb(const char* root_key, BasicItem item,
+KModErr test_maplesu_basics_with_cb(BasicItem item,
                                    void (*cb)(const char*)) {
-    RETURN_IF_ERROR(select_test_identity(root_key));
+    RETURN_IF_ERROR(select_test_identity());
 
     // （环境 Running 时返回 ERR_MODULE_MUST_UNINSTALL）。
     switch (item) {
@@ -454,7 +453,7 @@ KModErr test_maplesu_basics_with_cb(const char* root_key, BasicItem item,
         case BasicItem::PhysAddrCalc:
             break;
         default:
-            if (maplesu::sdk::get_maplesu_environment_state(root_key) ==
+            if (maplesu::sdk::get_maplesu_environment_state() ==
                 MapleSUEnvState::Running) {
                 return KModErr::ERR_MODULE_MUST_UNINSTALL;
             }
@@ -649,10 +648,10 @@ KModErr test_maplesu_basics_with_cb(const char* root_key, BasicItem item,
 //   环境 Running 时返回 ERR_MODULE_MUST_UNINSTALL（与 test_maplesu_basics 不同，
 //   这里对所有模块名都先做该检查）。五个模块名分别走 module_root /
 //   module_su_redirect / module_tombstone_purge 三个内置模块。
-KModErr test_maplesu_deafult_module_with_cb(const char* root_key, DeafultModuleName name,
+KModErr test_maplesu_deafult_module_with_cb(DeafultModuleName name,
                                            void (*cb)(const char*)) {
-    RETURN_IF_ERROR(select_test_identity(root_key));
-    if (maplesu::sdk::get_maplesu_environment_state(root_key) == MapleSUEnvState::Running) {
+    RETURN_IF_ERROR(select_test_identity());
+    if (maplesu::sdk::get_maplesu_environment_state() == MapleSUEnvState::Running) {
         return KModErr::ERR_MODULE_MUST_UNINSTALL;
     }
 
@@ -762,8 +761,8 @@ KModErr test_maplesu_deafult_module_with_cb(const char* root_key, DeafultModuleN
 //   子进程：初始化日志文件重定向 -> 读 install.mode / install_config.exploit ->
 //   调用内置 module_selinux::init(InstallMode, ExploitMethod) -> 可选 tombstone 净化；
 //   父进程：读回 errcode -> waitpid；成功时再调用 safe_restart_zygote64()。
-KModErr restart_zygote64(const char* root_key) {
-    RETURN_IF_ERROR(select_test_identity(root_key));
+KModErr restart_zygote64() {
+    RETURN_IF_ERROR(select_test_identity());
 
     fork_pipe_info pipe;
     KModErr err = KModErr::ERR_MODULE_TEST_CHANNEL;
@@ -863,41 +862,12 @@ KModErr restart_zygote64(const char* root_key) {
 }
 
 namespace runtime_settings {
-KModErr query_boot_fail_protect(const char* key, bool& value) {
-    return query_flag(key, "init.boot_fail_protect", value);
+KModErr query_boot_fail_protect(bool& value) {
+    return query_flag("init.boot_fail_protect", value);
 }
-KModErr query_adb_forced_disabled(const char* key, bool& value) {
-    return query_flag(key, "adb_forced_disabled", value);
+KModErr query_adb_forced_disabled(bool& value) {
+    return query_flag("adb_forced_disabled", value);
 }
 }
 
 }  // namespace maplesu::sdk
-
-namespace maplesu::compat {
-KModErr set_boot_fail_protect_enabled_legacy(const char* key, bool enabled) {
-    return sdk::set_boot_fail_protect_enabled(key, enabled);
-}
-bool is_boot_fail_protect_enabled_legacy(const char* key) {
-    return sdk::is_boot_fail_protect_enabled(key);
-}
-KModErr set_adb_forced_disabled_legacy(const char* key, bool disabled) {
-    return sdk::set_adb_forced_disabled(key, disabled);
-}
-bool is_adb_forced_disabled_legacy(const char* key) {
-    return sdk::is_adb_forced_disabled(key);
-}
-const char* get_root_status_report_legacy(const char* key) {
-    return sdk::get_root_status_report(key);
-}
-KModErr restart_zygote64_legacy(const char* key) {
-    return sdk::restart_zygote64(key);
-}
-KModErr test_basics_with_cb_legacy(const char* key, sdk::BasicItem item,
-                                 void (*cb)(const char*)) {
-    return sdk::test_maplesu_basics_with_cb(key, item, cb);
-}
-KModErr test_default_module_with_cb_legacy(const char* key, sdk::DeafultModuleName name,
-                                         void (*cb)(const char*)) {
-    return sdk::test_maplesu_deafult_module_with_cb(key, name, cb);
-}
-} // namespace maplesu::compat

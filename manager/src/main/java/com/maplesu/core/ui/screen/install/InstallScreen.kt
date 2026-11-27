@@ -39,6 +39,8 @@ import com.maplesu.core.ui.security.HiddenStartupConfirm
 import com.maplesu.core.ui.util.LkmSelection
 import com.maplesu.core.ui.util.packagedKmiCatalog
 import dev.maplesu.manager.installer.InstallPartitionPolicy
+import dev.maplesu.manager.installer.InstallerServiceClient
+import dev.maplesu.manager.installer.rethrowInstallerCancellation
 import dev.maplesu.manager.installer.InstallPartition
 import dev.maplesu.manager.installer.LenovoSigningOptions
 import dev.maplesu.manager.installer.lenovoFingerprint
@@ -140,11 +142,15 @@ fun InstallScreen(
     var storedPartition by rememberSaveable { mutableStateOf(InstallPartitionPolicy.NORMAL_DEFAULT) }
     var partitionTouched by rememberSaveable { mutableStateOf(false) }
     var imagePartition by remember { mutableStateOf<InstallPartition?>(null) }
+    var observedCarrier by remember { mutableStateOf<String?>(null) }
+    var observedSlotSuffix by remember { mutableStateOf<String?>(null) }
+    var availableCarriers by remember { mutableStateOf<Set<String>?>(null) }
+    var carrierLoading by remember { mutableStateOf(false) }
     // 事务进行中：选择器仍然可见但不可操作（`InstallTargetModePolicy` 是既有策略，纯函数）。
     val selectionsLocked = !InstallTargetModePolicy.selectable(
         installRunning = installInFlight,
         switchRunning = WorkModeSwitchSession.executing,
-    ) || moduleChoice.show || moduleChoice.busy
+    ) || moduleChoice.show || moduleChoice.busy || carrierLoading
 
     // 设备当前运行内核：步骤 ③ 的"当前 boot"来源直接用它的 release（不开 root）。
     var deviceKernelRelease by remember { mutableStateOf<String?>(null) }
@@ -153,7 +159,8 @@ fun InstallScreen(
     var initBootKmis by remember(targetMode) { mutableStateOf(emptyList<String>()) }
     val partition = if (installMethod is InstallMethod.SelectFile && imagePartition != null) imagePartition!!
         else if (targetMode == InstallTargetMode.ULTRA) {
-            if (partitionTouched) storedPartition else InstallPartition.BOOT
+            if (partitionTouched) storedPartition
+            else InstallPartition.fromWire(observedCarrier) ?: InstallPartition.BOOT
         }
         else if (partitionTouched) storedPartition
         else InstallPartitionPolicy.automaticNormal(null,
@@ -198,6 +205,35 @@ fun InstallScreen(
             // 返回手势/暂时离开不改变来源选择；操作仍由 pageResumed 限制。
             job.cancel()
         }
+    }
+    LaunchedEffect(context, pageResumed, installMethod, sourceRequest, installInFlight, targetMode) {
+        observedCarrier = null
+        observedSlotSuffix = null
+        availableCarriers = null
+        carrierLoading = false
+        if (!pageResumed || installInFlight || installMethod != InstallMethod.DirectInstall) return@LaunchedEffect
+        carrierLoading = true
+        val observed = withContext(Dispatchers.IO) {
+            try {
+                InstallerServiceClient.observeBootChain(context)
+            } catch (error: Exception) {
+                rethrowInstallerCancellation(error)
+                null
+            }
+        }
+        if (observed != null) {
+            observedSlotSuffix = observed.slotSuffix
+            availableCarriers = observed.partitions.keys
+            if (targetMode == InstallTargetMode.ULTRA) observedCarrier = withContext(Dispatchers.IO) {
+                try {
+                    InstallerServiceClient.installedCarrierPartition(context, observed)
+                } catch (error: Exception) {
+                    rethrowInstallerCancellation(error)
+                    null
+                }
+            }
+        }
+        carrierLoading = false
     }
     val selectFileTip = stringResource(id = R.string.install_select_image_summary)
 
@@ -275,14 +311,14 @@ fun InstallScreen(
 
     val onInstall = onInstall@{
         // UI 尚未重组时也拦住连点，以及其他入口刚发起的切换。
-        if (!pageResumed || installInFlight || WorkModeSwitchSession.executing) return@onInstall
+        if (!pageResumed || installInFlight || carrierLoading || WorkModeSwitchSession.executing) return@onInstall
         if (moduleChoice.show || moduleChoice.busy) return@onInstall
         val method = installMethod ?: return@onInstall
         if (method == InstallMethod.DirectInstall && directInstallSuppressed) return@onInstall
         if (method == InstallMethod.DirectInstall && !existingRootConflictAccepted) return@onInstall
         if (targetMode == InstallTargetMode.ULTRA) {
-            val route = ultraInstallRoute(ultraAction, partition.wire, null,
-                null, method == InstallMethod.DirectInstall, null)
+            val route = ultraInstallRoute(ultraAction, partition.wire, observedCarrier,
+                availableCarriers, method == InstallMethod.DirectInstall, null)
             if (route.blocker != null) {
                 showMessage(route.blocker)
                 return@onInstall
@@ -303,7 +339,7 @@ fun InstallScreen(
         val mode = targetMode
         val selectedPartition = partition
         val requestedPartition = selectedPartition.wire
-        val resolvedAction = resolvedUltraInstallAction(ultraAction, requestedPartition, null,
+        val resolvedAction = resolvedUltraInstallAction(ultraAction, requestedPartition, observedCarrier,
             method == InstallMethod.DirectInstall)
         val signingSnapshot = signing
         if (signingSnapshot.enabled && method is InstallMethod.SelectFile &&
@@ -337,8 +373,7 @@ fun InstallScreen(
                     partition = requestedPartition,
                     targetMode = mode,
                     existingRootConflictAccepted = existingRootConflictAccepted,
-                    restoreOriginalImage = restoreOriginalImage ||
-                        mode == InstallTargetMode.ULTRA && resolvedAction.restoresOtherCarrier,
+                    restoreOriginalImage = restoreOriginalImage,
                     originalManagerPackage = originalManagerPackage,
                     lenovoSigning = signingSnapshot,
                     vivoInputs = vivoInputs,
@@ -414,7 +449,7 @@ fun InstallScreen(
         partition = partition,
         partitionOptions = if (targetMode == InstallTargetMode.ULTRA) {
             if (installMethod is InstallMethod.SelectFile && imagePartition != null) listOf(imagePartition!!)
-            else InstallPartition.ALLOWED
+            else InstallPartition.ALLOWED.filter { availableCarriers?.contains(it.wire) != false }
         } else InstallPartitionPolicy.optionsFor(targetMode),
         targetSelectable = !selectionsLocked,
         normalDecision = normalDecision,
@@ -422,6 +457,10 @@ fun InstallScreen(
         managerInstalled = managerInstalled,
         directAccessReady = !directInstallSuppressed && pageResumed && existingRootConflictAccepted,
         sourceUsesManagedRoot = ModeRuntime.active != null || UltraEnvironmentProbe.usesUltraBackend(context),
+        sourceLoading = carrierLoading,
+        observedCarrier = observedCarrier,
+        observedSlotSuffix = observedSlotSuffix,
+        availableCarriers = availableCarriers,
         restoreOriginalImage = restoreOriginalImage,
         originalManagers = originalManagers,
         originalManagerPackage = originalManagerPackage,

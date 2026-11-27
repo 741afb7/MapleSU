@@ -954,9 +954,13 @@ internal object NativeInstallTransaction {
         putBoolean("restoreOriginal", record.optBoolean("restoreOriginal"))
         putBoolean("requestedRestoreOriginal", record.optBoolean("requestedRestoreOriginal", record.optBoolean("restoreOriginal")))
         putString("carrierRestoration", record.optString("carrierRestoration"))
-        putStringArrayList("restorePartitions", ArrayList(if (record.optBoolean("restoreOriginal"))
+        val originalPartitions = if (record.optBoolean("restoreOriginal"))
             names.filter { it != record.getString("partition") && record.optJSONObject("originals")?.has(it) == true }
-            else emptyList()))
+            else emptyList()
+        putStringArrayList("originalPartitions", ArrayList(originalPartitions))
+        putStringArrayList("restorePartitions", ArrayList(originalPartitions.filter {
+            record.getJSONObject("originals").getString(it) != decode(record).partitions.getValue(it).sha256
+        }))
         putParcelableArrayList("partitionRows", ArrayList(decode(record).partitions.filterKeys {
             it in tracked(decode(record))
         }.map { (name, row) -> Bundle().apply {

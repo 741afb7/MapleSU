@@ -135,6 +135,7 @@ fun HomePagerMiuix(
     ultra: UltraWordmarkState? = null,
     // Ultra 环境版本与更新提示；非 Ultra / 隐藏时为 null。
     ultraEnvironment: UltraEnvironmentUpdatePanel? = null,
+    showInstalledKernelUpdate: Boolean = false,
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val enableBlur = LocalEnableBlur.current
@@ -278,11 +279,16 @@ fun HomePagerMiuix(
                             actions = actions,
                             flat = flatHome,
                             modifier = Modifier.fillMaxWidth(),
-                            ultraVersionLabel = ultraEnvironment?.let { ultraEnvironmentLabel(it.version) },
+                            ultraVersionLabel = if (state.ultraBrandVisible) ultraEnvironmentLabel(ultraEnvironment?.version) else null,
                         ) }
                         // 「发现 Ultra 环境更新」：紧贴状态卡下方，写法与交互同 KSU 的管理器更新卡。
-                        if (ultraEnvironment != null) {
+                        if (ultraEnvironment != null && !showInstalledKernelUpdate) {
                             UltraEnvironmentUpdateCardMiuix(ultraEnvironment, modifier = sideInset)
+                        }
+                        if (showInstalledKernelUpdate) {
+                            Card(modifier = sideInset) {
+                                com.maplesu.core.ui.screen.settings.InstalledUltraUpgradeRowMiuix()
+                            }
                         }
                         // 首页「切换工作模式」入口（Miuix）——紧贴状态卡下方，整行按钮。
                         // 与 Material 版共用 HomeWorkModeSwitchState 判据和同一个导航落点。
@@ -612,7 +618,8 @@ internal fun StatusCard(
                                         Text(
                                             text = stringResource(
                                                 R.string.home_working_version,
-                                                ultraVersionLabel ?: stringResource(R.string.maplesu_backend_version, state.kernelUAPIVersion ?: 1)
+                                                if (state.ultraBrandVisible) ultraVersionLabel ?: ultraEnvironmentLabel(null)
+                                                else stringResource(R.string.maplesu_backend_version, state.kernelUAPIVersion ?: 1)
                                             ),
                                             color = statusContentColor,
                                             modifier = Modifier.weight(1f, fill = false),

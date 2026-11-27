@@ -14,11 +14,6 @@
 #include <string_view>
 #include <vector>
 
-namespace maplesu::compat {
-static const char* current_root_key() {
-    return __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-}
-}
 
 namespace maplesu::module {
 namespace {
@@ -94,19 +89,12 @@ __attribute__((always_inline)) static inline KModErr parse_metadata_fields(const
     if (!out_desc.web_ui) {
         const char* id32 = out_desc.id32;
         std::string owner_directory;
-        if (kernel_module::maplesu_request_owner_mode())
-            RETURN_IF_ERROR(storage::current_system_directory(owner_directory));
+        RETURN_IF_ERROR(storage::current_system_directory(owner_directory));
         std::string webroot = [&]() -> std::string {
             if (strlen(id32) == 0) return {};
             if (!owner_directory.empty())
                 return (std::filesystem::path(owner_directory) / "modules" / id32 / "webroot").string();
-            std::string head = std::string(maplesu::compat::current_root_key()).substr(0, 16);
-            std::string dirname = head + head[0];
-            char path[1024] = {};
-            snprintf(path, sizeof(path), "/data/%s/", dirname.c_str());
-            std::string modules = (std::filesystem::path(std::string(path)) / "modules" / "").string();
-            std::string private_dir = (std::filesystem::path(modules) / id32 / "").string();
-            return (std::filesystem::path(private_dir) / "webroot").string();
+            return {};
         }();
         std::error_code ec;
         out_desc.web_ui = std::filesystem::exists(std::filesystem::path(webroot), ec);

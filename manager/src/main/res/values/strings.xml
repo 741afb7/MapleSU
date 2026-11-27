@@ -409,8 +409,11 @@
     <string name="module_operation_interrupted">The previous module operation did not return a result. Refresh the module list before trying again.</string>
     <!-- 5.0.5 Ultra environment upgrade card: Available shows from → to; unreadable identity says "needs confirmation" only. -->
     <string name="ultra_env_update_available_from_to">Ultra environment update found: %1$s → %2$s. Tap to upgrade!</string>
-    <string name="ultra_env_update_unverified">The installed Ultra environment build cannot be confirmed. Tap to upgrade to %1$s: it reinstalls over the current environment to write a verifiable build identity.</string>
-    <string name="ultra_env_update_unverified_confirm">Reinstall %1$s over the current environment to write a verifiable build identity.\n\nThe device restarts a few seconds after it succeeds, so save your work first.</string>
+    <string name="ultra_env_update_unverified">%1$s is running. Update status is unconfirmed. Tap to upgrade the environment.</string>
+    <string name="ultra_env_update_unverified_confirm">Upgrade to %1$s and retain authorizations and module data. The device will restart afterward; save your work first.</string>
+    <string name="ultra_env_update_title">Environment update</string>
+    <string name="ultra_env_update_check_none">No confirmed environment update was found.</string>
+    <string name="ultra_env_update_check_failed">Environment update check did not finish. Tap to try again.</string>
     <string name="hook_su_channel">Hook superuser session</string>
     <string name="hook_su_running">Jailbreak mode active · Superuser access available</string>
 

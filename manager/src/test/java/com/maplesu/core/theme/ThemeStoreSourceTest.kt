@@ -4,7 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ThemeStoreSourceTest {
-    @Test fun builtinSourcesHaveIndependentEndpointsAndOnlyMapleHasAnOfficialMirror() {
+    @Test fun builtinSourcesHaveIndependentEndpointsAndExistingDefaultIsPreserved() {
         assertNotEquals(ThemeStoreSource.Maple.url,ThemeStoreSource.Fina.url)
         assertEquals(2,ThemeStoreSource.Maple.urls.size)
         assertEquals(listOf(ThemeStoreSource.Fina.url),ThemeStoreSource.Fina.urls)

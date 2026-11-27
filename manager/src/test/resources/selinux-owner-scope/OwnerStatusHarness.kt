@@ -1,14 +1,20 @@
 package com.maplesu.core.ui.util
 
+import com.maplesu.core.ksuApp
 import dev.maplesu.manager.runtime.ultra.NativeReceipt
 import dev.maplesu.manager.runtime.ultra.SELinuxBoundary as B
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient.ManagerOwnerIdentity
+import dev.maplesu.manager.workmode.ModeActivation
+import dev.maplesu.manager.workmode.ModeRuntime
+import dev.maplesu.manager.workmode.WorkMode
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 private val ownerA = ManagerOwnerIdentity(10123, 11, "host-a")
+private val keyA = "a".repeat(48)
+private val keyB = "b".repeat(48)
 
 private fun reset() {
     invalidateUltraSELinuxStatus()
@@ -16,10 +22,13 @@ private fun reset() {
     B.boot = "boot-a"
     B.owner = ownerA
     B.liveOwner = ownerA
+    ModeRuntime.activation = ModeActivation.Active(WorkMode.LITE)
     B.ultra = true
     B.hook = false
     B.legacyCalls = 0
     B.hookCalls = 0
+    B.hookChecks.set(0)
+    B.environmentChecks.set(0)
     B.statusCalls.set(0)
     B.rootCalls.set(0)
     B.ownerCalls.set(0)
@@ -32,21 +41,13 @@ private fun reset() {
 private fun expect(value: Any?, actual: Any?) {
     check(value == actual) { "expected=$value actual=$actual" }
 }
-
-/** Uses a real temporary enforce file through the checker's IO-only overload. */
-private fun local(file: File): String {
-    val checker = Class.forName("com.maplesu.core.ui.util.SELinuxCheckerKt")
-    val method = checker.getDeclaredMethod("getSELinuxStatusRaw", kotlin.jvm.functions.Function0::class.java)
-    return method.invoke(null, { file.readText() }) as String
-}
-
+private fun deniedLocal() = getSELinuxStatusRaw { throw java.io.IOException("Permission denied") }
 private fun worker(action: () -> String): Pair<Thread, AtomicReference<String>> {
     val value = AtomicReference<String>()
     val thread = Thread { value.set(runCatching(action).getOrElse { "THREW:$it" }) }
     thread.start()
     return thread to value
 }
-
 private fun await(latch: CountDownLatch) { check(latch.await(3, TimeUnit.SECONDS)) { "barrier timeout" } }
 private fun finish(worker: Pair<Thread, AtomicReference<String>>): String {
     worker.first.join(3_000)
@@ -60,196 +61,171 @@ fun main(args: Array<String>) {
         reset()
         body()
         check(B.legacyCalls == 0) { "Ultra check started another Root transport" }
+        check(B.ownerCalls.get() == 0) { "SELinux read added an Owner identity query" }
         passed++
         println("PASS $name")
     }
-    scenario("owner-no-key-real-entry") {
-        val status = getSELinuxStatusRaw()
-        println("OWNER_NO_KEY status=$status sdkQueries=${B.statusCalls.get()} legacyCalls=${B.legacyCalls}")
-        expect("Enforcing", status)
-        expect(1, B.statusCalls.get())
+    scenario("verified-legacy-root-fallback-after-denied-local-read") {
+        B.owner = null; B.liveOwner = null; B.key = keyA
+        B.status = { NativeReceipt(true) }
+        expect("Enforcing", deniedLocal())
+        expect(listOf(keyA), B.submittedKeys.toList())
+        expect("Enforcing", peekCachedSELinuxStatus())
     }
     if (args.contains("--owner-only")) return
+    scenario("cache-peek-does-not-probe-hook-or-environment") {
+        expect("Enforcing", deniedLocal())
+        B.hookChecks.set(0); B.environmentChecks.set(0)
+        B.hook = true; B.ultra = false
+        expect("Enforcing", peekCachedSELinuxStatus())
+        expect(0, B.hookChecks.get()); expect(0, B.environmentChecks.get())
+    }
+    scenario("sdk-root-fallback-routes-once") {
+        B.owner = null; B.liveOwner = null; B.key = keyA
+        B.status = { NativeReceipt(true) }
+        expect("Enforcing", deniedLocal())
+        expect(1, B.hookChecks.get()); expect(1, B.environmentChecks.get())
+        expect(1, B.statusCalls.get()); expect(1, B.rootCalls.get())
+    }
+    scenario("owner-no-key-real-entry") {
+        expect("Enforcing", getSELinuxStatusRaw())
+        expect(1, B.statusCalls.get())
+    }
     scenario("owner-no-key-sdk-root-fallback") {
         B.status = { NativeReceipt(true) }
-        expect("Enforcing", getSELinuxStatusRaw())
+        expect("Enforcing", deniedLocal())
         expect(listOf<String?>(null), B.submittedKeys.toList())
     }
-    scenario("owner-local-enforce-file-does-not-query-sdk") {
+    scenario("independent-system-status-needs-no-owner-or-key") {
+        B.owner = null; B.liveOwner = null
+        expect("Enforcing", deniedLocal())
+        expect(0, B.rootCalls.get())
+    }
+    scenario("foreign-owner-does-not-gate-local-system-fact") {
+        B.owner = ownerA.copy(fullUid = 110123); B.liveOwner = B.owner
+        expect("Enforcing", deniedLocal())
+        expect(0, B.rootCalls.get())
+    }
+    scenario("snapshot-live-owner-mismatch-does-not-gate-system-fact") {
+        B.liveOwner = ownerA.copy(epoch = 12)
+        expect("Enforcing", deniedLocal())
+        expect(0, B.rootCalls.get())
+    }
+    scenario("local-enforce-file-does-not-query-sdk") {
         val file = File.createTempFile("maplesu-enforce-", ".txt")
         try {
             file.writeText("1\n")
             B.status = { error("local file should be sufficient") }
-            expect("Enforcing", local(file))
-            expect(0, B.statusCalls.get())
-            expect(0, B.rootCalls.get())
+            expect("Enforcing", getSELinuxStatusRaw { file.readText() })
+            file.writeText("0\n")
+            expect("Permissive", getSELinuxStatusRaw { file.readText() })
+            expect(0, B.statusCalls.get()); expect(0, B.rootCalls.get())
         } finally { file.delete() }
     }
-    scenario("owner-local-permissive-is-not-enforcing") {
-        val file = File.createTempFile("maplesu-enforce-", ".txt")
-        try { file.writeText("0\n"); expect("Permissive", local(file)) }
-        finally { file.delete() }
-    }
-    scenario("hook-keeps-its-existing-status-route") {
+    scenario("hook-keeps-existing-status-route") {
         B.hook = true
-        expect("Enforcing", getSELinuxStatusRaw())
-        expect(1, B.hookCalls)
-        expect(0, B.statusCalls.get())
+        expect("Enforcing", deniedLocal())
+        expect(1, B.hookCalls); expect(0, B.statusCalls.get())
     }
-    scenario("normal-local-file-keeps-its-existing-status-route") {
-        B.ultra = false
-        B.owner = null
-        val file = File.createTempFile("maplesu-enforce-", ".txt")
-        try { file.writeText("0\n"); expect("Permissive", local(file)) }
-        finally { file.delete() }
-        expect(0, B.statusCalls.get())
+    scenario("missing-authentication-and-unreadable-system-remain-unknown") {
+        B.owner = null; B.liveOwner = null
+        B.status = { NativeReceipt(true) }
+        expect("Unknown", deniedLocal())
+        expect(null, peekCachedSELinuxStatus())
     }
-    scenario("missing-owner-remains-unknown") {
-        B.owner = null
-        B.liveOwner = null
-        expect("Unknown", getSELinuxStatusRaw())
-        expect(0, B.statusCalls.get())
+    for (invalid in listOf("unverified", "fingerprint", "suspended", "removal")) {
+        scenario("legacy-$invalid-does-not-authorize-root-fallback") {
+            B.owner = null; B.liveOwner = null; B.key = keyA
+            val prefs = ksuApp.getSharedPreferences("maplesu-ultra", 0)
+            when (invalid) {
+                "unverified" -> prefs.values["keyVerified"] = false
+                "fingerprint" -> prefs.values["keyVerifiedFor"] = "wrong"
+                "suspended" -> prefs.values["rootKeySuspended"] = "paused"
+                "removal" -> prefs.values["environmentRemoval"] = "pending"
+            }
+            B.status = { NativeReceipt(true) }
+            expect("Unknown", deniedLocal())
+            expect(null, peekCachedSELinuxStatus())
+            expect(0, B.rootCalls.get())
+        }
     }
-    scenario("foreign-fulluid-remains-unknown") {
-        B.owner = ownerA.copy(fullUid = 110123)
-        B.liveOwner = B.owner
-        expect("Unknown", getSELinuxStatusRaw())
-        expect(0, B.statusCalls.get())
+    scenario("known-owner-keeps-existing-owner-transport") {
+        B.key = keyA; B.status = { NativeReceipt(true) }
+        expect("Enforcing", deniedLocal())
+        expect(listOf<String?>(null), B.submittedKeys.toList())
     }
-    scenario("live-owner-mismatch-blocks-sdk-query") {
-        B.liveOwner = ownerA.copy(epoch = 12)
-        expect("Unknown", getSELinuxStatusRaw())
-        expect(0, B.statusCalls.get())
-        expect(0, B.rootCalls.get())
-    }
-    scenario("same-owner-reuses-fresh-known-cache") {
-        expect("Enforcing", getSELinuxStatusRaw())
-        expect("Enforcing", getSELinuxStatusRaw())
+    scenario("known-cache-is-reused-without-revalidating-owner-or-key") {
+        expect("Enforcing", deniedLocal())
+        B.owner = null; B.liveOwner = null; B.key = keyA
+        expect("Enforcing", deniedLocal())
         expect("Enforcing", peekCachedSELinuxStatus())
         expect(1, B.statusCalls.get())
     }
-    scenario("key-to-owner-does-not-reuse-cache") {
-        B.key = "key-a"
-        B.status = { NativeReceipt(true, 0, true) }
-        expect("Permissive", getSELinuxStatusRaw())
-        expect(0, B.ownerCalls.get())
-        B.key = null
-        B.status = { NativeReceipt(true, 1, true) }
-        expect("Enforcing", getSELinuxStatusRaw())
-        expect(2, B.statusCalls.get())
-    }
-    scenario("owner-to-key-does-not-reuse-cache") {
-        expect("Enforcing", getSELinuxStatusRaw())
-        B.key = "key-b"
-        B.status = { NativeReceipt(true, 0, true) }
-        expect("Permissive", getSELinuxStatusRaw())
-        expect(2, B.statusCalls.get())
-    }
-    for ((name, nextOwner) in listOf("epoch" to ownerA.copy(epoch = 12), "host" to ownerA.copy(hostInstance = "host-b"))) {
-        scenario("owner-$name-change-isolates-cache-and-token") {
+    for (change in listOf("boot", "activation", "revision")) {
+        scenario("$change-change-invalidates-cache-and-token") {
             val token = captureUltraSELinuxObservation()
-            expect("Enforcing", getSELinuxStatusRaw())
-            B.owner = nextOwner
-            B.liveOwner = nextOwner
+            expect("Enforcing", deniedLocal())
+            when (change) {
+                "boot" -> B.boot = "boot-b"
+                "activation" -> ModeRuntime.activation = ModeActivation.Active(WorkMode.LITE)
+                "revision" -> invalidateUltraSELinuxStatus()
+            }
             check(!rememberUltraSELinuxStatus("Permissive", token))
             expect(null, peekCachedSELinuxStatus())
-            expect("Enforcing", getSELinuxStatusRaw())
+            B.status = { NativeReceipt(true, 0, true) }
+            expect("Permissive", deniedLocal())
             expect(2, B.statusCalls.get())
         }
     }
-    scenario("boot-change-isolates-cache-and-token") {
-        val token = captureUltraSELinuxObservation()
-        expect("Enforcing", getSELinuxStatusRaw())
-        B.boot = "boot-b"
-        check(!rememberUltraSELinuxStatus("Permissive", token))
-        expect(null, peekCachedSELinuxStatus())
-        expect("Enforcing", getSELinuxStatusRaw())
-        expect(2, B.statusCalls.get())
-    }
-    scenario("key-owner-transition-rejects-late-producer-tokens") {
-        val ownerToken = captureUltraSELinuxObservation()
-        B.key = "key-a"
-        check(!rememberUltraSELinuxStatus("Enforcing", ownerToken))
-        val keyToken = captureUltraSELinuxObservation()
-        B.key = null
-        check(!rememberUltraSELinuxStatus("Permissive", keyToken))
-        expect(null, peekCachedSELinuxStatus())
-    }
-    scenario("revision-invalidation-rejects-late-producer-token") {
-        val token = captureUltraSELinuxObservation()
-        invalidateUltraSELinuxStatus()
-        check(!rememberUltraSELinuxStatus("Permissive", token))
-        expect(null, peekCachedSELinuxStatus())
-    }
-    scenario("concurrent-same-owner-coalesces-sdk-request") {
-        val entered = CountDownLatch(1)
-        val release = CountDownLatch(1)
+    scenario("concurrent-same-environment-coalesces-request") {
+        val entered = CountDownLatch(1); val release = CountDownLatch(1)
         B.status = { entered.countDown(); await(release); NativeReceipt(true, 1, true) }
-        val first = worker { getSELinuxStatusRaw() }
-        await(entered)
-        val second = worker { getSELinuxStatusRaw() }
+        val first = worker { deniedLocal() }; await(entered)
+        val second = worker { deniedLocal() }
         try {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
             while (second.first.state != Thread.State.WAITING && System.nanoTime() < deadline) Thread.sleep(1)
-            check(second.first.state == Thread.State.WAITING)
-            expect(1, B.statusCalls.get())
+            check(second.first.state == Thread.State.WAITING); expect(1, B.statusCalls.get())
         } finally { release.countDown() }
-        expect("Enforcing", finish(first))
-        expect("Enforcing", finish(second))
+        expect("Enforcing", finish(first)); expect("Enforcing", finish(second))
     }
-    for (change in listOf("epoch", "host", "boot", "revision", "key")) {
-        scenario("concurrent-$change-change-discards-old-reply") {
-            val entered = CountDownLatch(1)
-            val release = CountDownLatch(1)
+    for (change in listOf("boot", "activation", "revision")) {
+        scenario("concurrent-$change-discards-old-reply") {
+            val entered = CountDownLatch(1); val release = CountDownLatch(1)
             B.status = { entered.countDown(); await(release); NativeReceipt(true, 1, true) }
-            val old = worker { getSELinuxStatusRaw() }
-            await(entered)
+            val old = worker { deniedLocal() }; await(entered)
             when (change) {
-                "epoch" -> { B.owner = ownerA.copy(epoch = 12); B.liveOwner = B.owner }
-                "host" -> { B.owner = ownerA.copy(hostInstance = "host-b"); B.liveOwner = B.owner }
                 "boot" -> B.boot = "boot-b"
+                "activation" -> ModeRuntime.activation = ModeActivation.Active(WorkMode.LITE)
                 "revision" -> invalidateUltraSELinuxStatus()
-                "key" -> B.key = "key-b"
             }
             B.status = { NativeReceipt(true, 0, true) }
-            try { expect("Permissive", getSELinuxStatusRaw()) }
-            finally { release.countDown() }
-            expect("Unknown", finish(old))
-            expect("Permissive", peekCachedSELinuxStatus())
+            try { expect("Permissive", deniedLocal()) } finally { release.countDown() }
+            expect("Unknown", finish(old)); expect("Permissive", peekCachedSELinuxStatus())
             expect(2, B.statusCalls.get())
         }
     }
-    scenario("live-owner-change-during-root-command-discards-reply") {
+    scenario("owner-change-during-independent-system-read-preserves-fact") {
+        B.status = { B.owner = null; B.liveOwner = null; NativeReceipt(true, 0, true) }
+        expect("Permissive", deniedLocal())
+    }
+    scenario("legacy-key-change-during-root-command-discards-reply") {
+        B.owner = null; B.liveOwner = null; B.key = keyA
         B.status = { NativeReceipt(true) }
-        B.root = { B.liveOwner = ownerA.copy(epoch = 12); NativeReceipt(true, result = "Permissive") }
-        expect("Unknown", getSELinuxStatusRaw())
-        expect(null, peekCachedSELinuxStatus())
+        B.root = { B.key = keyB; NativeReceipt(true, result = "Permissive") }
+        expect("Unknown", deniedLocal()); expect(null, peekCachedSELinuxStatus())
     }
-    scenario("live-owner-change-during-status-query-discards-reply") {
-        B.status = { B.liveOwner = ownerA.copy(epoch = 12); NativeReceipt(true, 0, true) }
-        expect("Unknown", getSELinuxStatusRaw())
-        expect(null, peekCachedSELinuxStatus())
-        expect(0, B.rootCalls.get())
-    }
-    scenario("failed-sdk-and-malformed-local-file-stay-unknown") {
-        val file = File.createTempFile("maplesu-enforce-", ".txt")
-        try {
-            file.writeText("denied")
-            B.status = { NativeReceipt(false) }
-            B.root = { NativeReceipt(false) }
-            expect("Unknown", local(file))
-            expect(null, peekCachedSELinuxStatus())
-            B.status = { NativeReceipt(true, 1, true) }
-            expect("Enforcing", getSELinuxStatusRaw())
-        } finally { file.delete() }
+    scenario("failed-and-malformed-values-preserve-unknown") {
+        B.status = { NativeReceipt(false) }; B.root = { NativeReceipt(false) }
+        expect("Unknown", deniedLocal()); expect(null, peekCachedSELinuxStatus())
+        B.root = { NativeReceipt(true, result = "Enforcing\nextra") }
+        expect("Unknown", deniedLocal())
     }
     scenario("known-cache-expires-after-five-seconds") {
-        expect("Enforcing", getSELinuxStatusRaw())
-        android.os.SystemClock.now += 5_000
+        expect("Enforcing", deniedLocal()); android.os.SystemClock.now += 5_000
         expect(null, peekCachedSELinuxStatus())
         B.status = { NativeReceipt(true, 0, true) }
-        expect("Permissive", getSELinuxStatusRaw())
-        expect(2, B.statusCalls.get())
+        expect("Permissive", deniedLocal()); expect(2, B.statusCalls.get())
     }
     println("PASS_TOTAL=$passed")
 }

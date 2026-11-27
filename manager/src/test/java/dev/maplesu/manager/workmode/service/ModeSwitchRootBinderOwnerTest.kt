@@ -32,7 +32,7 @@ class ModeSwitchRootBinderOwnerTest {
         assertTrue(fixture.channel.ensureReady().ok)
         fixture.providerAvailable = false
         assertTrue(fixture.channel.acquire(ID).ok)
-        assertTrue(fixture.channel.uninstallUltra("A".repeat(48)).ok)
+        assertTrue(fixture.channel.uninstallUltra().ok)
         assertTrue(fixture.channel.execute("restore").ok)
         assertTrue(fixture.channel.release(ID).ok)
         assertEquals(1, fixture.bindings)
@@ -68,7 +68,7 @@ class ModeSwitchRootBinderOwnerTest {
         assertTrue(first.channel.ensureReady().ok)
         assertTrue(first.channel.acquire(ID).ok)
         service.uncertainUninstall = true
-        assertEquals(ModeSwitchRootProtocol.UNCERTAIN, first.channel.uninstallUltra("A".repeat(48)).code)
+        assertEquals(ModeSwitchRootProtocol.UNCERTAIN, first.channel.uninstallUltra().code)
         val restarted = Fixture(service)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, restarted.channel.ensureReady().code)
         assertEquals(ModeSwitchRootProtocol.UNCERTAIN, restarted.channel.execute("rollback").detail)

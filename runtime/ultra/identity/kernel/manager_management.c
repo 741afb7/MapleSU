@@ -257,7 +257,7 @@ struct msu_management_session {
     struct msu_legacy_gateway *legacy_gateway;
     u64 id, exec_id;
     u32 principal_uid, epoch, references;
-    bool attached, legacy_active, legacy_opened;
+    bool attached, legacy_active, legacy_opened, root;
 };
 
 struct msu_publication;
@@ -296,7 +296,7 @@ struct msu_shared_bool {
     u8 *address;
     u64 id, published_address;
     u32 epoch, references;
-    bool reserved, creator_reference, quarantined, legacy;
+    bool reserved, creator_reference, quarantined, legacy, root;
 };
 
 struct msu_publication_member {
@@ -338,7 +338,7 @@ struct msu_publication {
     bool reserved, canceled, ever_exposed, enabled, entry_restored;
     bool retire_requested, payload_released, quarantined;
     bool entry_drained, gate_drained;
-    bool native_text_owned, legacy;
+    bool native_text_owned, legacy, root;
 };
 
 /* Sleepable order: session (when present) -> service construction (when present)
@@ -575,7 +575,7 @@ static bool msu_publication_lifetime_valid(struct msu_publication *publication)
     if (publication->service) {
         if (!msu_runtime_service_live(publication->service) ||
             !msu_runtime_service_entry(publication->service, publication->entry)) return false;
-    } else if (!publication->legacy &&
+    } else if (!publication->legacy && !publication->root &&
         publication->epoch != msu_manager_owner_epoch(management.owner)) return false;
     for (i = 0; i < publication->count; ++i) {
         struct msu_shared_bool *shared = publication->members[i].shared_bool;
@@ -583,7 +583,7 @@ static bool msu_publication_lifetime_valid(struct msu_publication *publication)
         if (publication->members[i].role == MAPLESU_PUBLICATION_SHARED_BOOL) {
             if (!shared || !shared->address || !shared->references || shared->quarantined ||
                 shared->service != publication->service ||
-                shared->legacy != publication->legacy ||
+                shared->legacy != publication->legacy || shared->root != publication->root ||
                 (!shared->service && shared->epoch != publication->epoch)) return false;
         } else if (!resource || !resource->reserved || resource->consumed ||
             resource->quarantined || resource->publication != publication) return false;
@@ -1084,6 +1084,52 @@ static bool msu_management_task_matches(struct msu_management_session *session)
         MSU_DYN_FIELD(current, task_struct, self_exec_id) == session->exec_id;
 }
 
+static bool msu_management_root_current(void)
+{
+    return msu_dynamic_current_user_ns() == &init_user_ns &&
+        !__kuid_val(msu_dynamic_current_uid()) &&
+        !__kuid_val(msu_dynamic_current_euid()) &&
+        msu_dynamic_current_cred() == msu_dynamic_current_real_cred();
+}
+
+/* The existing dialect transports both identities. Root admits runtime work,
+ * never an APK claim, installation transaction or persistent UID policy. */
+static bool msu_management_root_operation(u32 command, const maplesu_management_v3 *operation)
+{
+    switch (command) {
+    case MAPLESU_REQUEST_QUERY:
+    case MAPLESU_REQUEST_ECHO64:
+    case MAPLESU_REQUEST_READ:
+    case MAPLESU_REQUEST_SESSION_OPEN:
+    case MAPLESU_REQUEST_SESSION_CLOSE:
+    case MAPLESU_REQUEST_ALLOC:
+    case MAPLESU_REQUEST_WRITE:
+    case MAPLESU_REQUEST_EXEC:
+    case MAPLESU_REQUEST_RELEASE:
+    case MAPLESU_REQUEST_CRED_ROOT:
+    case MAPLESU_REQUEST_CRED_CAPS:
+    case MAPLESU_REQUEST_CRED_PROCATTR:
+    case MAPLESU_REQUEST_TASK_STATE:
+    case MAPLESU_REQUEST_PUBLICATION_PREPARE:
+    case MAPLESU_REQUEST_PUBLICATION_PUBLISH:
+    case MAPLESU_REQUEST_PUBLICATION_DISABLE:
+    case MAPLESU_REQUEST_PUBLICATION_RETIRE:
+    case MAPLESU_REQUEST_SHARED_BOOL_CREATE:
+    case MAPLESU_REQUEST_SHARED_BOOL_STORE:
+    case MAPLESU_REQUEST_SHARED_BOOL_RELEASE:
+    case MAPLESU_REQUEST_DEPLOYMENT_READ:
+    case MAPLESU_REQUEST_SU_RUNTIME_READ:
+        return true;
+    case MAPLESU_REQUEST_UID_COMMIT:
+    case MAPLESU_REQUEST_UID_READBACK:
+        /* Only the existing factory's durable-policy projection. A user UID
+         * table handle remains Owner-only; no root transaction creates policy. */
+        return !operation || !operation->handle;
+    default:
+        return false;
+    }
+}
+
 static int msu_management_check_expected_cred(struct msu_management_session *session,
     const struct cred *expected)
 {
@@ -1104,6 +1150,10 @@ static int msu_management_check_expected_cred(struct msu_management_session *ses
             !READ_ONCE(session->attached) || !msu_management_task_matches(session) ||
             (MSU_DYN_FIELD(current, task_struct, flags) & PF_EXITING) || msu_dynamic_current_cred() != expected ||
             msu_dynamic_current_real_cred() != expected || !msu_runtime_service_live(session->service)) goto stale;
+        return 0;
+    }
+    if (session->root) {
+        if (!READ_ONCE(management.ready) || !msu_management_root_current()) goto stale;
         return 0;
     }
     if (msu_manager_owner_epoch(management.owner) != session->epoch) goto stale;
@@ -1142,7 +1192,7 @@ static bool msu_management_construction_live(struct msu_management_session *sess
 {
     if (session) return READ_ONCE(session->attached) &&
         (session->legacy_gateway ? session->legacy_active :
-            (session->helper ? msu_runtime_service_live(session->service) :
+            (session->helper ? msu_runtime_service_live(session->service) : session->root ||
                 session->epoch == msu_manager_owner_epoch(management.owner)));
     return msu_runtime_service_live(service);
 }
@@ -1183,6 +1233,29 @@ int msu_management_authorize(u32 *principal_uid, u32 *epoch)
     return 0;
 }
 
+int msu_management_authorize_request(u32 command, u32 *principal_uid, u32 *epoch)
+{
+    struct msu_management_session *session;
+    int error = msu_management_authorize(principal_uid, epoch);
+    if (!principal_uid || !epoch) return error;
+    if (!error) {
+        if (!*principal_uid && !msu_management_current_helper() &&
+            !msu_management_root_operation(command, NULL)) return -EPERM;
+        return 0;
+    }
+    /* Never replace a stale, interrupted or revoked session with root access. */
+    if (error != -EPERM || !READ_ONCE(management.ready) ||
+        !msu_management_root_operation(command, NULL) || !msu_management_root_current()) return error;
+    session = msu_management_get(0);
+    if (session) {
+        msu_management_put(session);
+        return error;
+    }
+    *principal_uid = 0;
+    *epoch = 1; /* Host-scoped; root sessions additionally pin exact task/mm/exec/cred. */
+    return 0;
+}
+
 static int msu_runtime_service_bind_session_locked(struct msu_management_session *session,
     const maplesu_host_instance *host, u64 service_id, u64 publication_id)
 {
@@ -1208,7 +1281,7 @@ static int msu_runtime_service_bind_session_locked(struct msu_management_session
     error = msu_management_check(session);
     if (error) goto unlock_publication;
     raw_spin_lock_irqsave(&msu_management_lock, flags);
-    if (publication->id != publication_id || session->legacy_gateway || !session->attached ||
+    if (publication->id != publication_id || session->legacy_gateway || session->root || !session->attached ||
         session->epoch != msu_manager_owner_epoch(management.owner) || service->factory_owned ||
         !msu_runtime_service_live(service) ||
         !msu_runtime_service_entry(service, publication->entry) ||
@@ -1373,6 +1446,7 @@ static int msu_shared_bool_acquire_domain(struct msu_management_session *session
         address != shared->published_address || !shared->address ||
         !shared->references || shared->quarantined ||
         shared->legacy != !!(session && session->legacy_gateway) ||
+        shared->root != !!(session && session->root) ||
         (service ? shared->service != service :
             (shared->service ? !msu_runtime_service_live(shared->service) :
                 shared->epoch != session->epoch)))) error = -ESTALE;
@@ -1432,6 +1506,7 @@ static int msu_shared_bool_create_domain(struct msu_management_session *session,
     shared->epoch = session ? session->epoch : 0;
     shared->service = service;
     shared->legacy = session && session->legacy_gateway;
+    shared->root = session && session->root;
     raw_spin_unlock_irqrestore(&msu_management_lock, flags);
     mutex_lock(&shared->operation);
     address = vmalloc(PAGE_SIZE);
@@ -1493,14 +1568,17 @@ static int msu_shared_bool_update(struct msu_management_session *session,
     mutex_lock(&shared->operation);
     error = msu_management_check(session);
     if (error) goto out;
-    if (shared->legacy != !!session->legacy_gateway) { error = -EPERM; goto out; }
+    if (shared->legacy != !!session->legacy_gateway || shared->root != session->root) {
+        error = -EPERM; goto out;
+    }
     if (operation->address != shared->published_address) { error = -ESTALE; goto out; }
     if (release) {
         error = msu_shared_bool_drop_creator(shared, session, &response->metadata_length);
     } else {
         raw_spin_lock_irqsave(&msu_management_lock, flags);
         if (!session->attached || !shared->address || !shared->references || shared->quarantined ||
-            (!session->legacy_gateway && msu_manager_owner_epoch(management.owner) != session->epoch) ||
+            (!session->legacy_gateway && !session->root &&
+                msu_manager_owner_epoch(management.owner) != session->epoch) ||
             (shared->service ? !msu_runtime_service_live(shared->service) :
                 shared->epoch != session->epoch)) error = -ESTALE;
         else {
@@ -1624,10 +1702,10 @@ void msu_management_owner_invalidated(struct msu_manager_owner *owner)
     for (i = 0; i < MSU_MANAGEMENT_SLOTS; ++i) {
         struct msu_management_session *session = management.sessions[i];
         struct msu_publication *publication = &management.publications[i];
-        if (session && !session->helper && !session->legacy_gateway && session->epoch != epoch)
+        if (session && !session->helper && !session->legacy_gateway && !session->root && session->epoch != epoch)
             msu_management_detach_locked(session);
         if (publication->reserved && publication->ever_exposed &&
-            !publication->service && !publication->legacy && publication->epoch != epoch) {
+            !publication->service && !publication->legacy && !publication->root && publication->epoch != epoch) {
             publication->enabled = false;
             publication->retire_requested = true;
             schedule_work(&publication->cleanup);
@@ -1846,7 +1924,8 @@ static int msu_management_open(const maplesu_request_owner_v3 *request,
         if (error) return error;
         if (!helper || !epoch || !service_id) { error = -ESTALE; goto put_helper; }
     } else {
-        if (!msu_manager_owner_allowed(management.owner, uid, &epoch)) return -EPERM;
+        if (msu_management_root_current()) epoch = 1;
+        else if (!msu_manager_owner_allowed(management.owner, uid, &epoch)) return -EPERM;
         if (request->expected_epoch != epoch) return -ESTALE;
     }
     raw_spin_lock_irqsave(&msu_management_lock, flags);
@@ -1877,6 +1956,7 @@ static int msu_management_open(const maplesu_request_owner_v3 *request,
     session->original = msu_dynamic_get_current_cred();
     session->active = msu_dynamic_get_cred(session->original);
     session->helper = helper;
+    session->root = !helper && !uid;
     session->service = service;
     session->exec_id = MSU_DYN_FIELD(current, task_struct, self_exec_id);
     session->principal_uid = uid;
@@ -2298,6 +2378,7 @@ static int msu_publication_prepare_snapshot(struct msu_management_session *sessi
     publication->service = service;
     publication->epoch = session ? session->epoch : 0;
     publication->legacy = session && session->legacy_gateway;
+    publication->root = session && session->root;
     publication->target_module = target_module;
     target_module = NULL;
     publication->entry = descriptor.entry_address;
@@ -3899,6 +3980,10 @@ void msu_management_dispatch(const maplesu_request_owner_v3 *request,
     if (request->expected_epoch != session->epoch) { error = -ESTALE; goto out; }
     error = msu_management_check(session);
     if (error) goto out;
+    if (session->root && !msu_management_root_operation(request->command, operation)) {
+        error = -EPERM;
+        goto out;
+    }
     if (session->helper && request->command != MAPLESU_REQUEST_CRED_ROOT &&
         request->command != MAPLESU_REQUEST_TASK_STATE &&
         request->command != MAPLESU_REQUEST_CRED_PROCATTR &&

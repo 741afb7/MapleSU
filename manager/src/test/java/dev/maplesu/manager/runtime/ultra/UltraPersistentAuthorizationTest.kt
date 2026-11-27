@@ -1,6 +1,5 @@
 package dev.maplesu.manager.runtime.ultra
 
-import dev.maplesu.manager.runtime.authorization.ApplicationIdentity
 import java.util.concurrent.Callable
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
@@ -10,237 +9,174 @@ import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Production PM/list reconciliation and broker lifetime run together; SDK writes are explicit fixtures. */
+/** Current owner-scoped restore lifetime; decision/revoke callbacks are explicit SDK boundaries. */
 class UltraPersistentAuthorizationTest {
-    private val name = "dev.maplesu.manager"
-    private val trust = UltraReinstallTrust(name, 0, setOf("a".repeat(64)))
-    private fun identity(uid: Int = 10999, signer: String = "a", installed: Long = 10) =
-        ApplicationIdentity(uid, name, listOf(name), setOf(signer.repeat(64)), installed,
-            installed + 1, "/data/app/$uid-$installed/base.apk")
+    @Test fun sameBootOwnerReplacementReconcilesTheNewScope() {
+        val session = UltraBootAuthorizationRestore()
+        val owners = listOf(UltraRuntimeClient.ManagerOwnerIdentity(10999, 1, "host"),
+            UltraRuntimeClient.ManagerOwnerIdentity(11001, 2, "host"))
+        var calls = 0
+        for (owner in owners) assertEquals("OK", session.ensure("boot", owner.toString()) { calls++; "OK" })
+        assertEquals(2, calls)
+    }
 
-    private inner class State {
-        var now = 0L
-        var current: ApplicationIdentity? = identity()
-        var packages: List<String>? = listOf(name, "other.app")
-        var reads = 0
+    @Test fun sameUidNewInstallationRequiresExplicitScopeInvalidation() {
+        val session = UltraBootAuthorizationRestore()
+        var calls = 0
+        repeat(2) { assertEquals("OK", session.ensure("boot", "owner") { calls++; "OK" }) }
+        assertEquals(1, calls)
+        session.invalidate()
+        assertEquals("OK", session.ensure("boot", "owner") { calls++; "OK" })
+        assertEquals(2, calls)
+    }
+
+    @Test fun revocationInvalidatesTheEarlierSuccessBeforeAnExplicitReconciliation() {
+        val session = UltraBootAuthorizationRestore()
         var grants = 0
         var revokes = 0
-        var mappedUid: Int? = null
-        var grantResult = "OK"
-        var revokeResult = "OK"
-        var listRead: (() -> List<String>?)? = null
-        var identityRead: (() -> ApplicationIdentity?)? = null
-        var grantHook: (() -> Unit)? = null
-        val session = UltraManagerSignatureAuthorization.Session(trust) { now }
-        fun tick() = session.refresh(
-            identity = { val read = identityRead; if (read == null) current else read() },
-            packages = { reads++; val read = listRead; if (read == null) packages else read() },
-            grant = {
-                grants++
-                if (grantResult == "OK") {
-                    packages = (packages.orEmpty() + name).distinct()
-                    mappedUid = current?.uid
-                }
-                grantHook?.invoke()
-                grantResult
-            },
-            revoke = {
-                revokes++
-                if (revokeResult == "OK") { packages = packages.orEmpty() - name; mappedUid = null }
-                revokeResult
-            })
+        assertEquals("OK", session.ensure("boot", "owner") { grants++; "OK" })
+        session.invalidate()
+        assertEquals("OK", session.ensure("boot", "owner") { revokes++; "OK" })
+        assertEquals(1, grants)
+        assertEquals(1, revokes)
     }
 
-    @Test fun sameBootUidReplacementRebuildsTheMapping() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.current = identity(11001)
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
-        assertEquals(11001, state.mappedUid)
-        assertTrue("other.app" in state.packages.orEmpty())
-    }
-
-    @Test fun sameUidNewInstallationIsNotAnEarlierSuccess() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.current = identity(installed = 20)
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
-    }
-
-    @Test fun removedEntryIsReaddedAfterEarlierSuccess() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.packages = listOf("other.app")
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
-        assertEquals(setOf(name, "other.app"), state.packages?.toSet())
-    }
-
-    @Test fun unreadableListInvalidatesThePreviousSuccess() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.packages = null
-        assertEquals("MANAGER_AUTH_LIST_UNREADABLE", state.tick())
-        assertEquals(1, state.grants)
-        state.packages = listOf(name)
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
-    }
-
-    @Test fun transientGrantFailureRetriesTheChangedUid() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.current = identity(11001)
-        state.grantResult = "MAPLESU_SDK_BUSY"
-        assertEquals("MAPLESU_SDK_BUSY", state.tick())
-        state.grantResult = "OK"
-        assertEquals("OK", state.tick())
-        assertEquals(3, state.grants)
-        assertEquals(11001, state.mappedUid)
-    }
-
-    @Test fun failedReadbackDoesNotConfirmAGrant() {
-        val state = State()
+    @Test fun unreadableListIsNotCachedAsSuccessfulRestoration() {
+        val session = UltraBootAuthorizationRestore { error("No proof of pre-commit failure") }
         var reads = 0
-        state.listRead = { if (++reads % 2 == 0) emptyList() else listOf(name) }
-        repeat(3) { assertEquals("MANAGER_AUTH_READBACK_FAILED", state.tick()) }
-        assertEquals(3, state.grants)
-        state.listRead = null
-        assertEquals("OK", state.tick())
-        assertEquals(4, state.grants)
+        repeat(2) { assertEquals("MANAGER_AUTH_LIST_UNREADABLE", session.ensure("boot", "owner") {
+            reads++; "MANAGER_AUTH_LIST_UNREADABLE"
+        }) }
+        assertEquals(2, reads)
     }
 
-    @Test fun unknownIdentityForTwoThousandPassesRevokesOnlyOnce() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.current = null
+    @Test fun transientWriteFailureRequiresAnotherExplicitAttemptWithoutACommitProof() {
+        val session = UltraBootAuthorizationRestore { error("Ordinary errors do not authorize replay") }
+        var writes = 0
+        assertEquals("MAPLESU_SDK_BUSY", session.ensure("boot", "owner") { writes++; "MAPLESU_SDK_BUSY" })
+        assertEquals(1, writes)
+        assertEquals("OK", session.ensure("boot", "owner") { writes++; "OK" })
+        assertEquals(2, writes)
+    }
+
+    @Test fun failedReadbackNeverConfirmsAPersistentGrant() {
+        val session = UltraBootAuthorizationRestore()
+        var writes = 0
+        repeat(3) { assertEquals("MANAGER_AUTH_READBACK_FAILED", session.ensure("boot", "owner") {
+            writes++; "MANAGER_AUTH_READBACK_FAILED"
+        }) }
+        assertEquals(3, writes)
+        assertEquals("OK", session.ensure("boot", "owner") { writes++; "OK" })
+        assertEquals(4, writes)
+    }
+
+    @Test fun unknownIdentityForTwoThousandPassesDoesNotCreateAGrant() {
         var passes = 0
+        var grants = 0
         val results = mutableListOf<String>()
-        val loop = UltraBootAuthorizationRestore { delay ->
-            assertEquals(5_000L, delay)
-            state.now += delay
-            if (++passes == 2_000) state.current = identity(11001)
-        }
-        assertEquals("SUSPENDED", loop.maintain({ passes == 2_001 }, { state.tick() }, results::add))
+        val loop = UltraBootAuthorizationRestore { delay -> assertEquals(5_000L, delay); passes++ }
+        assertEquals("SUSPENDED", loop.maintain({ passes == 2_001 }, {
+            if (passes < 2_000) "MANAGER_IDENTITY_PENDING" else { grants++; "OK" }
+        }, results::add))
         assertEquals(listOf("MANAGER_IDENTITY_PENDING", "OK"), results)
-        assertEquals(1, state.revokes)
-        assertEquals(2, state.grants)
+        assertEquals(1, grants)
     }
 
-    @Test fun changedSignerRevokesOnceAndAValidSignerCanReturnLater() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.current = identity(signer = "b")
-        repeat(2_000) { assertEquals("OK", state.tick()) }
-        assertEquals(1, state.grants)
-        assertEquals(1, state.revokes)
-        assertEquals(listOf("other.app"), state.packages)
-        state.current = identity(11001)
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
+    @Test fun changedSignerInvalidatesReadinessUntilAnExplicitCurrentScopeSucceeds() {
+        val session = UltraBootAuthorizationRestore()
+        var writes = 0
+        assertEquals("OK", session.ensure("boot", "owner") { writes++; "OK" })
+        session.invalidate()
+        assertEquals("MANAGER_IDENTITY_PENDING", session.ensure("boot", "owner") { "MANAGER_IDENTITY_PENDING" })
+        assertEquals(1, writes)
+        assertEquals("OK", session.ensure("boot", "owner-new") { writes++; "OK" })
+        assertEquals(2, writes)
     }
 
-    @Test fun otherUserIdentityIsRevokedWithoutGranting() {
-        val state = State()
-        state.current = identity(110999)
-        repeat(30) { assertEquals("OK", state.tick()) }
-        assertEquals(0, state.grants)
-        assertEquals(1, state.revokes)
-    }
-
-    @Test fun failedRevocationRemainsRetryable() {
-        val state = State()
-        state.current = identity(signer = "b")
-        state.revokeResult = "MAPLESU_SDK_BUSY"
-        assertEquals("MAPLESU_SDK_BUSY", state.tick())
-        state.revokeResult = "OK"
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.revokes)
-        assertEquals(0, state.grants)
-    }
-
-    @Test fun identityChangingDuringGrantIsRevokedAndNotCached() {
-        val state = State()
-        state.grantHook = { state.current = identity(signer = "b") }
-        assertEquals("MANAGER_IDENTITY_CHANGED", state.tick())
-        assertEquals(1, state.revokes)
-        state.grantHook = null
-        state.current = identity()
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
-    }
-
-    @Test fun identityChangingDuringAReadOnlyPassIsAlsoRevoked() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        var reads = 0
-        state.identityRead = { if (++reads == 1) identity() else identity(signer = "b") }
-        assertEquals("MANAGER_IDENTITY_CHANGED", state.tick())
-        assertEquals(1, state.grants)
-        assertEquals(1, state.revokes)
-        state.identityRead = null
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
-    }
-
-    @Test fun stablePassesOnlyReadUntilTheSixtySecondRenewal() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        for (time in 5_000L..55_000L step 5_000L) {
-            state.now = time
-            assertEquals("OK", state.tick())
+    @Test fun anotherUsersOwnerNeverSharesThePrimaryUsersRestoredScope() {
+        val session = UltraBootAuthorizationRestore()
+        var calls = 0
+        for (uid in listOf(10999, 110999)) {
+            val owner = UltraRuntimeClient.ManagerOwnerIdentity(uid, 1, "host")
+            assertEquals("OK", session.ensure("boot", owner.toString()) { calls++; "OK" })
         }
-        assertEquals(1, state.grants)
-        state.mappedUid = null // The package list cannot observe loss of the native UID map.
-        state.now = 60_000L
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
-        assertEquals(10999, state.mappedUid)
+        assertEquals(2, calls)
     }
 
-    @Test fun monotonicClockRegressionRenewsInsteadOfKeepingAnUnboundedLease() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.now = -1
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
+    @Test fun failedRevocationRetainsThePrimaryAndInverseErrorsWithoutReplay() {
+        val primary = UltraAuthorizationAttempt.local("READBACK_FAILED")
+        val inverse = UltraAuthorizationAttempt.local("REVOKE_FAILED")
+        val expected = UltraAuthorizationRestoreResult.identityChanged(primary, inverse)
+        val session = UltraBootAuthorizationRestore { error("No replay of a partial mutation") }
+        val actual = session.ensureAttempt("boot", "owner") { expected }
+        assertSame(primary, actual.primary)
+        assertSame(inverse, actual.inverse)
+        assertEquals("READBACK_FAILED", actual.primary!!.error)
+        assertEquals("MANAGER_IDENTITY_CHANGED:REVOKE_FAILED", actual.status)
     }
 
-    @Test fun concurrentReadinessRequestsPublishOneStableGrant() {
-        val state = State()
+    @Test fun scopeChangingDuringGrantKeepsItsReceiptAndDoesNotCacheSuccess() {
+        val session = UltraBootAuthorizationRestore()
+        val attempt = UltraAuthorizationAttempt.local().withReadback(true)
+        var changed = false
+        val result = session.ensureAttempt("boot", "owner", { changed }) {
+            changed = true
+            UltraAuthorizationRestoreResult.primary(attempt)
+        }
+        assertEquals("SUSPENDED", result.status)
+        assertSame(attempt, result.primary)
+        changed = false
+        var calls = 0
+        assertEquals("OK", session.ensure("boot", "owner") { calls++; "OK" })
+        assertEquals(1, calls)
+    }
+
+    @Test fun scopeRevokedDuringACachedPassIsCheckedBeforeReturningSuccess() {
+        val session = UltraBootAuthorizationRestore()
+        assertEquals("OK", session.ensure("boot", "owner") { "OK" })
+        assertEquals("SUSPENDED", session.ensure("boot", "owner", { true }) { error("revoked scope") })
+        var reads = 0
+        assertEquals("OK", session.ensure("boot", "owner") { reads++; "OK" })
+        assertEquals(1, reads)
+    }
+
+    @Test fun stableScopeDoesNotPollOrPeriodicallyRegrant() {
+        val session = UltraBootAuthorizationRestore()
+        var writes = 0
+        repeat(2_000) { assertEquals("OK", session.ensure("boot", "owner") { writes++; "OK" }) }
+        assertEquals(1, writes)
+    }
+
+    @Test fun unknownBootDoesNotCreateAnUnboundedRestorationCache() {
+        val session = UltraBootAuthorizationRestore()
+        var writes = 0
+        repeat(3) { assertEquals("OK", session.ensure(null, "owner") { writes++; "OK" }) }
+        assertEquals(3, writes)
+    }
+
+    @Test fun concurrentReadinessRequestsPublishOneStableRestoration() {
+        val session = UltraBootAuthorizationRestore()
+        var writes = 0
         val pool = Executors.newFixedThreadPool(6)
         try {
-            val results = pool.invokeAll((1..24).map { Callable { state.tick() } })
+            val results = pool.invokeAll((1..24).map { Callable {
+                session.ensure("boot", "owner") { writes++; "OK" }
+            } })
             results.forEach { assertEquals("OK", it.get(2, TimeUnit.SECONDS)) }
-            assertEquals(1, state.grants)
+            assertEquals(1, writes)
         } finally { pool.shutdownNow() }
     }
 
-    @Test fun brokerContinuesAfterSuccessAndConvergesOnChangesAndTransientFailures() {
-        val state = State()
+    @Test fun lifecycleLoopContinuesAfterSuccessAndReportsOnlyChangedResults() {
+        val statuses = listOf("OK", "OK", "MANAGER_IDENTITY_PENDING", "MANAGER_IDENTITY_PENDING",
+            "MANAGER_AUTH_LIST_UNREADABLE", "OK")
         var passes = 0
         val delays = mutableListOf<Long>()
-        val results = mutableListOf<String>()
-        val loop = UltraBootAuthorizationRestore { delay ->
-            delays += delay
-            state.now += delay
-            when (++passes) {
-                1 -> state.current = identity(11001)
-                2 -> state.packages = listOf("other.app")
-                3 -> state.packages = null
-                4 -> state.packages = listOf(name, "other.app")
-                5 -> state.current = identity(signer = "b")
-                6 -> state.current = identity(11002)
-            }
-        }
-        assertEquals("SUSPENDED", loop.maintain({ passes == 7 }, { state.tick() }, results::add))
-        assertEquals(List(7) { 5_000L }, delays)
-        assertEquals(5, state.grants)
-        assertEquals(1, state.revokes)
-        assertEquals(11002, state.mappedUid)
-        assertEquals(listOf("OK", "MANAGER_AUTH_LIST_UNREADABLE", "OK"), results)
+        val observed = mutableListOf<String>()
+        val loop = UltraBootAuthorizationRestore { delay -> delays += delay; passes++ }
+        assertEquals("SUSPENDED", loop.maintain({ passes == statuses.size }, { statuses[passes] }, observed::add))
+        assertEquals(List(statuses.size) { 5_000L }, delays)
+        assertEquals(listOf("OK", "MANAGER_IDENTITY_PENDING", "MANAGER_AUTH_LIST_UNREADABLE", "OK"), observed)
     }
 
     @Test fun brokerRetriesOrdinaryErrorsAndExceptionsWithoutUserAction() {
@@ -256,14 +192,16 @@ class UltraPersistentAuthorizationTest {
         assertEquals(expected, observed)
     }
 
-    @Test fun exceptionInvalidatesAnEarlierSessionGrantBeforeRetry() {
-        val state = State()
-        assertEquals("OK", state.tick())
-        state.listRead = { throw IllegalStateException("unavailable") }
-        assertThrows(IllegalStateException::class.java) { state.tick() }
-        state.listRead = null
-        assertEquals("OK", state.tick())
-        assertEquals(2, state.grants)
+    @Test fun exceptionAfterExplicitInvalidationDoesNotRestoreACachedSuccess() {
+        val session = UltraBootAuthorizationRestore()
+        var calls = 0
+        assertEquals("OK", session.ensure("boot", "owner") { calls++; "OK" })
+        session.invalidate()
+        assertThrows(IllegalStateException::class.java) {
+            session.ensure("boot", "owner") { calls++; throw IllegalStateException("unavailable") }
+        }
+        assertEquals("OK", session.ensure("boot", "owner") { calls++; "OK" })
+        assertEquals(3, calls)
     }
 
     @Test fun disabledLoopStopsBeforeReadingAndAfterItsPause() {

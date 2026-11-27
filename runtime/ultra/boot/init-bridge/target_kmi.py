@@ -9,7 +9,7 @@ import hashlib
 import importlib.util
 import io
 import json
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import struct
 import sys
@@ -293,6 +293,10 @@ def read_contract(path, kernel_build=None, *, require_resident_text_owner=False,
             raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_DIRECT_CONTRACT")
         if native_import_features(checked(inputs["nativeImportsFeature"]), checked(inputs["nativeImportsCommand"])) != contract.get("nativeImportsFeatures"):
             raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_FEATURE_CONTRACT")
+        if "nativeImportsReferenceReceipt" in inputs:
+            validate_native_import_reference_receipt({name: checked(inputs[name]) for name in (
+                "nativeImportsReferenceReceipt", "nativeImportsReference", "nativeImportsC", "nativeImportsH",
+                "nativeImportsFeature", "nativeImportsCommand")})
         if selected_imports is not None:
             for suffix in ("c", "h"):
                 name = "native_imports." + suffix
@@ -351,14 +355,68 @@ def read_contract(path, kernel_build=None, *, require_resident_text_owner=False,
 def native_import_features(header, command):
     values = {}
     for name in ("MSU_MANAGEMENT_RESIDENT_TEXT_OWNER", "MSU_MANAGEMENT_CRED_UCOUNTS",
-                 "MSU_SU_EXEC_SESSION_NATIVE", "MSU_SU_NONROOT_NATIVE"):
+                 "MSU_SU_EXEC_SESSION_NATIVE", "MSU_SU_NONROOT_NATIVE", "MSU_PATH_MOUNT_PATH_CONST"):
         declarations = re.findall(rb"^#define\s+" + name.encode() + rb"\s+([01])\s*$", header, re.M)
         flags = re.findall(rb"(?:^|\s)-D" + name.encode() + rb"(?:=([01]))?(?=\s|$)", command)
         found = [int(value) for value in declarations] + [int(value or b"1") for value in flags]
         if len(set(found)) > 1:
             raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_FEATURE_AMBIGUOUS:" + name)
+        if name == "MSU_PATH_MOUNT_PATH_CONST" and not found:
+            raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_PATH_MOUNT_TYPE_REQUIRED")
         values[name] = found[0] if found else 0
     return values
+
+
+def native_import_feature_location(command):
+    name = b"msu_resolver_build_config.h"
+    sources = re.findall(rb"(?m)^source_[^\r\n]+ := ([^\r\n]+)\r?$", command)
+    if len(sources) != 1 or PurePosixPath(sources[0].decode()).name != "native_imports.c":
+        raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_FEATURE_SOURCE")
+    module = PurePosixPath(sources[0].decode()).parent
+    dependencies = re.findall(rb"(?m)^[ \t]+([^ \t\r\n]*" + re.escape(name) +
+                              rb")[ \t]*(?:\\)?\r?$", command)
+    selected = set()
+    for dependency in dependencies:
+        if PurePosixPath(dependency.decode()) == module / "host" / name.decode():
+            selected.add("host/" + name.decode())
+        elif PurePosixPath(dependency.decode()) == module / name.decode():
+            selected.add(name.decode())
+        else:
+            raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_FEATURE_DEPENDENCY")
+    if len(selected) != 1:
+        raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_FEATURE_DEPENDENCY")
+    return module, selected.pop()
+
+
+def native_import_feature_path(reference):
+    _, relative = native_import_feature_location((reference.parent / ".native_imports.o.cmd").read_bytes())
+    return reference.parent / relative
+
+
+def validate_native_import_reference_receipt(blobs):
+    receipt = json.loads(blobs["nativeImportsReferenceReceipt"])
+    module, feature = native_import_feature_location(blobs["nativeImportsCommand"])
+    commands = receipt.get("commands", [])
+    imports = [row.get("argv", []) for row in commands if row.get("argv", [])[-1:] == ["native_imports.o"]]
+    if (receipt.get("schema") != "maplesu-current-native-import-reference/1" or
+            receipt.get("inputsUnchanged") is not True or receipt.get("toolsUnchanged") is not True or
+            not commands or any(row.get("exitCode") != 0 for row in commands) or len(imports) != 1):
+        raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_REFERENCE_RECEIPT")
+    roots = [PurePosixPath(arg[2:]) for arg in imports[0] if arg.startswith("M=")]
+    if len(roots) != 1 or (module != PurePosixPath(".") and module != roots[0]):
+        raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_REFERENCE_RECEIPT")
+    module = roots[0]
+    reference = receipt.get("reference", {})
+    if (reference.get("sha256") != digest(blobs["nativeImportsReference"]) or
+            reference.get("bytes") != len(blobs["nativeImportsReference"]) or
+            reference.get("path") != str(module / "reference.lto.o")):
+        raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_REFERENCE_RECEIPT")
+    for key, relative in (("nativeImportsC", "native_imports.c"), ("nativeImportsH", "native_imports.h"),
+                          ("nativeImportsFeature", feature)):
+        rows = [row for row in receipt.get("inputs", []) if row.get("path") == str(module / relative)]
+        if (len(rows) != 1 or rows[0].get("sha256") != digest(blobs[key]) or
+                rows[0].get("bytes") != len(blobs[key])):
+            raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_REFERENCE_RECEIPT:" + key)
 
 
 def native_private_symbols(data):
@@ -373,6 +431,9 @@ def native_private_symbols(data):
     private = {name[4:] for name in names if re.fullmatch(r"ref_[A-Za-z0-9_]+", name)}
     private.update(name[len("reference_"):] for name in names
                    if re.fullmatch(r"reference_[A-Za-z0-9_]+", name))
+    # These module-owned adapters serve the explicit allocator lookup aliases
+    # in native_sdk_imports.c; their local suffixes are not kernel symbols.
+    private -= {"environment_release", "vmalloc_segmented_range"}
     direct = legacy_direct_api().inspect(data, "legacy-lto-cfi")
     direct_targets = {row["target"] for row in direct.get("directImportsV2", [])}
     for defined, native in (("msu_native_set_memory_ro", "set_memory_ro"),
@@ -511,8 +572,13 @@ def capture(args):
         paths.update(nativeImportsReference=native_reference,
                      nativeImportsC=native_reference.parent / "native_imports.c",
                      nativeImportsH=native_reference.parent / "native_imports.h",
-                     nativeImportsFeature=native_reference.parent / "msu_resolver_build_config.h",
+                     nativeImportsFeature=native_import_feature_path(native_reference),
                      nativeImportsCommand=native_reference.parent / ".native_imports.o.cmd")
+    reference_receipt = getattr(args, "native_imports_reference_receipt", None)
+    if reference_receipt is not None:
+        if native_reference is None:
+            raise ValueError("ULTRA_BRIDGE_KMI_NATIVE_REFERENCE_RECEIPT_WITHOUT_REFERENCE")
+        paths["nativeImportsReferenceReceipt"] = reference_receipt
     if native_reference is not None:
         from elftools.elf.elffile import ELFFile
         reference_elf = ELFFile(io.BytesIO(native_reference.read_bytes()))
@@ -527,6 +593,8 @@ def capture(args):
                 paths[key] = native_reference.parent / relative
     before = {name: identity(path) for name, path in paths.items()}
     blobs = {name: path.read_bytes() for name, path in paths.items()}
+    if reference_receipt is not None:
+        validate_native_import_reference_receipt(blobs)
     image, boot = blobs["kernelImage"], blobs["targetBoot"]
     if len(image) < 64 or image[56:60] != b"ARMd" or boot[:8] != b"ANDROID!":
         raise ValueError("ULTRA_BRIDGE_KMI_TARGET_IMAGE")
@@ -790,6 +858,8 @@ if __name__ == "__main__":
     for name in ("target-boot", "kernel-image", "target-config", "kernel-build", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--native-imports-reference", type=Path)
+    parser.add_argument("--native-imports-reference-receipt", type=Path,
+                        help="Explicit native_reference.py REFERENCE.json; verify compiled reference and inputs")
     parser.add_argument("--target-btf", type=Path)
     parser.add_argument("--build-btf", type=Path)
     parser.add_argument("--resident-text-owner-reference", type=Path,

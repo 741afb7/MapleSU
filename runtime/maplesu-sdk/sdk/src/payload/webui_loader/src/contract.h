@@ -13,15 +13,9 @@
 //   argv[3]  caller_pid      pid of the process that requested the WebUI
 //   argv[4]  module_log_flag "1" when module file logging is enabled, else "0"
 //
-// The program is installed as
-//     /data/<root_key[0..16] + root_key[0]>/modules/webui_loader
-// and the module it serves lives in that same tree:
-//     .../modules/<mod_id32>/<mod_id32>          the module ELF (dlopen target)
-//     .../modules/<mod_id32>/webroot/            the module's static web files
-//
-// Legacy paths use the installed feature credential. Owner launches receive a
-// deployment directory through the existing private pipe after the worker has
-// actually acquired Root; the path record grants no authority.
+// The program is published in the existing StorageLocator system directory.
+// A private pipe carries the nonsecret deployment directory after the worker
+// acquired Root. This record selects paths and grants no authority.
 //
 #pragma once
 
@@ -36,8 +30,6 @@ namespace maplesu::payload::webui {
 
 inline constexpr int kPortMin = 20000;
 inline constexpr int kPortMax = 60000;
-inline constexpr size_t kFeatureTokenSize = 4096;
-inline constexpr size_t kRootKeyMaxSize = 1024;
 
 struct LaunchArgs {
     std::string mod_id32;
@@ -46,6 +38,7 @@ struct LaunchArgs {
     int log_flag = 0;
     int ready_fd = -1;
     int owner_directory_fd = -1;
+    bool legacy_credential_record = false;
     bool open_browser = true;
 };
 
@@ -109,14 +102,17 @@ inline bool parse_launch_args(int argc, const char* const* argv, LaunchArgs& out
         open_browser = mode == "browser";
     }
     int owner_directory_fd = -1;
+    bool legacy_credential_record = false;
     if (argc == 10) {
         long long descriptor = 0;
-        if (argv[8] == nullptr || std::string(argv[8]) != kOwnerDirectoryArgument ||
+        const std::string handoff = argv[8] ? argv[8] : "";
+        if ((handoff != kOwnerDirectoryArgument && handoff != kLegacyDirectoryArgument) ||
             !parse_positive(argv[9], descriptor) || descriptor < 3 || descriptor == ready_fd) {
             error = "invalid Owner directory argument";
             return false;
         }
         owner_directory_fd = static_cast<int>(descriptor);
+        legacy_credential_record = handoff == kLegacyDirectoryArgument;
     }
     out.mod_id32 = mod;
     out.port = static_cast<int>(port);
@@ -124,6 +120,7 @@ inline bool parse_launch_args(int argc, const char* const* argv, LaunchArgs& out
     out.log_flag = (flag == "1") ? 1 : 0;
     out.ready_fd = ready_fd;
     out.owner_directory_fd = owner_directory_fd;
+    out.legacy_credential_record = legacy_credential_record;
     out.open_browser = open_browser;
     return true;
 }
@@ -131,45 +128,11 @@ inline bool parse_launch_args(int argc, const char* const* argv, LaunchArgs& out
 // --------------------------------------------------------------------------
 // path derivation
 // --------------------------------------------------------------------------
-// The directory segment is the first 16 key characters plus a repeat of the
-// first one: a 17-character prefix that is stable for the current generation of
-// the module root key.
-inline std::string data_dir(const std::string& root_key) {
-    if (root_key.size() < 16) return std::string();
-    std::string segment = root_key.substr(0, 16);
-    segment.push_back(root_key[0]);
-    return "/data/" + segment + "/";
-}
-
 inline std::string deployment_data_dir(const DeploymentDirectory& directory) {
     if (!valid_directory(directory)) return {};
     std::string name(directory.name, sizeof(directory.name));
     name.push_back(name[0]);
     return "/data/" + name + "/";
-}
-
-inline std::string modules_dir(const std::string& root_key) {
-    const std::string base = data_dir(root_key);
-    return base.empty() ? base : base + "modules/";
-}
-
-inline std::string module_private_dir(const std::string& root_key,
-                                      const std::string& mod_id32) {
-    const std::string base = modules_dir(root_key);
-    if (base.empty() || mod_id32.empty()) return std::string();
-    return base + mod_id32 + "/";
-}
-
-inline std::string module_elf_path(const std::string& root_key,
-                                   const std::string& mod_id32) {
-    const std::string private_dir = module_private_dir(root_key, mod_id32);
-    return private_dir.empty() ? private_dir : private_dir + mod_id32;
-}
-
-inline std::string module_webroot_dir(const std::string& root_key,
-                                      const std::string& mod_id32) {
-    const std::string private_dir = module_private_dir(root_key, mod_id32);
-    return private_dir.empty() ? private_dir : private_dir + "webroot";
 }
 
 }  // namespace maplesu::payload::webui

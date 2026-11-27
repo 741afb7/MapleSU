@@ -25,7 +25,7 @@ $(error Ultra init bridge CFI compiler feature probe failed)
 endif
 asflags-y += -DMSU_INIT_BRIDGE_CC_HAS_KCFI=$(msu_bridge_cc_has_kcfi)
 
-host_tus := protected_install_kernel manager_claim_entry manager_resident_host manager_management manager_owner_watch manager_task_state manager_uid_gateway su_install_registry su_profile_namespace
+host_tus := protected_install_kernel manager_claim_entry manager_resident_host manager_management manager_owner manager_owner_watch manager_task_state manager_uid_gateway su_install_registry su_profile_namespace
 # Runtime objects come from the owner's frozen native emission, not live roots.
 include $(src)/selected-runtime.mk
 $(foreach tu,$(host_tus),$(eval CFLAGS_host/$(tu).o += -DMSU_INIT_BRIDGE_HOST_IMPORTS=1 -include $(src)/native_imports.h))

@@ -51,9 +51,10 @@ fun homeUltraBrandFacts(
     liteHiddenMasking: Boolean,
     hiddenConfirming: Boolean,
     environmentMode: WorkMode? = null,
+    environmentInstalled: Boolean = false,
 ): UltraBrandFacts = UltraBrandFacts(
-    active = workModeSwitch.current ?: environmentMode,
-    installed = if (workModeSwitch.visible || environmentMode != null) HomeInstallSignal.INSTALLED else HomeInstallSignal.UNKNOWN,
+    active = workModeSwitch.current ?: environmentMode.takeIf { environmentInstalled },
+    installed = if (workModeSwitch.visible || environmentInstalled) HomeInstallSignal.INSTALLED else HomeInstallSignal.UNKNOWN,
     liteHidden = HomeHiddenSignal.of(
         liteHiddenMasking || workModeSwitch.blocked == HomeWorkModeSwitchBlock.HIDDEN_ACTIVE,
     ),

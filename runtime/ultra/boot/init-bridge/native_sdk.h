@@ -11,11 +11,11 @@
 
 /* Same producer state machine; these kernel-only entries take real kernel
  * values, not prctl user pointers and not an L3 control subject. */
-int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout,
-    const char credential[MSU_BOOT_SDK_KEY_BYTES]);
+int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout);
 int msu_boot_sdk_native_abort(void);
 int msu_init_bridge_host_start(unsigned long image, const void *append,
-    unsigned int bytes, const char *credential);
+    unsigned int bytes);
+int msu_init_bridge_deployment_namespace(char output[16]);
 int msu_init_bridge_host_abort(void);
 unsigned long msu_init_bridge_checked_lookup(const char *name);
 unsigned long msu_init_bridge_observation_entry(const char *name);

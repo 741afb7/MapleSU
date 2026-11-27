@@ -1,5 +1,6 @@
 #include "kernel_module_kit_umbrella.h"
 #include "../../maplesu_assets/maplesu_payload_assets.h"
+#include "maplesu_storage_private.h"
 #include "private_maple_runtime.h"
 #include "executable_publish.h"
 
@@ -18,10 +19,6 @@ using maplesu::sdk::kPayloadsReal;
 using maplesu::sdk::kResetpropPayloadSize;
 using maplesu::sdk::resetprop_file_data;
 
-const char* current_root_key() {
-    return __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-}
-
 KModErr enable_install_root() {
     return default_modules::module_root::set_current_root(true);
 }
@@ -36,24 +33,13 @@ static_assert(sizeof(compat::resetprop_file_data) == compat::kResetpropPayloadSi
                   !compat::kPayloadsReal,
               "resetprop payload must match the selected asset size");
 
-std::string get_kernel_file_dir_name() {
-    return std::string(compat::current_root_key()).substr(0, FOLDER_HEAD_ROOT_KEY_LEN);
-}
-
-std::string get_system_file_dir_name() {
-    std::string head = get_kernel_file_dir_name();
-    return head + head[0];
-}
-
 KModErr resetprop() {
     const KModErr set_root_err = compat::enable_install_root();
     if (set_root_err != KModErr::OK) return set_root_err;
 
-    char path_buf[1024] = {0};
-    snprintf(path_buf, sizeof(path_buf), "/data/%s/", get_system_file_dir_name().c_str());
-
-    const std::string target_path =
-        std::filesystem::path(std::string(path_buf)) / std::filesystem::path("resetprop");
+    std::string directory;
+    RETURN_IF_ERROR(storage::current_system_directory(directory));
+    const std::string target_path = std::filesystem::path(directory) / "resetprop";
 
     const KModErr publish_result =
         maplesu_publish_executable(target_path.c_str(), compat::resetprop_file_data,

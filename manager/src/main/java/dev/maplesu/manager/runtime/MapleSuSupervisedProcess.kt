@@ -126,8 +126,8 @@ internal class MapleSuSupervisedProcess private constructor(
     companion object {
         private const val HANDSHAKE_TIMEOUT_MS = 20_000
 
-        fun start(context: Context, argv: List<String>): MapleSuSupervisedProcess =
-            startInternal(context, argv, null, emptyArray())
+        fun start(context: Context, argv: List<String>, globalMnt: Boolean = false): MapleSuSupervisedProcess =
+            startInternal(context, argv, null, emptyArray(), globalMnt = globalMnt)
 
         fun startRoot(context: Context, argv: List<String>, globalMnt: Boolean = false): MapleSuSupervisedProcess {
             requireRoot()
@@ -155,7 +155,7 @@ internal class MapleSuSupervisedProcess private constructor(
             descriptors: Array<FileDescriptor>,
             onLaunched: ((MapleSuSupervisedProcess) -> Unit)? = null): MapleSuSupervisedProcess {
             requireRoot()
-            return startInternal(nativeLibraryDir, byteArrayOf(), listOf("/system/bin/sh"), request,
+            return startInternal(nativeLibraryDir, listOf("/system/bin/sh"), request,
                 descriptors, rootOwner = true, gated = true, onLaunched = onLaunched)
         }
 
@@ -180,13 +180,11 @@ internal class MapleSuSupervisedProcess private constructor(
             descriptors: Array<FileDescriptor>, rootOwner: Boolean = false, globalMnt: Boolean = false,
             gated: Boolean = false, moduleEnvironment: List<String>? = null,
             onLaunched: ((MapleSuSupervisedProcess) -> Unit)? = null): MapleSuSupervisedProcess {
-            val credential = if (rootOwner) byteArrayOf() else MapleSuCredentialStore(context).load()
-                ?: throw IllegalStateException("MAPLESU_CREDENTIAL_NOT_PAIRED")
-            return startInternal(context.applicationInfo.nativeLibraryDir, credential, argv, request,
+            return startInternal(context.applicationInfo.nativeLibraryDir, argv, request,
                 descriptors, rootOwner, globalMnt, gated, context, onLaunched, moduleEnvironment)
         }
 
-        private fun startInternal(nativeLibraryDir: String, credential: ByteArray, argv: List<String>,
+        private fun startInternal(nativeLibraryDir: String, argv: List<String>,
             request: NativeSuRequest?, descriptors: Array<FileDescriptor>, rootOwner: Boolean,
             globalMnt: Boolean = false, gated: Boolean = false, context: Context? = null,
             onLaunched: ((MapleSuSupervisedProcess) -> Unit)? = null,
@@ -207,7 +205,9 @@ internal class MapleSuSupervisedProcess private constructor(
                 check(executable.isFile && executable.canExecute()) { "MAPLESU_RUNTIME_UNAVAILABLE" }
                 val mode = if (rootOwner) {
                     if (request != null) "--root-su" else if (globalMnt) "--root-global-session" else "--root-session"
-                } else if (request == null) "--maplesu-session-stdin" else "--maplesu-su-stdin"
+                } else {
+                    if (request != null) "--ultra-su" else if (globalMnt) "--ultra-global-session" else "--ultra-session"
+                }
                 // Execution environment stays Manager-owned until the root child is forked.
                 val command = listOf(executable.absolutePath, mode, "--") + argv
                 val launched = if (moduleEnvironment != null) NativeSessionProcess.startModule(nativeLibraryDir, command, moduleEnvironment)
@@ -220,7 +220,6 @@ internal class MapleSuSupervisedProcess private constructor(
                 supervised = wrapper
                 onLaunched?.invoke(wrapper)
                 control.timeout(HANDSHAKE_TIMEOUT_MS)
-                if (!rootOwner) writeMapleSuCredential(process, credential)
                 control.outputStream.write('A'.code)
                 control.outputStream.flush()
                 if (request != null) {
@@ -241,10 +240,10 @@ internal class MapleSuSupervisedProcess private constructor(
                 }
                 control.timeout(0)
                 terminal?.let { wrapper.adoptTerminal(it) }
+                wrapper.started = true
                 accepted = true
                 return wrapper
             } finally {
-                credential.fill(0)
                 if (!accepted) {
                     terminal?.let { runCatching { Os.close(it) } }
                     if (process != null) NativeSessionProcess.retireAndAwait(process)

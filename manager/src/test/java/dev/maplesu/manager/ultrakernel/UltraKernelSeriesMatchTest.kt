@@ -312,17 +312,24 @@ class UltraKernelSeriesMatchTest {
             assertEquals(sample.requested, UltraKernelSpec.releaseOf(kernel))
             assertEquals(sample.series, KernelSeries.of(sample.requested))
 
-            val plan = generator.generate(kernel, credential)
+            val plan = generator.generate(kernel)
             assertEquals(
                 "${sample.series}: the plan must keep the real release, not the series",
                 sample.requested,
                 plan.kernelRelease,
             )
-            assertEquals(sample.records, plan.records.size)
+            assertNull(plan.credential)
+            assertNull(plan.slots)
+            val symbols = UltraKernelKallsymsTable.decode(kernel)
+            val requestV2 = symbols.offsetOf("copy_from_user_nofault") != null &&
+                symbols.offsetOf("copy_to_user_nofault") != null
+            val expectedRecords = sample.records - 1 + if (requestV2) 1 else 0
+            assertEquals(requestV2, plan.records.any { it.role == "request-v2" })
+            assertEquals(expectedRecords, plan.records.size)
             val evidence = requireNotNull(plan.evidence)
             assertEquals(
                 "${sample.series}: every record this kernel hosts must be generated",
-                "${sample.records}/${sample.records}",
+                "$expectedRecords/$expectedRecords",
                 evidence.summary,
             )
             if (sample.cfiSkipped) {
@@ -344,9 +351,9 @@ class UltraKernelSeriesMatchTest {
     fun anUnknownSeriesUsesTheTargetFactsWhileTheCatalogueKeepsItsSeriesContract() {
         assumeTrue("6.6.89 boot sample not available", ace6.isFile)
         val original = UltraKernelPlan.readKernel(ace6)
-        val baseline = generator.generate(original, credential)
+        val baseline = generator.generate(original)
         val kernel = renamedKernel(original, "6.7.1-android18-0")
-        val generated = generator.generate(kernel, credential)
+        val generated = generator.generate(kernel)
         assertEquals("6.7.1-android18-0", generated.kernelRelease)
         assertEquals(UltraKernelPlan.SupportLevel.EXPERIMENTAL, generated.supportLevel)
         assertEquals(baseline.layout.fields, generated.layout.fields)
@@ -367,26 +374,19 @@ class UltraKernelSeriesMatchTest {
     }
 
     @Test
-    fun sixSixEightNineKeepsK22CodeWithCorrectedSdkMetadata() {
+    fun historicalPackagedK22KeepsItsPinnedBytesAndDigest() {
         assumeTrue("6.6.89 boot sample not available", ace6.isFile)
-        val plan = generator.generate(UltraKernelPlan.readKernel(ace6), UltraKernelPlanFixtures.activeCredential())
-        val evidence = requireNotNull(plan.evidence)
-
-        assertEquals("16/16", evidence.summary)
-        assertTrue("relocation changes the original-byte diagnostic", evidence.referenceOrigMatch != "16/16")
+        val kernel = UltraKernelPlan.readKernel(ace6)
+        val spec = UltraKernelPlanFixtures.shippedSpec()
+        val plan = UltraKernelPlan.fromSpec(spec, credential = UltraKernelPlanFixtures.activeCredential())
+        assertEquals(UltraKernelPlan.Origin.PINNED_ASSET, plan.origin)
         assertEquals(16, plan.records.size)
-        // The packaged records plus independently derived dynamic-SCS entry/frame corrections.
-        val shipped = UltraKernelPlanFixtures.shippedRecords()
-        plan.records.forEachIndexed { index, record ->
-            val exec = record.role == "do_execveat_common+0x0"
-            assertEquals("offset ${record.role}", shipped[index].offset, record.offset)
-            if (exec) assertEquals(0xD101C3FF.toInt(), UltraKernelA64.le32Bits(record.original, 0))
-            else assertTrue("original ${record.role}", shipped[index].original.contentEquals(record.original))
-            assertTrue("replacement ${record.role}",
-                UltraKernelPlanFixtures.correctedReplacement(index).contentEquals(record.replacement))
-        }
-        assertEquals(UltraKernelPlanFixtures.CORRECTED_K22_KERNEL_SHA256, plan.derived?.patchedKernelSha256)
-        assertEquals(874, plan.derived?.changedBytes)
+        assertEquals(UltraKernelPlanFixtures.activeCredential(), plan.credential)
+        assertTrue(plan.rebindable)
+        val result = plan.apply(kernel)
+        assertEquals(UltraKernelPlanFixtures.CORRECTED_K22_KERNEL_SHA256, result.derived.patchedKernelSha256)
+        assertEquals(874, result.derived.changedBytes)
+        assertEquals(0, result.derived.outsideSites)
         assertEquals(UltraKernelPlanFixtures.K22_RELEASE, plan.kernelRelease)
     }
 
@@ -411,7 +411,7 @@ class UltraKernelSeriesMatchTest {
         assertEquals("the 6.6 tier answers a 6.6.50 boot", "k22", selection.primary.id)
 
         val notices = ArrayList<String>()
-        val preparation = flow.prepare(boot, credential) { notices += it }
+        val preparation = flow.prepare(boot) { notices += it }
         assertTrue(preparation.generated)
         val candidate = requireNotNull(preparation.candidate)
         assertEquals("the candidate records the real release", "6.6.50-android15-8", candidate.kernelRelease)
@@ -420,9 +420,12 @@ class UltraKernelSeriesMatchTest {
             candidate.expectedPinned,
         )
         assertEquals(16, candidate.patches)
+        val generated = preparation.variant as UltraKernelGeneratedAsset
+        assertNull(generated.plan.credential)
+        assertTrue(generated.plan.records.any { it.role == "request-v2" })
         assertTrue(
             "the substitution must be announced, never silent: $notices",
-            notices.any { it.contains("独立生成") },
+            notices.any { it.contains("根据目标内核生成") },
         )
 
         val receiptFile = File(workspace, "candidate-${requireNotNull(preparation.variant).id}.json")

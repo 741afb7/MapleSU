@@ -74,7 +74,9 @@ class UltraKernelMoboxBootTest {
         val call = executor.replacement.indices.step(4).single { at ->
             UltraKernelA64.le32Bits(executor.replacement, at) == UltraKernelA64.blr(10)
         }
-        val metadata = executor.offset + call + requireNotNull(plan.credential?.metadataDisplacement)
+        assertEquals(null, plan.credential)
+        assertEquals(null, plan.slots)
+        val metadata = envelope.offset + 4
         assertEquals(envelope.offset + 4, metadata)
         val patched = plan.apply(kernel).kernel
         assertEquals(UltraKernelA64.blr(10), UltraKernelA64.le32Bits(patched, executor.offset.toInt() + call))
@@ -93,7 +95,7 @@ class UltraKernelMoboxBootTest {
             assertEquals("f5acfde209dbc87f86ed5f0ecff1dc52d3b51638cc30932fd5cab38e7f71afee",
                 UltraKernelSpec.sha256(kernel))
             Triple(kernel, UltraKernelKallsymsTable.decode(kernel),
-                UltraKernelSpecGenerator().generate(kernel, UltraKernelCredential.of("Aa1".repeat(16))))
+                UltraKernelSpecGenerator().generate(kernel))
         }
     }
 }

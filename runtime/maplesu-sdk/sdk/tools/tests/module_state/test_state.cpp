@@ -22,8 +22,8 @@ static void check(bool ok, const char* message) {
     ++assertions;
     if (!ok) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
 }
-static fs::path root16() { return fs::path("/data/" + fixture::key.substr(0, 16)); }
-static fs::path root17() { const auto head = fixture::key.substr(0, 16); return fs::path("/data/" + head + head[0]); }
+static fs::path root16() { return fs::path("/data/" + fixture::deployment); }
+static fs::path root17() { const auto head = fixture::deployment; return fs::path("/data/" + head + head[0]); }
 static const char* names[] = {
     "running_mods.3cee2062f9eab0e034c55c298c7571b4",
     "abnormal_mods.3cee2062f9eab0e034c55c298c7571b4",
@@ -32,13 +32,14 @@ static const char* names[] = {
     "finished_developer_run_once_mods.3cee2062f9eab0e034c55c298c7571b4",
 };
 static void reset() {
-    fixture::key = "0123456789abcdefghijklmnop";
+    fixture::deployment = "0123456789abcdef";
     fs::remove_all(root16()); fs::remove_all(root17());
     fs::create_directories(root16()); fs::create_directories(root17() / "modules");
     fixture::root_result = fixture::reset_result = fixture::install_result = KModErr::OK;
-    fixture::fail_chmod = fixture::fail_label = false;
+    fixture::fail_chmod = fixture::fail_label = fixture::fail_close = false;
     fixture::label_contract_ok = true;
     fixture::chmod_calls = fixture::label_calls = 0;
+    fixture::select_deployment();
 }
 static void put(const fs::path& file, const std::string& text) {
     fs::create_directories(file.parent_path());
@@ -71,21 +72,23 @@ static void report(const char* test, const char* status) {
 }
 
 static void paths_and_format() {
-    for (const auto& key : {std::string(), std::string("Q"), std::string("Z123456789abcde"),
-                            std::string("a123456789abcdef"), std::string("b123456789abcdef-more")}) {
-        fixture::key = key;
+    for (const auto& deployment : {std::string("0123456789abcdef"), std::string("Q123456789abcdef"),
+                                   std::string("Z123456789abcdef"), std::string("a123456789abcdef"),
+                                   std::string("b123456789abcdef")}) {
+        fixture::deployment = deployment;
+        fixture::select_deployment();
         for (unsigned i = 0; i != 5; ++i) {
-            check(path(static_cast<List>(i)) == "/data/" + key.substr(0, 16) + "/" + names[i], "STATE01 Key16 path");
+            check(path(static_cast<List>(i)) == "/data/" + deployment + "/" + names[i], "STATE01 kernel-directory path");
         }
     }
-    check(path(static_cast<List>(5)).empty() && path(static_cast<List>(255)).empty(), "STATE01 invalid state");
+    check(path(static_cast<List>(6)).empty() && path(static_cast<List>(255)).empty(), "STATE01 invalid state");
     reset();
     for (unsigned i = 0; i != 5; ++i) {
         const auto which = static_cast<List>(i);
         std::vector<std::string> out = {"stale"};
         check(read(which, out) == KModErr::OK && out.empty(), "STATE02 missing clears output");
         put(root17() / names[i], "wrong_directory\n");
-        check(read(which, out) == KModErr::OK && out.empty(), "STATE01 ignores Key17 five-state files");
+        check(read(which, out) == KModErr::OK && out.empty(), "STATE01 ignores system-directory five-state files");
         put(path(which), "\nalpha\r\n\nbeta\nalpha\n\r\nlast");
         check(read(which, out) == KModErr::OK && out == std::vector<std::string>({"alpha", "beta", "alpha", "last"}), "STATE02 CRLF blank duplicate ordering");
         check(save(which, {"first", "", "second", "first"}) == KModErr::OK, "STATE02 save");
@@ -104,7 +107,7 @@ static void paths_and_format() {
     }
     check(fixture::label_contract_ok, "STATE02 existing label name/value/NUL/flags");
     std::vector<std::string> invalid = {"stale"};
-    check(read(static_cast<List>(5), invalid) == KModErr::ERR_MODULE_PARAM && invalid.empty(), "STATE01 invalid read clears");
+    check(read(static_cast<List>(6), invalid) == KModErr::ERR_MODULE_PARAM && invalid.empty(), "STATE01 invalid read clears");
     check(save(static_cast<List>(255), {}) == KModErr::ERR_MODULE_PARAM, "STATE01 invalid write error");
     report("STATE01-02-path-format-idempotence", "PASS");
 }
@@ -140,10 +143,10 @@ static void listing() {
     check(save(List::Removed, {"removed"}) == KModErr::OK, "STATE04 removed fixture");
     put(root17() / names[0], "plain\n");
     auto records = list();
-    check(state(records, "run_only") == State::Running, "STATE04 Key16 Running");
+    check(state(records, "run_only") == State::Running, "STATE04 kernel-directory Running");
     check(state(records, "abnormal") == State::Abnormal, "STATE04 abnormal priority");
     check(state(records, "removed") == State::RemovedPendingReboot, "STATE04 removed priority");
-    check(state(records, "plain") == State::NotRunning, "STATE04 no Key17 dual read");
+    check(state(records, "plain") == State::NotRunning, "STATE04 no system-directory dual read");
     check(std::string(records[0].desc.id32) == "plain" && std::string(records[3].desc.id32) == "run_only", "STATE04 mtime order retained");
     auto override = State::Abnormal;
     put(root17() / "modules_new_state" / "plain", std::string(reinterpret_cast<const char*>(&override), sizeof(override)));
@@ -152,9 +155,9 @@ static void listing() {
     put(root17() / "modules_new_state" / "abnormal", "123");
     put(root17() / "modules_new_desc" / "plain", "overridden description");
     records = list();
-    check(state(records, "plain") == State::Abnormal && state(records, "run_only") == State::NotRunning, "STATE04 Key17 four-byte state override retained");
+    check(state(records, "plain") == State::Abnormal && state(records, "run_only") == State::NotRunning, "STATE04 system-directory four-byte state override retained");
     check(state(records, "abnormal") == State::Abnormal, "STATE04 wrong-sized override ignored");
-    check(std::string(records[0].desc.desc) == "overridden description", "STATE04 Key17 description override retained");
+    check(std::string(records[0].desc.desc) == "overridden description", "STATE04 system-directory description override retained");
     std::vector<maplesu::sdk::module_record> safe;
     check(maplesu::sdk::safe_get_all_modules(safe) == KModErr::OK && safe.size() == records.size(), "STATE04 real safe list fork transfer");
     fs::remove(path(List::Running)); fs::create_directory(path(List::Running));
@@ -164,7 +167,7 @@ static void listing() {
     fixture::root_result = KModErr::ERR_MODULE_NO_ROOT;
     check(maplesu::sdk::unsafe_get_all_modules(safe) == KModErr::ERR_MODULE_NO_ROOT, "STATE04 root error retained");
     reset(); fs::remove_all(root17() / "modules");
-    check(maplesu::sdk::unsafe_get_all_modules(safe) == KModErr::ERR_MODULE_OPEN_DIR, "STATE04 module dir remains Key17");
+    check(maplesu::sdk::unsafe_get_all_modules(safe) == KModErr::ERR_MODULE_OPEN_DIR, "STATE04 module dir remains system-directory");
     report("STATE04-real-list-priority-overrides-errors", "PASS");
 }
 
@@ -175,8 +178,8 @@ static void installation() {
     std::string reason;
     check(maplesu::sdk::safe_install_module("fixture.zip", true, reason) == KModErr::OK, "STATE04 real run-once installer fork succeeds");
     check(bytes(path(List::FinishedRunOnce)) == "keep_finished\n" && bytes(path(List::PendingRunOnce)) == "keep_pending\nfixture_mod\n", "STATE04 install removes finished then adds pending");
-    check(fs::exists(root17() / "modules" / "fixture_mod" / "fixture_mod"), "STATE04 installer preserves Key17 module ELF");
-    check(!fs::exists(root17() / names[3]) && !fs::exists(root17() / names[4]), "STATE04 installer only writes Key16 state");
+    check(fs::exists(root17() / "modules" / "fixture_mod" / "fixture_mod"), "STATE04 installer preserves system-directory module ELF");
+    check(!fs::exists(root17() / names[3]) && !fs::exists(root17() / names[4]), "STATE04 installer only writes kernel-directory state");
     check(maplesu::sdk::safe_install_module("fixture.zip", false, reason) == KModErr::OK, "STATE04 real normal reinstall");
     check(bytes(path(List::PendingRunOnce)) == "keep_pending\n", "STATE04 normal reinstall removes pending");
     check(add(List::Running, "fixture_mod") == KModErr::OK && state(list(), "fixture_mod") == maplesu::sdk::ModuleRunState::Running, "STATE04 installer output readable by real list");
@@ -193,17 +196,35 @@ static void installation() {
     check(bytes(path(List::PendingRunOnce)) == "fixture_mod\n" && bytes(path(List::FinishedRunOnce)) == "fixture_mod\n", "STATE04 error stops later state updates");
     reset(); module("fixture_mod");
     fixture::reset_result = KModErr::ERR_MODULE_BOOT_SESSION;
-    check(maplesu::sdk::safe_uninstall_module("fixture_mod") == KModErr::ERR_MODULE_BOOT_SESSION && !fs::exists(path(List::Removed)), "STATE04 reset error precedes states");
+    check(maplesu::sdk::safe_uninstall_module("fixture_mod") == KModErr::ERR_MODULE_BOOT_SESSION && fs::exists(path(List::Removed)) && fs::exists(path(List::PendingRemoval)), "STATE04 reset failure retains committed removal intent");
     reset(); put(root16() / "install.mode", "boot");
     put(path(List::PendingRunOnce), "keep_pending\n"); fs::create_directory(path(List::FinishedRunOnce));
     check(maplesu::sdk::safe_install_module("fixture.zip", true, reason) == KModErr::ERR_MODULE_READ_FILE && bytes(path(List::PendingRunOnce)) == "keep_pending\n", "STATE04 install finished failure stops pending");
     reset(); put(root16() / "install.mode", "boot");
     put(path(List::FinishedRunOnce), "fixture_mod\nkeep_finished\n"); fs::create_directory(path(List::PendingRunOnce));
-    check(maplesu::sdk::safe_install_module("fixture.zip", true, reason) == KModErr::ERR_MODULE_READ_FILE && bytes(path(List::FinishedRunOnce)) == "keep_finished\n", "STATE04 install pending failure retains earlier finished update");
+    check(maplesu::sdk::safe_install_module("fixture.zip", true, reason) == KModErr::ERR_MODULE_READ_FILE && bytes(path(List::FinishedRunOnce)) == "fixture_mod\nkeep_finished\n", "STATE04 uncommitted install failure restores prior finished state");
+    reset(); put(root16() / "install.mode", "boot");
+    fixture::fail_close = true;
+    check(maplesu::sdk::safe_install_module("fixture.zip", false, reason) == KModErr::ERR_MODULE_ROOT_KEY,
+        "STATE04 committed install close failure reaches parent");
+    fixture::fail_close = false;
+    check(fs::exists(root17() / "modules" / "fixture_mod" / "fixture_mod"), "STATE04 close failure retains committed image");
+    fixture::fail_close = true;
+    check(maplesu::sdk::safe_uninstall_module("fixture_mod") == KModErr::ERR_MODULE_ROOT_KEY,
+        "STATE04 uninstall close failure reaches parent");
+    fixture::fail_close = false;
     report("STATE04-real-install-uninstall-fork-errors", "PASS");
 }
 
 int main() {
     paths_and_format(); failures(); listing(); installation();
+    fixture::fail_admission = true;
+    const auto before = fixture::fork_calls;
+    std::vector<maplesu::sdk::module_record> records;
+    std::string reason;
+    check(maplesu::sdk::safe_get_all_modules(records) == KModErr::ERR_MODULE_ROOT_KEY, "admission rejects list");
+    check(maplesu::sdk::safe_install_module("fixture.zip", false, reason) == KModErr::ERR_MODULE_ROOT_KEY, "admission rejects install");
+    check(maplesu::sdk::safe_uninstall_module("fixture_mod") == KModErr::ERR_MODULE_ROOT_KEY, "admission rejects uninstall");
+    check(fixture::fork_calls == before, "admission rejects before any child is created");
     report("NEW-ALL", "PASS");
 }

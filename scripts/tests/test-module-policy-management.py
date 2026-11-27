@@ -18,14 +18,14 @@ def main():
     names = ["runtime/ultra/policy/module_policy_management.cpp", "runtime/ultra/policy/module_policy_management.h",
              "runtime/tests/module_policy_management_test.cpp", "scripts/tests/test-module-policy-management.py"]
     before = {n: hashlib.sha256((ROOT / n).read_bytes()).hexdigest() for n in names}
-    scenarios = ["missing_key", "short_key", "long_key", "invalid_request", "pipe_error", "fork_error",
+    scenarios = ["invalid_auth", "exhausted_auth", "admission_error", "helper_success", "close_error", "store_close_error", "invalid_request", "pipe_error", "fork_error",
                  "poll_timeout", "poll_error", "poll_eintr", "read_error", "read_short", "read_eof",
                  "wait_error", "wait_mismatch", "wait_eintr", "child_signal", "child_exit", "root_error",
                  "store_error", "success", "save_0", "save_1", "save_3", "save_7"]
     command = (
         "set -eu\nulimit -c 0\n"
         "c++ -std=c++20 -UNDEBUG -Wall -Wextra -Werror -fsanitize=address,undefined "
-        "-fno-omit-frame-pointer -I/source/runtime/maplesu-sdk/include -I/source/runtime/ultra/policy "
+        "-fno-omit-frame-pointer -I/source/runtime/maplesu-sdk/include -I/source/runtime/maplesu-sdk/sdk/include -I/source/runtime/ultra/policy "
         "/source/runtime/ultra/policy/module_policy_management.cpp "
         "/source/runtime/tests/module_policy_management_test.cpp "
         "-Wl,--wrap=pipe2 -Wl,--wrap=fork -Wl,--wrap=poll -Wl,--wrap=read "
@@ -41,7 +41,7 @@ def main():
         recordedAt=datetime.now(timezone.utc).isoformat(), exitCode=execution.returncode,
         stdout=execution.stdout, stderr=execution.stderr, scenarios=scenarios, cases=len(scenarios),
         sourceSha256=before, inputsUnchanged=stable, sanitizers=["ASan", "UBSan"], deviceAccess=False,
-        scope="Real fork/pipe IPC and injected syscall failures; SDK/store boundaries are fixtures")
+        scope="Real fork/pipe IPC and inline WorkerScope, injected syscall failures; SDK authorization/storage and policy store boundaries are fixtures. Invalid auth is checked before fork.")
     (out / "verification.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(execution.stdout + execution.stderr)
     raise SystemExit(0 if report["passed"] else 1)

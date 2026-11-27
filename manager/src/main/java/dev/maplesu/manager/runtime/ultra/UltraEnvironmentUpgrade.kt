@@ -7,31 +7,33 @@ import android.content.Context
 import android.os.Looper
 import android.util.Log
 import dev.maplesu.manager.modules.UltraRootKeyStore
+import dev.maplesu.manager.workmode.ModeActivation
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
 import dev.maplesu.manager.workmode.ui.WorkModeSwitchSession
 import dev.maplesu.manager.workmode.superuser.LiteImplantQuiesceGate
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import java.security.MessageDigest
 
 /**
  * 「MapleSU_Ultra 工作环境」升级：读事实、执行升级。
  *
  * 升级 = 在运行中的环境上再安装一次（上游参考管理器给出的升级方式也是"重新安装环境"）：
- *  - 走唯一安装入口 [UltraEnvironmentInstaller]，**并且显式声明**
+ *  - SDK 环境走唯一安装入口 [UltraEnvironmentInstaller]，**并且显式声明**
  *    [UltraEnvironmentInstaller.Intent.UpgradeToBundledBuild]：Running 不是跳过安装的理由，
  *    否则「同一个上游版本的新构建」永远提交不下去（5.0.5 修复的正是这个短路）；
- *  - 自白名单与 key 备份照常附带；
+ *  - 安装身份回读与授权同步照常执行；
  *  - **绝不先卸载**：卸载会清空授权列表并删除已安装的模块；
  *  - Boot 模式安装成功后设备会在几秒内自动重启，所以只能由用户确认后触发，从不自动执行；
  *  - 写之前在后台把事实重新核对一遍，过期的卡片不能写设备；
- *  - 每次开机最多提交一次：先落标记；仅 SDK 明确拒绝时撤回，结果不确定时等待重启核对；
+ *  - 旧载体先走现有认证 Root 镜像安装事务，提交前核验本次激活引用、boot 与生命周期；
+ *  - 每次开机最多提交一次：先落标记；明确未提交或已取消时撤回，结果不确定时等待重启核对；
  *  - 安装回执成功还不够：必须回读到「设备上就是随包这一版」才算 SUBMITTED，回读失败或
  *    摘要不符一律 FAILED（失败原因留在 [lastFailureReason]，UI 可以显示）。
  *
- * 显式修复也走相同提交链路；Unknown 另需初始化收据过期或空闲未启动的只读证据。
- * 只在 Ultra 下工作（规范 §2.2：Normal 下不读 Lite）。全部阻塞，必须在后台线程调用。
+ * SDK 环境显式修复走相同提交链路；Unknown 另需初始化收据过期或空闲未启动的只读证据。
+ * 未决模式仅显式动作可用认证 Root 证明旧载体并更新；Normal 下不读 Lite。
+ * 全部阻塞，必须在后台线程调用。
  */
 object UltraEnvironmentUpgrade {
 
@@ -42,29 +44,88 @@ object UltraEnvironmentUpgrade {
     enum class Result { SUBMITTED, FAILED, REFUSED }
 
     private val running = AtomicBoolean(false)
-    private val observationRevision = AtomicLong()
+    private val installedKernel = UltraInstalledKernelObservation()
+    val installedKernelRevision = installedKernel.revisions
 
     /** Local identity only: no SDK probe, credential migration, root command or writes. */
     fun observationScope(context: Context): String? = runCatching {
         if (ModeRuntime.active != WorkMode.LITE || UltraRootKeyStore.isSuspended(context) ||
             LiteImplantQuiesceGate.isBlocked() || WorkModeSwitchSession.executing) return null
-        val credential = observationIdentity(UltraSdkCredentials.read(context),
-            UltraEnvironmentProbe.currentSnapshot(context).managerOwnerIdentity) ?: return null
+        val owner = UltraEnvironmentProbe.currentSnapshot().managerOwnerIdentity
+        val legacy = if (owner == null) UltraLegacyCredential.read(
+            context.getSharedPreferences("maplesu-ultra", Context.MODE_PRIVATE)) else null
+        val credential = observationIdentity(owner, legacy?.fingerprint) ?: return null
         val boot = UltraEnvironmentAutoSetup.currentBootId() ?: return null
         val submitted = context.ultraPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_SUBMITTED_BOOT, null) == boot || UltraIdleEnvironmentRecovery.submittedThisBoot(context)
         val identity = listOf(credential, boot, ModeRuntime.activation.toString(), UltraSdkBuild.BUILD_ID,
-            UltraSdkBuild.HELPER_SHA256, UltraSdkBuild.APP_VERSION, submitted.toString(), observationRevision.get().toString())
+            UltraSdkBuild.HELPER_SHA256, UltraSdkBuild.APP_VERSION, submitted.toString(), installedKernel.revision.toString())
             .joinToString(":") { "${it.length}:$it" }
         MessageDigest.getInstance("SHA-256").digest(identity.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 255) }
     }.getOrNull()
 
-    internal fun observationIdentity(key: String?, owner: UltraRuntimeClient.ManagerOwnerIdentity?): String? =
-        key?.takeIf(String::isNotBlank)?.let { "key:$it" }
-            ?: owner?.let { "owner:${it.fullUid}:${it.epoch}:${it.hostInstance}" }
+    internal fun observationIdentity(owner: UltraRuntimeClient.ManagerOwnerIdentity?, legacyFingerprint: String? = null): String? =
+        owner?.let { "owner:${it.fullUid}:${it.epoch}:${it.hostInstance}" }
+            ?: legacyFingerprint?.let { "legacy:$it" }
 
-    internal fun invalidateObservation() { observationRevision.incrementAndGet() }
+    private class CapturedIdentity(val client: UltraRuntimeClient,
+                                   val owner: UltraRuntimeClient.ManagerOwnerIdentity?,
+                                   val ownerReceipt: NativeReceipt,
+                                   val current: () -> Boolean,
+                                   val confirmed: () -> Boolean)
+
+    /** One identity owns the fact reads and install; a known Owner never falls back to Legacy. */
+    private fun captureIdentity(context: Context): CapturedIdentity {
+        val marker = UltraSdkCredentials.captureOwnerMarker(context)
+        val knownOwner = UltraEnvironmentProbe.currentSnapshot().managerOwnerIdentity
+        val base = UltraRuntimeClient().scoped(marker)
+        val observed = base.queryManagerOwnerIdentity()
+        val owner = observed.identity
+        val legacy = if (owner == null && knownOwner == null) UltraLegacyCredential.read(context) else null
+        fun current() = marker() && ModeRuntime.active == WorkMode.LITE &&
+            !LiteImplantQuiesceGate.isBlocked() && !WorkModeSwitchSession.executing &&
+            if (owner != null) owner == knownOwner else knownOwner == null && legacy?.isCurrent(context) == true
+        val client = (if (legacy == null) base else base.withLegacyCredential(legacy)).scoped(::current)
+        return CapturedIdentity(client, owner, observed.receipt, ::current, {
+            current() && base.queryManagerOwnerIdentity().identity == owner && current()
+        })
+    }
+
+    internal fun invalidateObservation() = installedKernel.invalidate()
+
+    /** Only a visible user check opens the existing authenticated partition reader. */
+    internal fun checkInstalledKernel(context: Context): Boolean {
+        requireBackground()
+        val app = context.applicationContext
+        val activation = ModeRuntime.activation
+        val boot = UltraEnvironmentAutoSetup.currentBootId() ?: return false
+        val revision = installedKernel.revision
+        val ownerCurrent = UltraSdkCredentials.captureOwnerMarker(app)
+        fun current() = revision == installedKernel.revision && ownerCurrent() &&
+            kernelUpdateScopeFailure(activation, ModeRuntime.activation, boot,
+                UltraEnvironmentAutoSetup.currentBootId(),
+                dev.maplesu.manager.runtime.HookRootExecutor.production(app).available(),
+                LiteImplantQuiesceGate.isBlocked(), WorkModeSwitchSession.executing,
+                UltraRootKeyStore.isSuspended(app)) == null
+        if (!current()) return false
+        val carrier = dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.observeInstalled(app)
+        if (carrier == null) {
+            if (current()) installedKernel.discard(revision)
+            return false
+        }
+        if (carrier.bootId != boot) return false
+        return installedKernel.publish(revision, carrier, ::current)
+    }
+
+    /** Installed bytes are separate from a current SDK owner, Root, or module capability. */
+    internal fun installedKernelKnown(context: Context): Boolean = currentInstalledKernel(context) != null
+
+    internal fun installedKernelUpdateRequired(context: Context): Boolean =
+        currentInstalledKernel(context)?.updateRequired == true
+
+    private fun currentInstalledKernel(context: Context): dev.maplesu.manager.installer.InstalledUltraCarrier? =
+        installedKernel.current()?.takeUnless { UltraRootKeyStore.isSuspended(context) }
 
     /** 进程内是否有升级正在执行（界面重建时据此恢复"升级中"）。 */
     val inProgress: Boolean get() = running.get()
@@ -79,16 +140,23 @@ object UltraEnvironmentUpgrade {
     fun readFacts(context: Context, onInstalledVersion: (String?) -> Unit = {}): UltraEnvFacts =
         readObservation(context, onInstalledVersion).first
 
-    private fun readObservation(context: Context, onInstalledVersion: (String?) -> Unit): Pair<UltraEnvFacts, InstalledIdentity?> {
+    private fun readObservation(context: Context, onInstalledVersion: (String?) -> Unit,
+                                captured: CapturedIdentity? = null): Pair<UltraEnvFacts, InstalledIdentity?> {
         requireBackground()
         if (ModeRuntime.active != WorkMode.LITE) return UltraEnvFacts() to null
         val app = context.applicationContext
-        val state = runCatching { UltraEnvironmentProbe.refresh(app, force = false) }
-            .getOrDefault(UltraEnvironmentProbe.State.Unknown)
+        runCatching { UltraEnvironmentProbe.refresh(app, force = false) }
+        val binding = captured ?: captureIdentity(app)
         val scope = observationScope(app)
-        val client = UltraSdkCredentials.client(app)
-        val key = UltraSdkCredentials.read(app)
-        val owner = if (key == null) client.queryManagerOwnerIdentity().identity else null
+        val client = binding.client
+        // A concurrent refresh may return the cached snapshot. These facts use this identity's receipt.
+        val stateReceipt = runCatching { client.environmentState() }.getOrNull()
+        val state = when (stateReceipt?.takeIf { it.succeeded }?.string("state")) {
+            "Running" -> UltraEnvironmentProbe.State.Running
+            "NotInstalled" -> UltraEnvironmentProbe.State.NotInstalled
+            "Fault" -> UltraEnvironmentProbe.State.Fault
+            else -> UltraEnvironmentProbe.State.Unknown
+        }
         val installedReceipt = runCatching { client.installedEnvironmentVersion() }.getOrNull()
         val installedVersion = versionOf(installedReceipt)
         onInstalledVersion(installedVersion)
@@ -117,9 +185,7 @@ object UltraEnvironmentUpgrade {
             observationScope = scope,
             freshKernelInstall = versions.freshKernelInstall && identity?.known != true,
         )
-        val checked = if (scope != null && scope == observationScope(app) &&
-            (key != null || owner != null && owner == UltraEnvironmentProbe.currentSnapshot(app).managerOwnerIdentity &&
-                owner == client.queryManagerOwnerIdentity().identity)) facts
+        val checked = if (scope != null && scope == observationScope(app) && binding.confirmed()) facts
             else facts.copy(quiescing = true, readUnknown = true, observationScope = null)
         return checked to identity
     }
@@ -147,7 +213,9 @@ object UltraEnvironmentUpgrade {
         var phase = "preflight"
         try {
             recordStatus(app, phase)
-            if (ModeRuntime.active != WorkMode.LITE)
+            val installActivation = ModeRuntime.activation
+            val installMode = (installActivation as? ModeActivation.Active)?.mode
+            if (installMode != null && installMode != WorkMode.LITE)
                 return preflightRefused(app, phase, "PREFLIGHT_MODE_NOT_LITE")
             if (dev.maplesu.manager.runtime.HookRootExecutor.production(app).available())
                 return preflightRefused(app, phase, "PREFLIGHT_HOOK_ACTIVE")
@@ -159,22 +227,30 @@ object UltraEnvironmentUpgrade {
                 return preflightRefused(app, phase, "PREFLIGHT_SUSPENDED")
             if (submittedThisBoot(app))
                 return preflightRefused(app, phase, "PREFLIGHT_SUBMITTED_THIS_BOOT")
-            // A newer helper cannot repair a retired executor retained in boot. Check only
-            // this explicit action, before another SDK call can execute through that kernel.
-            if (dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.required(app)) {
-                phase = "kernel"
-                return submitKernelUpdate(app)
-            }
-            val installKey = UltraSdkCredentials.read(app)
             val installBoot = UltraEnvironmentAutoSetup.currentBootId()
                 ?: return preflightRefused(app, phase, "PREFLIGHT_BOOT_UNAVAILABLE")
-            val installActivation = ModeRuntime.activation
-            val client = UltraSdkCredentials.client(app, installKey, installBoot)
-            val installOwner = if (installKey == null) {
-                val observedOwner = client.queryManagerOwnerIdentity()
-                observedOwner.identity ?: return preflightRefused(app, phase,
-                    "PREFLIGHT_OWNER_UNCONFIRMED:${observedOwner.receipt.sdkError}:${observedOwner.receipt.sdkErrorCode}")
-            } else null
+            // A newer helper cannot repair a retired executor retained in boot. Check only
+            // this explicit action, before another SDK call can execute through that kernel.
+            if (installMode == null) {
+                val refusal = unresolvedKernelPreflight(installMode, carrier = {
+                    val observed = dev.maplesu.manager.installer.InstallerServiceClient.observeBootChain(app)
+                    dev.maplesu.manager.installer.InstallerServiceClient.installedCarrierPartition(app, observed)
+                }, required = {
+                    dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.required(app)
+                })
+                if (refusal != null) return preflightRefused(app, phase, refusal)
+                phase = "kernel"
+                return submitKernelUpdate(app, installActivation, installBoot)
+            }
+            if (dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.required(app)) {
+                phase = "kernel"
+                return submitKernelUpdate(app, installActivation, installBoot)
+            }
+            val binding = captureIdentity(app)
+            val client = binding.client
+            val installOwner = binding.owner
+            if (!binding.current()) return preflightRefused(app, phase,
+                "PREFLIGHT_OWNER_UNCONFIRMED:${binding.ownerReceipt.sdkError}:${binding.ownerReceipt.sdkErrorCode}")
             UltraInstalledIdentityProbe.invalidate()
             // Available（同版本新构建）与 Unverified（身份读不到，重装写身份）都允许提交；
             // quiescing / 暂停 / 未运行 / 管理器降级 一律拒绝，不产生任何写调用。
@@ -185,14 +261,14 @@ object UltraEnvironmentUpgrade {
                     recordStatus(app, phase, "REPAIR_STATE_${state.name}")
                     return Result.REFUSED
                 }
-                val (facts, identity) = readObservation(app, {})
-                // Version/identity reads already used the captured credential. A diagnostic
+                val (facts, identity) = readObservation(app, {}, binding)
+                // Version/identity reads already used the captured installation identity. A diagnostic
                 // kernel EXEC test is not an installation prerequisite; the installer owns
                 // the actual operation and returns its failure without changing the state.
                 val completedBoot = state == UltraEnvironmentProbe.State.Unknown &&
                     completedBootRepairEvidence(app, client)
                 if (!faultRepairAllowed(state.name, facts, completedBoot,
-                        identity, UltraInstalledIdentityProbe.installedHelperPath(installKey)
+                        identity, UltraInstalledIdentityProbe.installedHelperPath()
                             ?: identity?.helperPath?.takeIf { installOwner != null }, installBoot,
                         kernelRootVerified = UltraEnvironmentProbe.isKernelRootVerified(app))) {
                     val reason = "REPAIR_FACTS_STATE_${state.name}:running=${facts.running}" +
@@ -205,14 +281,13 @@ object UltraEnvironmentUpgrade {
                     Log.w(TAG, reason)
                     return Result.REFUSED
                 }
-            } else if (!upgradeAllowed(UltraEnvUpgradePolicy.decide(readFacts(app)))) {
+            } else if (!upgradeAllowed(UltraEnvUpgradePolicy.decide(readObservation(app, {}, binding).first))) {
                 return Result.REFUSED
             }
             // Fact reads can take time; do not submit if a switch/pause started meanwhile.
-            if (ModeRuntime.active != WorkMode.LITE || ModeRuntime.activation != installActivation ||
+            if (ModeRuntime.active != WorkMode.LITE || ModeRuntime.activation !== installActivation ||
                 LiteImplantQuiesceGate.isBlocked() || WorkModeSwitchSession.executing || UltraRootKeyStore.isSuspended(app) ||
-                UltraSdkCredentials.read(app) != installKey || UltraEnvironmentAutoSetup.currentBootId() != installBoot ||
-                (installOwner != null && client.queryManagerOwnerIdentity().identity != installOwner)) {
+                UltraEnvironmentAutoSetup.currentBootId() != installBoot || !binding.confirmed()) {
                 if (repairFault) recordStatus(app, phase, "REPAIR_SCOPE_CHANGED")
                 return Result.REFUSED
             }
@@ -269,34 +344,71 @@ object UltraEnvironmentUpgrade {
         runCatching { Log.w(TAG, "upgrade refused phase=$phase reason=$reason") }
     }
 
-    private fun submitKernelUpdate(context: Context): Result {
-        if (ModeRuntime.active != WorkMode.LITE)
-            return preflightRefused(context, "kernel", "KERNEL_PREFLIGHT_MODE_NOT_LITE")
-        if (LiteImplantQuiesceGate.isBlocked())
-            return preflightRefused(context, "kernel", "KERNEL_PREFLIGHT_QUIESCING")
-        if (WorkModeSwitchSession.executing)
-            return preflightRefused(context, "kernel", "KERNEL_PREFLIGHT_SWITCH_PENDING")
-        if (UltraRootKeyStore.isSuspended(context))
-            return preflightRefused(context, "kernel", "KERNEL_PREFLIGHT_SUSPENDED")
-        val bootId = UltraEnvironmentAutoSetup.currentBootId()
-            ?: return preflightRefused(context, "kernel", "KERNEL_PREFLIGHT_BOOT_UNAVAILABLE")
+    /** Root/read failures propagate; an unproven carrier is never a fresh-install fallback. */
+    internal fun unresolvedKernelPreflight(mode: WorkMode?, carrier: () -> String?, required: () -> Boolean): String? {
+        if (mode != null) return "PREFLIGHT_MODE_NOT_UNRESOLVED"
+        if (carrier() == null) return "PREFLIGHT_ULTRA_CARRIER_UNPROVEN"
+        if (!required()) return "PREFLIGHT_KERNEL_CURRENT_OWNER_UNCONFIRMED"
+        return null
+    }
+
+    internal fun kernelUpdateScopeFailure(expectedActivation: ModeActivation, activation: ModeActivation,
+                                         expectedBoot: String, boot: String?, hookActive: Boolean,
+                                         quiescing: Boolean, switching: Boolean, suspended: Boolean): String? = when {
+        activation !== expectedActivation -> "KERNEL_PREFLIGHT_ACTIVATION_CHANGED"
+        (activation as? ModeActivation.Active)?.mode?.let { it != WorkMode.LITE } == true -> "KERNEL_PREFLIGHT_MODE_NOT_LITE"
+        boot == null -> "KERNEL_PREFLIGHT_BOOT_UNAVAILABLE"
+        boot != expectedBoot -> "KERNEL_PREFLIGHT_BOOT_CHANGED"
+        hookActive -> "KERNEL_PREFLIGHT_HOOK_ACTIVE"
+        quiescing -> "KERNEL_PREFLIGHT_QUIESCING"
+        switching -> "KERNEL_PREFLIGHT_SWITCH_PENDING"
+        suspended -> "KERNEL_PREFLIGHT_SUSPENDED"
+        else -> null
+    }
+
+    private fun submitKernelUpdate(context: Context, activation: ModeActivation, bootId: String): Result {
+        fun scopeFailure(): String? = kernelUpdateScopeFailure(activation, ModeRuntime.activation,
+            bootId, UltraEnvironmentAutoSetup.currentBootId(),
+            dev.maplesu.manager.runtime.HookRootExecutor.production(context).available(),
+            LiteImplantQuiesceGate.isBlocked(), WorkModeSwitchSession.executing, UltraRootKeyStore.isSuspended(context))
+        scopeFailure()?.let { return preflightRefused(context, "kernel", it) }
+        if (submittedThisBoot(context))
+            return preflightRefused(context, "kernel", "KERNEL_PREFLIGHT_SUBMITTED_THIS_BOOT")
         val prefs = context.ultraPreferences(PREFS, Context.MODE_PRIVATE)
         if (!prefs.edit().putString(KEY_SUBMITTED_BOOT, bootId).commit())
             return preflightRefused(context, "kernel", "KERNEL_PREFLIGHT_MARKER_COMMIT_FAILED")
         val taskId = java.util.UUID.randomUUID().toString()
+        var selectedTask = taskId
         recordStatus(context, "kernel")
-        val result = com.maplesu.core.ui.util.installUltraKernelUpdate(taskId)
+        var scopeRefusal: String? = null
+        val result = try {
+            com.maplesu.core.ui.util.installUltraKernelUpdate(taskId, onTaskSelected = { selectedTask = it }, verifyScope = {
+                scopeFailure()?.let { reason ->
+                    scopeRefusal = reason
+                    error(reason)
+                }
+            })
+        } catch (error: Exception) {
+            val refusal = scopeRefusal ?: throw error
+            prefs.edit().remove(KEY_SUBMITTED_BOOT).commit()
+            return preflightRefused(context, "kernel", refusal)
+        }
         if (result.code != 0 || result.outcome != com.maplesu.core.ui.util.FlashOutcome.WRITTEN) {
             if (result.outcome != com.maplesu.core.ui.util.FlashOutcome.RECOVERY_REQUIRED &&
                 result.outcome != com.maplesu.core.ui.util.FlashOutcome.WRITTEN) {
                 prefs.edit().remove(KEY_SUBMITTED_BOOT).commit()
             }
-            recordStatus(context, "kernel", result.err.ifBlank { "ULTRA_KERNEL_UPGRADE_FAILED" })
+            if (scopeRefusal != null && result.outcome != com.maplesu.core.ui.util.FlashOutcome.RECOVERY_REQUIRED &&
+                result.outcome != com.maplesu.core.ui.util.FlashOutcome.WRITTEN)
+                return preflightRefused(context, "kernel", requireNotNull(scopeRefusal))
+            val reason = listOfNotNull(scopeRefusal, result.err.ifBlank { "ULTRA_KERNEL_UPGRADE_FAILED" })
+                .joinToString(":")
+            recordStatus(context, "kernel", reason)
             return Result.FAILED
         }
         recordStatus(context, "kernel_verified")
         val rebootRequested = runCatching {
-            dev.maplesu.manager.installer.InstallerServiceClient.rebootAfterInstallation(context, taskId)
+            dev.maplesu.manager.installer.InstallerServiceClient.rebootAfterInstallation(context, selectedTask)
         }.getOrDefault(false)
         if (!rebootRequested) {
             recordStatus(context, "kernel_awaiting_reboot")
@@ -342,7 +454,7 @@ object UltraEnvironmentUpgrade {
 
     private fun completedBootRepairEvidence(context: Context, client: UltraRuntimeClient): Boolean {
         val bootId = UltraEnvironmentAutoSetup.currentBootId() ?: return false
-        val helper = UltraInstalledIdentityProbe.installedHelperPath(UltraSdkCredentials.read(context))
+        val helper = UltraInstalledIdentityProbe.installedHelperPath()
             ?: UltraInstalledIdentityProbe.read(context, client, force = true)
                 .takeIf { it.source == Source.Readback && it.bootId == bootId }?.helperPath
             ?: return false

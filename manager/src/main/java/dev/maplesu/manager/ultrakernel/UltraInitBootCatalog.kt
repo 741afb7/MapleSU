@@ -190,7 +190,7 @@ internal object UltraInitBootCatalog {
     }
 
     private fun targetMismatch(reason: String): Boolean = reason.startsWith("ULTRA_INIT_TARGET_") ||
-        reason == "ULTRA_INIT_DYNAMIC_CREDENTIAL_TEMPLATE" || reason.startsWith("ULTRA_INIT_TASK_PROFILE_TARGET_PROOFS:")
+        reason == "ULTRA_INIT_KEYLESS_TEMPLATE_REQUIRED" || reason.startsWith("ULTRA_INIT_TASK_PROFILE_TARGET_PROOFS:")
 
     private fun json(bytes: ByteArray): JsonObject = try {
         Json.parseToJsonElement(bytes.decodeToString(throwOnInvalidSequence = true)).jsonObject

@@ -79,7 +79,7 @@ int main(int argc, char** argv) {
     const unsigned reg = unsigned(std::stoul(argv[3]));
     failure = argc > 4 ? argv[4] : "";
 #ifdef MAPLESU_FRAME_TEST_CONSUMERS
-    test_frame_context(mode == "compat-owner" ? 1 : 0,
+    test_frame_context(mode == "compat-owner" ? 1 : 4,
                        mode == "compat-begin" ? 1 : mode == "compat-update" ? 2 : 0);
     if (mode == "compat-exec") failure = "exec";
 #endif

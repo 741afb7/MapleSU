@@ -39,7 +39,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -361,7 +360,7 @@ fun SuperUserPagerMiuix(
                             enter = fadeIn() + expandVertically(),
                             exit = fadeOut() + shrinkVertically()
                         ) {
-                            Column {
+                            Column(modifier = Modifier.animateItem()) {
                                 GroupItem(
                                     group = group,
                                     onToggleExpand = {
@@ -402,7 +401,6 @@ fun SuperUserPagerMiuix(
         val layoutDirection = LocalLayoutDirection.current
         val lazyListState = rememberLazyListState()
         searchStatus.SearchBox {
-            val refreshTick = remember { mutableIntStateOf(0) }
             val latestGroupedApps = rememberUpdatedState(uiState.groupedApps)
             val latestRefreshing = rememberUpdatedState(uiState.isRefreshing)
             ScrollToTopOnChange(
@@ -410,7 +408,6 @@ fun SuperUserPagerMiuix(
                 uiState.sortConfig,
                 uiState.showSystemApps,
                 uiState.showOnlyPrimaryUserApps,
-                refreshTick.intValue,
                 isBusy = { latestRefreshing.value },
             ) { latestGroupedApps.value }
             val pullToRefreshState = rememberPullToRefreshState()
@@ -427,7 +424,6 @@ fun SuperUserPagerMiuix(
                 pullToRefreshState = pullToRefreshState,
                 onRefresh = {
                     actions.onRefresh()
-                    refreshTick.intValue++
                 },
                 refreshTexts = refreshTexts,
                 contentPadding = PaddingValues(
@@ -480,7 +476,7 @@ fun SuperUserPagerMiuix(
                         }
                         items(uiState.groupedApps, key = { it.uid }, contentType = { "group" }) { group ->
                             val expanded = expandedUids.value.contains(group.uid)
-                            Column {
+                            Column(modifier = Modifier.animateItem()) {
                                 GroupItem(
                                     group = group,
                                     onToggleExpand = {

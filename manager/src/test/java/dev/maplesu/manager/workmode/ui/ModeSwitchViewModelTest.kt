@@ -1,6 +1,7 @@
 package dev.maplesu.manager.workmode.ui
 
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModel
 import dev.maplesu.manager.installer.BaselineProvisionOutcome
 import dev.maplesu.manager.installer.BaselineProvisioner
 import dev.maplesu.manager.workmode.ModeRuntime
@@ -34,39 +35,38 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 
-@OptIn(ExperimentalCoroutinesApi::class)
 class ModeSwitchViewModelTest {
     private val store = ViewModelStore()
     private val directories = mutableListOf<File>()
 
     @Before fun setUp() {
-        Dispatchers.setMain(UnconfinedTestDispatcher())
         ModeRuntime.resetForTest()
         WorkModeSwitchSession.finish(SwitchOutcome.Blocked("", "", emptyList()))
     }
 
     @After fun tearDown() {
         store.clear()
-        Dispatchers.resetMain()
         ModeRuntime.resetForTest()
         WorkModeSwitchSession.finish(SwitchOutcome.Blocked("", "", emptyList()))
         directories.forEach { it.deleteRecursively() }
     }
 
     private fun keep(model: ModeSwitchViewModel): ModeSwitchViewModel = model.also {
+        // Transfer lifecycle's own closeable scope before the first launch; store.clear cancels it.
+        val scopeKey = "androidx.lifecycle.viewmodel.internal.ViewModelCoroutineScope.JOB_KEY"
+        val owner = object : ViewModel(CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)) {}
+        it.addCloseable(scopeKey, requireNotNull(owner.getCloseable<AutoCloseable>(scopeKey)))
         store.put(UUID.randomUUID().toString(), it)
     }
 
@@ -194,7 +194,7 @@ class ModeSwitchViewModelTest {
         model.retry()
         finished(model)
         assertEquals(2, harness.leaseCalls)
-        assertEquals(2, harness.client.preflightCalls)
+        assertEquals(0, harness.client.preflightCalls)
         assertEquals(0, harness.client.mutations)
     }
 
@@ -282,7 +282,7 @@ class ModeSwitchViewModelTest {
         model.retry()
         finished(model)
         assertEquals(1, harness.client.beginCalls)
-        assertEquals(1, harness.client.preflightCalls)
+        assertEquals(0, harness.client.preflightCalls)
         assertTrue(WorkModeSwitchSession.pending)
     }
 
@@ -311,7 +311,7 @@ class ModeSwitchViewModelTest {
             finished(model)
             assertTrue(harness.client.statusCalls > reads)
             assertEquals(1, harness.client.beginCalls)
-            assertEquals(1, harness.client.preflightCalls)
+            assertEquals(0, harness.client.preflightCalls)
             assertEquals(id, WorkModeSwitchSession.switchId)
             assertTrue(WorkModeSwitchSession.pending)
             assertFalse(model.uiState.value.hasServiceRecord)

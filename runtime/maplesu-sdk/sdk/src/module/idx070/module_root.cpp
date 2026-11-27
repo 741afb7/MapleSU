@@ -30,7 +30,6 @@
 #include "cgroup_v2_self.h"
 #include "selinux_procattr_util.h"
 
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
 
 // CLONE_NEWNS：bionic <sched.h> 不导出该宏（linux/sched.h 才是 0x00020000），
 static constexpr int kCloneNewNs = 0x00020000;
@@ -298,7 +297,7 @@ static KModErr set_current_root_impl(bool bypass_selinux, bool preserve_session)
             if (is_failed(err)) return finish(err);
         }
 
-        if (bypass_selinux) {
+        if (bypass_selinux && !managed) {
             result.phase = "process_name";
             err = set_current_name_bypass_selinux();
             if (is_failed(err)) return finish(err, errno);
@@ -388,13 +387,6 @@ KModErr set_current_root(bool bypass_selinux) {
     return set_current_root_impl(bypass_selinux, false);
 }
 
-KModErr set_current_root_for_su(const char* root_key) {
-    if (!root_key || strnlen(root_key, 49) != 48) return KModErr::ERR_MODULE_ROOT_KEY;
-    const auto selected = kernel_module::maplesu_request_set_auth_mode(kernel_module::RequestAuthMode::LegacyKey);
-    if (is_failed(selected)) return selected;
-    __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
-    return set_current_root_impl(true, true);
-}
 
 // T default_modules::module_root::set_current_caps(const kernel_module::caps_info& caps)
 // 取 4 个偏移 → PatchBase + PatchCurrent → PatchCurrent::set_current_caps(caps)。

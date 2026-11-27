@@ -311,3 +311,50 @@ python3 scripts/check-ultra-kernel-config.py out/.config --target-kmi
 该报告设备的 `pstore` 为空，日志取自 `expdb`；确认目标确有此分区并具备读取条件后，可执行 `dd if=/dev/block/by-name/expdb of=/data/local/tmp/expdb.bin bs=1M` 再搜索 panic 前的首个加载错误。其他设备按其实际日志来源排查，不把返回 fastboot 一律归因于 BTF。
 
 源码依据：ACK commit `105b5745f1d771060aa9fb7f75821f69bb2298fd` 的 `lib/Kconfig.debug:412–427`、`kernel/bpf/btf.c:8001–8033`、`kernel/module/version.c:13–106`、`kernel/module/main.c:3247–3253`；项目路由依据：main commit `e8b8a16312e5d3c25b1cfadc30d6f51915ec815f` 的 `runtime/ultra/boot/init-bridge/target_kmi.py:550–584`；设备记录见 Issue #15。
+
+## 13. 自编译内核的配置与模块 BTF 诊断（2026-11-27）
+
+自编译内核应核对实际内核、所用模块和布局生产路线。`.config` 只能说明启用的配置；pahole 版本不同并不自动证明所有厂商模块 BTF 失配，也不证明内核必然启动失败。保留实际镜像、模块、构建配置与失败控制台的对应关系。
+
+| 配置项 | 何时需要核对 | 判断边界 |
+|---|---|---|
+| `CONFIG_MODVERSIONS` | 所选模块 ABI 使用符号版本时 | 内核与模块的版本策略及导出 CRC 必须一致；不把 `y` 作为全部修补路线的前置。 |
+| `CONFIG_DEBUG_INFO_BTF` | 所选布局生产器依赖 vmlinux BTF 时 | 仅启用配置不证明目标 BTF 内容有效；现有目标解析和字段验证继续执行。无 BTF 路线仍需满足其自身事实来源。 |
+| `CONFIG_DEBUG_INFO_BTF_MODULES` | 实际加载带 split BTF 的模块时 | 此项与 vmlinux BTF、模块支持及工具链共同决定模块 BTF 生成；仅检查 `DEBUG_INFO_BTF=y` 不足以判定模块校验路径。 |
+| `CONFIG_MODULE_ALLOW_BTF_MISMATCH` | 模块 BTF 校验已开启，且实际内核与模块的 BTF 已确认失配时 | 上游默认返回校验错误；启用此选项可以忽略失配的模块 BTF。它不修复 BTF，不代替模块 ABI、签名或实际加载验证。已匹配 BTF 及未启用模块 BTF 的路线无需因本文强制打开此项。 |
+
+该分支依据 Linux v6.6 的 `lib/Kconfig.debug` 中上述配置依赖及 `kernel/bpf/btf.c` 的 `btf_module_notify()` 实现。固定 KernelSU 的模块选择与实际加载结果继续作为对照；本脚本不更改任何内核、模块或运行时校验。
+
+问题 #15 的报告设备为 vivo PD2509 / MT6993，内核 `6.12.58-android16-6-g0a092cc0037a-abogki521987229-4k`。报告者从 expdb 取得以下失败链，并报告启用容错后启动成功；这是该设备的报告证据，本轮未重新刷机复现：
+
+```text
+BPF: [161701] Invalid name_offset:274525858
+failed to validate module [drm_dma_helper] BTF: -2222
+init: Failed to load kernel modules
+Kernel panic - not syncing: Attempted to kill init! exitcode=0x00007f0000
+```
+
+应先保存实际失败模块和 vmlinux BTF，核对构建工具与配套模块。可重建匹配的内核/模块，或在接受模块 BTF 缺失这一行为的构建中显式选用上游容错配置；不要把容错当作所有自编内核的通用要求。未启用容错时，模块校验错误是否导致整机重启还取决于 init 对该模块加载失败的处理。
+
+配置检查使用实际选中路线的要求：
+
+```bash
+# 默认仅做配置诊断，不断言 BTF 失配，也不证明设备可启动。
+python3 scripts/check-ultra-kernel-config.py out/.config
+
+# 仅在所选布局生产器依赖 BTF、模块 ABI 依赖符号版本时添加对应断言。
+python3 scripts/check-ultra-kernel-config.py out/.config --require-btf --require-modversions
+
+# 仅在实际内核/模块对已确认 BTF 失配后检查是否存在已知加载阻断条件。
+python3 scripts/check-ultra-kernel-config.py out/.config --module-btf-mismatch
+```
+
+脚本保留 `ULTRA_KERNEL_CONFIG_OK` / `ULTRA_KERNEL_CONFIG_UNSAFE` 输出：前者仅表示本次请求的配置断言通过，后者列出具体未满足项。BTF 配对未知时明确输出 unknown，不从 `.config` 猜测失配；实际目标 ABI、BTF 内容、模块签名、容器回读和设备启动另行验证。
+
+MTK 的失败启动日志可能保存在 `expdb` 分区，`pstore` 为空不等于没有内核失败。若该设备存在 `/dev/block/by-name/expdb`，可在可访问设备的环境中读取并保存，例如：
+
+```bash
+dd if=/dev/block/by-name/expdb of=/data/local/tmp/expdb.bin bs=1M
+```
+
+保留原始文件后搜索 `failed to validate module`、`Failed to load kernel modules` 与 `Kernel panic`，按时间和模块名关联同次启动；分区名及日志保留策略以实际设备为准。

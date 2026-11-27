@@ -20,7 +20,8 @@ out.mkdir(parents=True, exist_ok=False)
 sources = [sdk / 'src/helper/bootstrap_runtime.cpp', sdk / 'src/helper/private/bootstrap_runtime.h',
            sdk / 'include/maplesu_storage_worker_private.h', sdk / 'include/maplesu_storage_private.h',
            sdk / 'include/maplesu_request_private.h', sdk / 'src/maplesu/install/lifecycle.h',
-           here / 'worker_boundary.cpp', here / 'worker_boundary.h', here / 'test_single_close.cpp']
+           here / 'worker_boundary.cpp', here / 'worker_boundary.h', here / 'test_single_close.cpp',
+           here / 'test_worker_modes.cpp']
 inputs = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
 (out / 'INPUTS.json').write_text(json.dumps(inputs, indent=2), encoding='utf-8')
 version = re.search(r'kSdkVersionText\[\] = "(\d+)\.(\d+)\.(\d+)"', sources[5].read_text()).groups()
@@ -51,6 +52,11 @@ compile_args = ['g++', '-std=c++20', '-O1', '-Wall', '-Wextra', '-Werror',
 try:
     run('host-compile', [*container, '-c', 'exec "$@"', 'sh', *compile_args])
     run('cases', [*container, '-c', 'exec ./single-close'])
+    modes_args = [part.replace('test_single_close.cpp', 'test_worker_modes.cpp')
+                  if isinstance(part, str) else part for part in compile_args]
+    modes_args[-1] = 'worker-modes'
+    run('worker-modes-compile', [*container, '-c', 'exec "$@"', 'sh', *modes_args])
+    run('worker-modes', [*container, '-c', 'exec ./worker-modes'])
     ndk = Path('D:/Maple_Env/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/windows-x86_64/bin')
     run('android-compile', [ndk / 'clang++.exe', '--target=aarch64-linux-android21', '-std=c++20', '-Oz',
         '-fPIC', '-fexceptions', '-I' + str(out), '-I' + str(sdk / 'src/helper'),
@@ -58,6 +64,6 @@ try:
         '-c', sdk / 'src/helper/bootstrap_runtime.cpp', '-o', out / 'bootstrap_runtime.android.o'])
 finally:
     stable = all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest for path, digest in inputs.items())
-    (out / 'RESULT.json').write_text(json.dumps({'passed': len(commands) == 3 and
+    (out / 'RESULT.json').write_text(json.dumps({'passed': len(commands) == 5 and
         all(command['exitCode'] == 0 for command in commands) and stable, 'sourceInputsStable': stable,
         'commands': commands, 'scope': 'Complete bootstrap_runtime TU and actual WorkerScope; injected kernel/storage/module callback boundaries, Linux process, Android API21 compile only. No full SDK/helper link, boot or device.'}, indent=2), encoding='utf-8')

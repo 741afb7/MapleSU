@@ -118,11 +118,27 @@ class HomeEnvironmentInheritanceDisplayTest {
         assertEquals(HomeEnvironmentFailure.UNCONFIRMED, settled.environmentFailure)
     }
 
-    @Test fun cachedBrandWaitsForHiddenConfirmationNotRuntimeActivation() {
+    @Test fun recognizedInstalledCarrierClearsUnknownWithoutGrantingManagerOrRoot() {
+        val installed = state(WorkMode.LITE).copy(liteInstalled = true,
+            environmentFailure = HomeEnvironmentFailure.UNCONFIRMED).afterEnvironmentCheck(
+            modeResolved = false, detectionComplete = true, detectionFailure = null,
+            detectedState = dev.maplesu.manager.workmode.detect.ModeState.MODE_A_INSTALLED_UNBOUND,
+        )
+        assertNull(installed.environmentFailure)
+        assertFalse(installed.showEnvironmentStatusCard)
+        assertTrue(installed.showInstalledStatus)
+        assertFalse(installed.isManager)
+        assertFalse(installed.isRootAvailable)
+        assertNull(installed.ksuVersion)
+        assertFalse(installed.environmentChecking)
+    }
+
+    @Test fun verifiedInstalledBrandWaitsForHiddenConfirmationNotRuntimeActivation() {
         for (mode in WorkMode.entries) {
             for (hidden in listOf(false, true)) {
                 for (confirming in listOf(false, true)) {
-                    val facts = homeUltraBrandFacts(HomeWorkModeSwitchState.HIDDEN, hidden, confirming, mode)
+                    val facts = homeUltraBrandFacts(HomeWorkModeSwitchState.HIDDEN, hidden, confirming, mode,
+                        environmentInstalled = true)
                     assertEquals(mode == WorkMode.LITE && !hidden && !confirming, shouldShowUltraBrand(facts))
                 }
             }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a Ultra kernel spec for a stock boot image and a 48 byte credential.
+"""Generate a keyless Ultra kernel spec from a stock boot image.
 
 The applier (``UltraKernelSpec`` / ``UltraKernelBuilder``) consumes ``offset|orig|repl`` records that
 are pinned to one kernel build. This tool produces those records for *any* kernel build:
@@ -13,8 +13,8 @@ in the receipt is computed from the data that was just produced.
 
 Usage
 -----
-    make_spec.py --boot Ace6/boot.img --credential 8eOR... --out k22.spec
-    make_spec.py --boot Ace6/boot.img --credential-file cred.txt --out k22.spec --receipt r.json
+    make_spec.py --boot Ace6/boot.img --out k22.spec
+    make_spec.py --boot Ace6/boot.img --out k22.spec --receipt r.json
     make_spec.py --self-check                    # reproduces the shipped k22 on 6.6.89
 
 Exit codes: 0 ok, 2 self-check failed, 3 input/recipe error.
@@ -324,8 +324,6 @@ def main(argv=None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--boot", type=Path, help="stock boot image (read only)")
     parser.add_argument("--kernel", type=Path, help="raw ARM64 Image, instead of --boot")
-    parser.add_argument("--credential", help="48 ASCII alphanumerics")
-    parser.add_argument("--credential-file", type=Path)
     parser.add_argument("--recipe", type=Path, default=DEFAULT_RECIPE)
     parser.add_argument("--symbols", type=Path,
                         help="pre-decoded offset<TAB>type<TAB>name dump (else decode the image)")
@@ -354,10 +352,8 @@ def main(argv=None) -> int:
     try:
         if not args.out:
             raise Failure("--out is required")
-        credential = read_credential(args)
-        check_credential(credential, 48)
         from specgen import product
-        return product.generate(args, credential)
+        return product.generate(args)
     except (Failure, RecipeError, RuntimeError, OSError, ValueError) as error:
         print("ERROR %s" % error, file=sys.stderr)
         return 3

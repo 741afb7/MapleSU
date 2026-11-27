@@ -3,9 +3,8 @@
 #include <cstring>
 
 namespace default_modules::module_root {
-// Dedicated legacy su process: retain its PTY/session and cancellation signals,
+// Dedicated su process: retain its PTY/session and cancellation signals,
 // while sharing the real SDK credential, namespace, cgroup and domain setup.
-KModErr set_current_root_for_su(const char* root_key);
 // Local diagnostics for one composite call; each transaction receipt is copied
 // before later operations can replace the last wire response.
 struct RootTransitionResult {
@@ -16,7 +15,7 @@ struct RootTransitionResult {
     int system_error = 0;
     int threads_total = 0, cpuset_moved = 0, stune_moved = 0, cgroup_error = 0;
     bool owner_mode = false;
-    // Transport choice is independent of Manager identity; Key can use it too.
+    // The transport selector is independent of actual Manager identity.
     bool credentials_managed = false;
     bool credentials_attempted = false;
     // A COMMITTED effect remains authoritative even when the command reports

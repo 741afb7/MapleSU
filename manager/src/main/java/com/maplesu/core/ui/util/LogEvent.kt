@@ -16,7 +16,6 @@ import java.io.PrintWriter
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import dev.maplesu.manager.runtime.ultra.UltraBugreportDiagnostics
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
@@ -69,9 +68,8 @@ fun getBugreportFile(context: Context, includePrivileged: Boolean = true,
             appendLine("identityRecovery=${recovery.getString("result", "NOT_OBSERVED")}")
             appendLine("identityRecoveryBoot=${recovery.getString("boot", null)}")
             appendLine("identityRecoveryAtMs=${recovery.getLong("at", 0L)}")
-            appendLine("backupPath=${dev.maplesu.manager.runtime.ultra.UltraRecoveryKeyStore.PATH}")
-            appendLine("backupResult=${recovery.getString("backup", "NOT_OBSERVED")}")
-            appendLine("backupAtMs=${recovery.getLong("backupAt", 0L)}")
+            appendLine("managerOwnerIdentity=${UltraEnvironmentProbe.currentSnapshot(context).managerOwnerIdentity}")
+            appendLine("installedHelperPath=${dev.maplesu.manager.runtime.ultra.UltraInstalledIdentityProbe.installedHelperPath().orEmpty()}")
         })
     }.onFailure { android.util.Log.w("LogEvent", "App boot diagnostics failed", it) }
 
@@ -133,14 +131,14 @@ fun getBugreportFile(context: Context, includePrivileged: Boolean = true,
 
     runCatching {
         UltraBugreportDiagnostics.collect(bugreportDir, ultraBackend) {
-            val client = UltraRuntimeClient { UltraRootKeyStore.read(context) }
+            val client = UltraRuntimeClient()
             object : UltraBugreportDiagnostics.Port {
                 override fun sdkBuildIdentity() = client.sdkBuildIdentity()
                 override fun environment() = client.environmentState()
                 override fun authorizations() = client.suAuthSnapshot()
                 override fun rootCommand(command: String) = client.runRootCommand(command)
                 override fun installedHelperPath() = dev.maplesu.manager.runtime.ultra.UltraInstalledIdentityProbe
-                    .installedHelperPath(UltraRootKeyStore.read(context))
+                    .installedHelperPath()
                 override fun selfSu(): Pair<Int?, String?> {
                     val channel = UltraSuChannel()
                     return channel.rootUid() to channel.lastFailure
@@ -212,8 +210,7 @@ fun getBugreportFile(context: Context, includePrivileged: Boolean = true,
     val current = LocalDateTime.now().format(formatter)
 
     val targetFile = File(context.cacheDir, "MapleSU_bugreport_${current}_${bugreportDir.name.removePrefix("bugreport-")}.tar.gz")
-    val knownSecrets = listOfNotNull(runCatching { UltraRootKeyStore.read(context) }.getOrNull())
-    BugreportArchive.pack(bugreportDir, targetFile, knownSecrets)
+    BugreportArchive.pack(bugreportDir, targetFile, emptyList())
 }
 
 fun saveBugreport(context: Context, uri: Uri, includePrivileged: Boolean = true,

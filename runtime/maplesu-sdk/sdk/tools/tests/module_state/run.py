@@ -46,6 +46,7 @@ def main():
               '--tmpfs', '/tmp:rw,size=128m', '--tmpfs', '/data:rw,size=32m,mode=0777',
               '--mount', 'type=bind,source=' + str(SDK) + ',target=/sdk,readonly',
               '--mount', 'type=bind,source=' + str(pro_include) + ',target=/upstream-include,readonly',
+              '--mount', 'type=bind,source=' + str(SDK.parents[1] / 'ultra') + ',target=/ultra,readonly',
               '--mount', 'type=bind,source=' + str(out) + ',target=/work', '-w', '/work',
               '--entrypoint', '/bin/sh', IMAGE]
     fixtures = '/sdk/tools/tests/module_state/'
@@ -53,15 +54,23 @@ def main():
                                             'list_bindings.cpp', 'zip_boundary.cpp']]
     host_cpp += ['/sdk/src/maplesu/module/' + name for name in ['list.cpp', 'install.cpp', 'state.cpp']]
     host_cpp += ['/sdk/' + FORK_SOURCE.relative_to(SDK).as_posix()]
+    host_cpp += ['/sdk/src/module_base/module_base_disk_storage.cpp']
     host_argv = ['g++', '-std=c++20', '-O1', '-g', '-ffunction-sections', '-fdata-sections', '-Wno-packed',
                  '-I' + fixtures + 'include', '-I' + fixtures, '-I/sdk/src/maplesu/module',
                  '-I/upstream-include', '-I/sdk/include', '-I/sdk/third_party/libzip/1.0.1/lib',
                  '-I/sdk/third_party/libzip/1.0.1/config', *host_cpp,
-                 '-Wl,--gc-sections,--wrap=chmod,--wrap=setxattr', '-o', 'host/new-test']
+                 '-Wl,--gc-sections,--wrap=fork,--wrap=chmod,--wrap=fchmod,--wrap=setxattr,--wrap=fsetxattr', '-o', 'host/new-test']
     run('host/compile', [*docker, '-c', 'exec "$@"', 'sh', *host_argv])
     host_done = run('host/runtime', [*docker, '-c', 'exec "$@"', 'sh', './host/new-test'])
     host_rows = [json.loads(line) for line in host_done.stdout.splitlines() if line.startswith('{')]
-    assert host_rows[-1]['test'] == 'NEW-ALL' and host_rows[-1]['assertionsSoFar'] == 190
+    assert host_rows[-1]['test'] == 'NEW-ALL' and host_rows[-1]['assertionsSoFar'] == 198
+
+    runtime_args = [part for part in host_argv if not str(part).endswith('.cpp')]
+    runtime_args[-1] = 'host/runtime-worker-test'
+    runtime_args[-2:-2] = [fixtures + 'test_runtime_worker.cpp', fixtures + 'boundaries.cpp',
+        '/sdk/src/module_base/module_base_disk_storage.cpp']
+    run('host/runtime-worker-compile', [*docker, '-c', 'exec "$@"', 'sh', *runtime_args])
+    runtime_done = run('host/runtime-worker', [*docker, '-c', 'exec "$@"', 'sh', './host/runtime-worker-test'])
 
     manifest = [json.loads(path.read_text(encoding='utf-8-sig')) for path in (SDK / 'manifest').glob('*.json')]
     bin_dir = S.DEFAULT_NDK / S.TOOLCHAIN_SUBDIR
@@ -110,11 +119,12 @@ def main():
               *[path for path in HERE.rglob('*') if path.is_file()]]
     result = {'source': 'actual production SDK files; host boundaries documented in README.md',
               'productionOutputsWritten': False, 'deviceAccess': False, 'host': host_rows,
+              'runtimeWorker': runtime_done.stdout,
               'ndkObjects': objects, 'sharedStrongFunctions': 5, 'sharedFunctionsHidden': True,
               'inputs': [{'path': str(path), 'sha256': S.sha256_file(path)} for path in inputs],
               'commands': commands, 'passed': True}
     (out / 'RESULTS.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
-    print(json.dumps({'passed': True, 'assertions': 190, 'sharedStrongFunctions': 5, 'out': str(out)}))
+    print(json.dumps({'passed': True, 'assertions': 198, 'sharedStrongFunctions': 5, 'out': str(out)}))
 
 
 if __name__ == '__main__':

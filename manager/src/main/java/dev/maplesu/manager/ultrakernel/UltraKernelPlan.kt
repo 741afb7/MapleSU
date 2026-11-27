@@ -6,25 +6,12 @@ import java.io.File
 import java.io.RandomAccessFile
 
 /**
- * One Ultra patch plan: the records, the credential slots inside them, and the digests derived from
- * applying them.
+ * One Ultra patch plan: verified records, their order and digests derived by applying them.
+ * Standard generated plans contain no credential slots. Slots are retained only to identify and
+ * restore historic images; current generation uses a public deployment namespace.
  *
- * Why this type exists. Today two different things are called "a Ultra kernel" and they disagree:
- *
- *  - [UltraKernelSpec] is a *shipped* offset table with a device secret baked in. It can apply, but it
- *    cannot be re-bound: `#key=` is parsed and never used, and the 48 byte literal inside the
- *    `panic` record is copied verbatim. A device whose root key is not that literal gets no root.
- *  - The host generator (`tools/specgen`) can now produce the same records for *any* kernel and
- *    *any* credential, but its output arrives as plain `offset|orig|repl` text, which carries
- *    neither "which record holds the secret" nor "what should the result hash to".
- *
- * [UltraKernelPlan] is the missing contract between them: it names the slots, keeps the record order
- * (the applier writes in file order, and two records overlap), and computes the expected digests
- * instead of trusting a pinned constant. A plan is either
- * [Origin.PINNED_ASSET] (a shipped, device-proven asset, digests known) or [Origin.GENERATED]
- * (produced locally, digests derived, and therefore `experimental` by construction).
- *
- * Nothing here opens a partition, starts a process, or reads the credential store.
+ * A plan is [Origin.PINNED_ASSET] with pinned digests or [Origin.GENERATED] with computed digests.
+ * Nothing here opens a partition, starts a process, or reads an identity store.
  */
 internal class UltraKernelPlan private constructor(
     val kernelRelease: String,
@@ -413,7 +400,7 @@ internal class UltraKernelPlan private constructor(
         fun fromRecords(
             kernelRelease: String,
             records: List<PatchRecord>,
-            credential: UltraKernelCredential,
+            credential: UltraKernelCredential? = null,
             origin: Origin = Origin.GENERATED,
             evidence: SiteEvidence? = null,
             baseKernelSha256: String = "",
@@ -423,7 +410,7 @@ internal class UltraKernelPlan private constructor(
             require(records.isNotEmpty()) { "ULTRA_KERNEL_PLAN_EMPTY" }
             require(kernelRelease.isNotEmpty()) { "ULTRA_KERNEL_PLAN_RELEASE_MISSING" }
             return UltraKernelPlan(
-                kernelRelease, origin, records, detectSlots(records, credential), null,
+                kernelRelease, origin, records, credential?.let { detectSlots(records, it) }, null,
                 evidence, baseKernelSha256, sdkMetadataDisplacement, layout,
             )
         }

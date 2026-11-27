@@ -34,7 +34,7 @@ class NormalDirectPatchPreflightAndroidTest {
                 StockInstallFlow.install(context, taskId, InstallTargetMode.NORMAL, "init_boot", null,
                     restoreOriginal = false, selectedManager = null, conflictAccepted = true,
                     onPrepared = { assertEquals("PREPARED", it.getString("state")) },
-                    produce = { source ->
+                    produce = { source, _ ->
                         assertEquals(before.partitions.getValue("init_boot").sha256, Hashes.sha256(source))
                         sourceForm = RamdiskInspector.inspect(source).form().toString()
                         val log = mutableListOf<String>()
@@ -58,6 +58,7 @@ class NormalDirectPatchPreflightAndroidTest {
             }
             val status = InstallerServiceClient.installationStatus(context, taskId, InstallTargetMode.NORMAL)
             assertEquals("CANCELLED", status.getString("state"))
+            assertEquals(0, status.getInt("attemptedPartitionCount", -1))
             val after = observe()
             assertEquals(before.partitions.mapValues { it.value.sha256 }, after.partitions.mapValues { it.value.sha256 })
             instrumentation.sendStatus(2, Bundle().apply {
@@ -69,5 +70,5 @@ class NormalDirectPatchPreflightAndroidTest {
         }
     }
 
-    private class PreflightComplete : RuntimeException()
+    private class PreflightComplete : RuntimeException("INSTALLER_PREFLIGHT_COMPLETE")
 }

@@ -14,7 +14,7 @@ import java.util.UUID
 /** Private, bounded framing shared by the manager and its already-root helper. */
 internal object ModeSwitchRootProtocol {
     const val MAGIC = 0x4d535257
-    const val VERSION = 2
+    const val VERSION = 3
     const val TOKEN_BYTES = 32
     const val MAX_SCRIPT_BYTES = 128 * 1024
     const val MAX_OUTPUT_BYTES = 1024 * 1024
@@ -107,7 +107,7 @@ internal object ModeSwitchRootProtocol {
     }.getOrDefault(false)
 
     private fun payloadLimit(operation: Int): Int = when (operation) {
-        UNINSTALL -> 48
+        UNINSTALL -> 0
         ACQUIRE, RELEASE -> 36
         else -> MAX_SCRIPT_BYTES
     }
@@ -123,7 +123,7 @@ internal interface ModeSwitchRootConnection : Closeable {
 internal class ModeSwitchRootPin(
     private val prepare: () -> HookResult,
     private val run: (String) -> RootExecResult,
-    private val uninstall: (String) -> HookResult,
+    private val uninstall: () -> HookResult,
     private val acquireLease: (String) -> HookResult = { HookResult.failed(ModeSwitchRootProtocol.UNAVAILABLE) },
     private val releaseLease: (String) -> HookResult = { HookResult.failed(ModeSwitchRootProtocol.UNAVAILABLE) },
 ) {
@@ -148,10 +148,10 @@ internal class ModeSwitchRootPin(
     }
 
     @Synchronized
-    fun uninstallUltra(rootKey: String): HookResult {
+    fun uninstallUltra(): HookResult {
         val ready = ensureReady()
         if (!ready.ok) return ready
-        return uninstall(rootKey).also { if (!it.ok) latch(it.code) }
+        return uninstall().also { if (!it.ok) latch(it.code) }
     }
 
     @Synchronized
@@ -210,11 +210,8 @@ internal class ModeSwitchRootChannel(
     }
 
     @Synchronized
-    fun uninstallUltra(rootKey: String): HookResult {
-        if (rootKey.length != 48 || rootKey.any { it.code !in 0x21..0x7e }) {
-            return HookResult.failed(ModeSwitchRootProtocol.BAD_REQUEST)
-        }
-        val reply = exchange(ModeSwitchRootProtocol.UNINSTALL, rootKey)
+    fun uninstallUltra(): HookResult {
+        val reply = exchange(ModeSwitchRootProtocol.UNINSTALL, "")
         return if (reply.code == 0) HookResult(true,
             code = if (reply.output == ModeSwitchRootProtocol.REBOOT_REQUESTED) reply.output else "")
             else HookResult.failed(reply.detail.ifEmpty { ModeSwitchRootProtocol.UNAVAILABLE })
@@ -268,7 +265,7 @@ internal class ModeSwitchRootChannel(
 /** Shared across reconnects. An operation with an uncertain end quarantines later mutations. */
 internal class ModeSwitchRootRequests(
     private val execute: (String) -> ModeSwitchRootProtocol.Reply,
-    private val uninstall: (String) -> ModeSwitchRootProtocol.Reply,
+    private val uninstall: () -> ModeSwitchRootProtocol.Reply,
     private val acquire: (String) -> HookResult = { HookResult.failed(ModeSwitchRootProtocol.UNAVAILABLE) },
     private val release: (String) -> HookResult = { HookResult.failed(ModeSwitchRootProtocol.UNAVAILABLE) },
     private val isHeld: () -> Boolean = { false },
@@ -283,8 +280,8 @@ internal class ModeSwitchRootRequests(
                 else ModeSwitchRootProtocol.Reply(-1, detail = ModeSwitchRootProtocol.BAD_REQUEST)
             ModeSwitchRootProtocol.EXEC -> if (payload.isNotBlank() && '\u0000' !in payload) execute(payload)
                 else ModeSwitchRootProtocol.Reply(-1, detail = ModeSwitchRootProtocol.BAD_REQUEST)
-            ModeSwitchRootProtocol.UNINSTALL -> if (payload.length == 48 && payload.all { it.code in 0x21..0x7e }) {
-                if (isHeld()) uninstall(payload)
+            ModeSwitchRootProtocol.UNINSTALL -> if (payload.isEmpty()) {
+                if (isHeld()) uninstall()
                 else ModeSwitchRootProtocol.Reply(-1, detail = ModeSwitchRootProtocol.LEASE_REQUIRED)
             } else ModeSwitchRootProtocol.Reply(-1, detail = ModeSwitchRootProtocol.BAD_REQUEST)
             ModeSwitchRootProtocol.ACQUIRE, ModeSwitchRootProtocol.RELEASE -> {

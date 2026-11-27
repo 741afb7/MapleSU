@@ -1,87 +1,28 @@
 package dev.maplesu.manager.runtime.ultra
 
-import dev.maplesu.manager.litehidden.RecoveryIdentity
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import org.json.JSONObject
+import java.util.concurrent.CancellationException
 
-/** A credential supplied by the resident SDK gateway, scoped to one kernel boot. */
-internal class UltraBootSdkSession private constructor(
+/** A non-secret installation observation scoped to one kernel boot. */
+internal data class UltraBootSdkSession private constructor(
     val bootId: String,
-    val key: String,
     val installSubmitted: Boolean,
 ) {
     fun current(currentBootId: String?): Boolean = currentBootId == bootId
-
-    fun submitted(): UltraBootSdkSession = UltraBootSdkSession(bootId, key, true)
-
-    fun encode(): String = JSONObject().put("v", 1).put("bootId", bootId)
-        .put("key", key).put("installSubmitted", installSubmitted).toString()
-
-    /** Diagnostics must never print either the key or its derived init directory. */
-    override fun toString(): String = "UltraBootSdkSession(installSubmitted=$installSubmitted)"
+    fun submitted(): UltraBootSdkSession = copy(installSubmitted = true)
+    fun encode(): String = JSONObject().put("v", 2).put("bootId", bootId)
+        .put("installSubmitted", installSubmitted).toString()
 
     companion object {
         private val BOOT_ID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-
-        fun create(bootId: String?, key: String?, installSubmitted: Boolean = false): UltraBootSdkSession? {
-            if (bootId == null || !BOOT_ID.matches(bootId) || key == null ||
-                !UltraKernelCredential.isValid(key) || !UltraKernelCredential.of(key).sdkMetadataValid) return null
-            return UltraBootSdkSession(bootId, key, installSubmitted)
-        }
-
+        fun create(bootId: String?, installSubmitted: Boolean = false): UltraBootSdkSession? =
+            bootId?.takeIf(BOOT_ID::matches)?.let { UltraBootSdkSession(it, installSubmitted) }
         fun parse(text: String?): UltraBootSdkSession? = runCatching {
             if (text.isNullOrEmpty() || text.length > 1024) return null
             val record = JSONObject(text)
-            if (record.getInt("v") != 1) return null
-            create(record.getString("bootId"), record.getString("key"), record.getBoolean("installSubmitted"))
+            if (record.getInt("v") != 2) return null
+            create(record.getString("bootId"), record.getBoolean("installSubmitted"))
         }.getOrNull()
-    }
-}
-
-/** Self-contained recovery material; permanent rootkey and identity files remain separate. */
-internal object UltraBootSdkRecovery {
-    const val FILE_NAME = "sdk-session"
-    const val PATH = "/data/adb/maplesu/recovery/$FILE_NAME"
-
-    fun seal(session: UltraBootSdkSession, identity: RecoveryIdentity): String? {
-        if (!identity.isValid) return null
-        val encrypted = UltraRecoveryKey.seal(session.key, identity.androidId, domain(identity, session.bootId))
-            ?: return null
-        return JSONObject().put("v", 1).put("bootId", session.bootId)
-            .put("identity", identity.toJson()).put("sealedKey", encrypted).toString()
-    }
-
-    fun open(text: String?, currentBootId: String?, managerPackage: String,
-        expectedIdentity: RecoveryIdentity? = null): UltraBootSdkSession? = runCatching {
-        if (text.isNullOrEmpty() || text.length > 8192 || currentBootId.isNullOrEmpty()) return null
-        val record = JSONObject(text)
-        if (record.getInt("v") != 1 || record.getString("bootId") != currentBootId) return null
-        val identity = RecoveryIdentity.parse(record.getString("identity")) ?: return null
-        if (identity.packageName != managerPackage || (expectedIdentity != null && identity != expectedIdentity)) return null
-        val key = UltraRecoveryKey.open(record.getString("sealedKey"), identity.androidId,
-            domain(identity, currentBootId)) ?: return null
-        UltraBootSdkSession.create(currentBootId, key, installSubmitted = true)
-    }.getOrNull()
-
-    private fun domain(identity: RecoveryIdentity, bootId: String) =
-        "${identity.packageName}|maplesu-boot-sdk-v1|$bootId"
-}
-
-/** App recovery requires the same install identity and live SDK evidence before persistence. */
-internal object UltraBootSdkRestore {
-    interface Port {
-        fun currentBootId(): String?
-        fun verified(session: UltraBootSdkSession): Boolean
-        fun store(session: UltraBootSdkSession): Boolean
-    }
-
-    fun restore(material: String, identity: RecoveryIdentity, port: Port): String {
-        val candidate = UltraBootSdkRecovery.open(material, port.currentBootId(), identity.packageName, identity)
-            ?: return "BOOT_SDK_RECOVERY_EXPIRED_OR_INVALID"
-        if (!port.verified(candidate)) return "BOOT_SDK_RUNTIME_UNVERIFIED"
-        if (!candidate.current(port.currentBootId())) return "BOOT_SDK_BOOT_CHANGED"
-        if (!port.store(candidate)) return "BOOT_SDK_RECOVERY_STORE_FAILED"
-        return "BOOT_SDK_RESTORED"
     }
 }
 
@@ -101,7 +42,7 @@ internal object UltraBootSdkInstall {
         fun moduleListVerified(): Boolean
     }
 
-    /** Fixed receipt fields only; raw SDK details can contain credential-derived paths. */
+    /** Fixed receipt fields only; raw SDK details can contain deployment paths. */
     data class Submission(val succeeded: Boolean, val operation: String, val sdkError: String, val sdkErrorCode: Int)
 
     data class Result(val ready: Boolean, val submitted: Boolean, val reason: String, val submission: Submission? = null)
@@ -155,6 +96,7 @@ internal object UltraBootSdkInstall {
             if (!port.current()) return failed("SESSION_CHANGED")
             Result(true, submitted, "RUNNING_VERIFIED", submission)
         } catch (error: Exception) {
+            if (error is CancellationException) throw error
             if (error is InterruptedException) Thread.currentThread().interrupt()
             failed("SDK_OBSERVATION_FAILED")
         }

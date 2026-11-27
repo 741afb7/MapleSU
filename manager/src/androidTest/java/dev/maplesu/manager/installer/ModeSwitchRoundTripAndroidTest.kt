@@ -37,17 +37,17 @@ class ModeSwitchRoundTripAndroidTest {
         ActivityScenario.launch(MainActivity::class.java).use {
             when (arguments.getString("action")) {
                 "temporary-uninstall" -> {
-                    val keyBefore = UltraRootKeyStore.read(context)
-                    assertNotNull("install credential missing", keyBefore)
                     val outcome = UltraEnvironmentUninstaller.uninstall(context, permanent = false)
                     report("temporary-uninstall", outcome.toString())
                     assertTrue(outcome.ok)
-                    assertEquals(keyBefore, UltraRootKeyStore.read(context))
+                    assertEquals("temporary", context.getSharedPreferences("maplesu-ultra", 0)
+                        .getString("environmentRemoval", null))
                     assertTrue(UltraRootKeyStore.isSuspended(context))
                     return@use
                 }
                 "environment-removed" -> {
-                    assertNotNull("temporary removal lost install credential", UltraRootKeyStore.read(context))
+                    assertEquals("temporary", context.getSharedPreferences("maplesu-ultra", 0)
+                        .getString("environmentRemoval", null))
                     assertTrue("automatic reinstall not inhibited", UltraRootKeyStore.isSuspended(context))
                     val state = UltraEnvironmentProbe.refresh(context)
                     report("environment", state.name)
@@ -63,7 +63,7 @@ class ModeSwitchRoundTripAndroidTest {
                 }
             }
             if (arguments.getString("action") == "sdk-inspect") {
-                val client = UltraRuntimeClient { UltraRootKeyStore.read(context) }
+                val client = UltraRuntimeClient()
                 val receipt = client.runRootCommand("""
                     id
                     cat /proc/sys/kernel/random/boot_id

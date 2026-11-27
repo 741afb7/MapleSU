@@ -23,9 +23,12 @@ import dev.maplesu.manager.runtime.ultra.UltraEnvFacts
 import dev.maplesu.manager.runtime.ultra.UltraEnvUpgrade
 import dev.maplesu.manager.runtime.ultra.UltraEnvObservation
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentVersion
+import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
+import dev.maplesu.manager.runtime.ultra.UltraLegacyCredential
 import dev.maplesu.manager.runtime.ultra.UltraInstalledIdentityProbe
 import dev.maplesu.manager.runtime.ultra.InstalledIdentity
 import dev.maplesu.manager.runtime.ultra.Source
+import dev.maplesu.manager.workmode.ModeActivation
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
 import kotlinx.coroutines.CoroutineScope
@@ -58,16 +61,26 @@ class UltraEnvironmentUpdatePanel internal constructor(
 ) {
     private var observation = last?.takeIf { it.scope == UltraEnvironmentUpgrade.observationScope(context) }
 
-    /** 已换算的 MapleSU_Ultra 版本号；还没读到时为 null。 */
-    var version by mutableStateOf(observation?.version)
-        private set
+    private var versionActivation = ModeRuntime.activation
+    private var installedVersion by mutableStateOf(lastVersion
+        ?.takeIf { it.first === versionActivation }?.second)
+
+    /** The last actual SDK version is display data, independent of upgrade identity. */
+    val version: String?
+        get() = installedVersion.takeIf {
+            ModeRuntime.active == WorkMode.LITE && versionActivation === ModeRuntime.activation &&
+                UltraEnvironmentProbe.currentSnapshot().state != UltraEnvironmentProbe.State.NotInstalled
+        }
 
     var busy by mutableStateOf(UltraEnvironmentUpgrade.inProgress)
         private set
 
+    var checking by mutableStateOf(false)
+        private set
+
     private var decided by mutableStateOf(observation?.upgrade ?: UltraEnvUpgrade.None)
 
-    var readUnknown by mutableStateOf(observation?.readUnknown ?: true)
+    var readUnknown by mutableStateOf(true)
         private set
 
     /** 由首页按 §2.1 与切换事务给出；不允许时不提示更新、也不执行。 */
@@ -85,7 +98,16 @@ class UltraEnvironmentUpdatePanel internal constructor(
     private var readGeneration = 0L
     private var latestFacts: UltraEnvFacts? = null
 
-    internal fun resume() { foreground = true; refresh() }
+    internal fun environmentChanged() {
+        if (ModeRuntime.active != WorkMode.LITE || versionActivation !== ModeRuntime.activation ||
+            UltraEnvironmentProbe.currentSnapshot().state == UltraEnvironmentProbe.State.NotInstalled) {
+            installedVersion = null
+            lastVersion = null
+            versionActivation = ModeRuntime.activation
+        }
+    }
+
+    internal fun resume() { environmentChanged(); foreground = true; refresh() }
 
     internal fun pause() {
         foreground = false
@@ -95,9 +117,11 @@ class UltraEnvironmentUpdatePanel internal constructor(
     }
 
     fun refresh() {
-        if (!foreground || reading?.isActive == true) return
+        environmentChanged()
+        if (!foreground || checking || reading?.isActive == true || ModeRuntime.active != WorkMode.LITE) return
         val generation = ++readGeneration
         val request = readRequests.incrementAndGet()
+        readUnknown = true
         reading = scope.launch {
             // Cold startup may own the SDK channel before the first version read.
             // Retry only a missing label, while this home page remains in the foreground.
@@ -106,6 +130,15 @@ class UltraEnvironmentUpdatePanel internal constructor(
                     if (version != null || !foreground || ModeRuntime.active != WorkMode.LITE) break
                     delay(retryDelay)
                     if (!foreground || ModeRuntime.active != WorkMode.LITE) break
+                }
+                val activation = ModeRuntime.activation
+                val readVersion = withContext(Dispatchers.IO) { readInstalledVersion() }
+                if (generation != readGeneration || request != readRequests.get() || !foreground ||
+                    ModeRuntime.activation !== activation || ModeRuntime.active != WorkMode.LITE) return@launch
+                environmentChanged()
+                if (readVersion != null && UltraEnvironmentProbe.currentSnapshot().state != UltraEnvironmentProbe.State.NotInstalled) {
+                    installedVersion = readVersion
+                    lastVersion = activation to readVersion
                 }
                 val facts = withContext(Dispatchers.IO) {
                     try {
@@ -116,13 +149,64 @@ class UltraEnvironmentUpdatePanel internal constructor(
                     }
                 }
                 if (generation != readGeneration || request != readRequests.get() || !foreground) return@launch
+                if (facts != null) apply(facts) else readUnknown = true
+                if (UltraEnvironmentProbe.currentSnapshot().state == UltraEnvironmentProbe.State.NotInstalled) break
+            }
+        }
+    }
+
+    private fun readInstalledVersion(): String? {
+        if (UltraEnvironmentProbe.currentSnapshot().state == UltraEnvironmentProbe.State.NotInstalled) return null
+        return try {
+            val base = UltraRuntimeClient()
+            val legacy = if (UltraEnvironmentProbe.currentSnapshot().managerOwnerIdentity == null)
+                UltraLegacyCredential.read(context) else null
+            val client = if (legacy == null) base else base.withLegacyCredential(legacy)
+            client.installedEnvironmentVersion().takeIf { it.succeeded }?.string("version")
+                ?.let(UltraEnvironmentVersion::displayOf)
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            null
+        }
+    }
+
+    /** A manual check reads current facts before offering the existing upgrade confirmation. */
+    fun checkForUpgrade(onChecked: (UltraEnvUpgrade) -> Unit) {
+        if (!foreground || busy || checking || !allowed || ModeRuntime.active != WorkMode.LITE) return
+        reading?.cancel()
+        val generation = ++readGeneration
+        val request = readRequests.incrementAndGet()
+        val activation = ModeRuntime.activation
+        checking = true
+        readUnknown = true
+        reading = scope.launch {
+            try {
+                val facts = withContext(Dispatchers.IO) {
+                    try {
+                        UltraEnvironmentUpgrade.readFacts(context)
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        null
+                    }
+                }
+                if (generation != readGeneration || request != readRequests.get() || !foreground ||
+                    ModeRuntime.activation !== activation || ModeRuntime.active != WorkMode.LITE || !allowed) return@launch
                 if (facts != null) apply(facts)
+                val current = upgrade
+                if (facts == null || facts.readUnknown || readUnknown) {
+                    toast(R.string.ultra_env_update_check_failed)
+                    return@launch
+                }
+                if (current is UltraEnvUpgrade.None) toast(R.string.ultra_env_update_check_none)
+                onChecked(current)
+            } finally {
+                checking = false
             }
         }
     }
 
     internal fun readbackCompleted() {
-        if (!foreground || busy) return
+        if (!foreground || busy || checking || readUnknown || reading?.isActive == true) return
         val facts = mergeCompletedReadback(latestFacts, UltraEnvironmentUpgrade.observationScope(context),
             UltraInstalledIdentityProbe.completedReadback(context)) ?: return
         apply(facts)
@@ -171,7 +255,6 @@ class UltraEnvironmentUpdatePanel internal constructor(
             UltraInstalledIdentityProbe.completedReadback(context)) ?: facts
         latestFacts = current.takeIf { currentScope != null && it.observationScope == currentScope }
         observation = UltraEnvObservation.observe(observation, current, currentScope)
-        version = observation?.version
         decided = observation?.upgrade ?: UltraEnvUpgrade.None
         readUnknown = observation?.readUnknown ?: true
         last = observation
@@ -185,6 +268,8 @@ class UltraEnvironmentUpdatePanel internal constructor(
         val readRequests = AtomicLong()
         @Volatile
         var last: UltraEnvObservation? = null
+        @Volatile
+        var lastVersion: Pair<ModeActivation, String>? = null
     }
 }
 
@@ -203,6 +288,8 @@ fun rememberUltraEnvironmentPanel(
     val panel = remember { UltraEnvironmentUpdatePanel(context, scope) }
     val detectionRevision by ModeRuntime.detectionRevision.collectAsStateWithLifecycle()
     val rootAvailable by UltraEnvironmentProbe.rootAvailability.collectAsStateWithLifecycle(initialValue = false)
+    val environment by UltraEnvironmentProbe.observations.collectAsStateWithLifecycle(
+        initialValue = UltraEnvironmentProbe.currentSnapshot())
     val identityRevision by UltraInstalledIdentityProbe.readbackRevision.collectAsStateWithLifecycle()
     SideEffect { panel.allowed = visible && upgradeAllowed }
     // The Ultra brand may already be visible from saved local facts before the
@@ -211,6 +298,7 @@ fun rememberUltraEnvironmentPanel(
         if (visible && foreground && ModeRuntime.active == WorkMode.LITE) panel.resume()
         onPauseOrDispose { panel.pause() }
     }
+    LaunchedEffect(panel, detectionRevision, environment.state) { panel.environmentChanged() }
     LaunchedEffect(panel, identityRevision) { panel.readbackCompleted() }
     return panel
 }
@@ -248,7 +336,7 @@ internal fun ultraUpdateMessage(upgrade: UltraEnvUpgrade?, busy: Boolean): Strin
         ultraEnvironmentLabel(upgrade.to),
     )
 
-    else -> ""
+    else -> if (busy) stringResource(R.string.ultra_env_update_busy, ultraEnvironmentLabel(null)) else ""
 }
 
 /**

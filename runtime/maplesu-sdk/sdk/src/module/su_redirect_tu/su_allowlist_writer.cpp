@@ -10,8 +10,7 @@
 #include "su_uid_profile_private.h"
 #include "maplesu_request_private.h"
 #include <cerrno>
-extern "C" KModErr maplesu_prepare_su_exec(const char*);
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
+extern "C" KModErr maplesu_prepare_su_exec();
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
@@ -306,7 +305,7 @@ KModErr maplesu::su_auth::detail::write_allowlist(
         errno = EOPNOTSUPP;
         return fail(result, KModErr::ERR_MODULE_TEST_CHANNEL, Phase::WriterUidResolve);
     }
-    const auto prepared = maplesu_prepare_su_exec(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    const auto prepared = maplesu_prepare_su_exec();
     if (is_failed(prepared)) return fail(result, prepared, Phase::WriterPrepare);
     (void)refresh_existing;
     std::vector<UidProfileV1> profiles;
@@ -350,7 +349,7 @@ KModErr maplesu::su_auth::detail::write_allowlist(
             error = maplesu_su_uid_index_prepare(old, static_cast<uint32_t>(table.size() - 1));
             if (is_failed(error)) return fail(result, error, Phase::WriterIndexPrepare);
             error = maplesu_sync_su_copies_from_control(
-                __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), control);
+                control);
             if (is_failed(error)) set_delivery(result, Delivery::Unknown);
             return fail(result, error, Phase::WriterCopySync);
         }
@@ -386,12 +385,12 @@ KModErr maplesu::su_auth::detail::write_allowlist(
         }
     }
     const std::vector<uint32_t> copy_uids(table.begin(), table.end() - 1);
-    error = maplesu_sync_su_copies(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), copy_uids);
+    error = maplesu_sync_su_copies(copy_uids);
     if (is_failed(error)) {
         fail(result, error, Phase::WriterCopySync);
         set_delivery(result, Delivery::Unknown);
         const auto restored = maplesu_sync_su_copies_from_control(
-            __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), control);
+            control);
         recover(result, Phase::WriterRestoreCopies, restored);
         if (replacement) recover(result, Phase::WriterFreeUnpublished, maplesu_su_uid_index_release(replacement));
         return finish(result, is_failed(restored) ? restored : error);

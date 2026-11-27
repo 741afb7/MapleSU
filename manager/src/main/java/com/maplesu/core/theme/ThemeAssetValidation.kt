@@ -37,7 +37,10 @@ internal object ThemeAssetValidation {
 
     fun warnings(files: Map<String,File>): List<String> = files.mapNotNull { (name,file) ->
         val base = name.substringBefore('.')
-        if (base == "font" || name.substringAfterLast('.') in setOf("png","jpg","jpeg","gif","webp")) {
+        val sukiImage = name == "background" || name == "card_background" ||
+            name.startsWith("background_light") || name.startsWith("background_dark") ||
+            name.startsWith("card_background_") || name.startsWith("card_sticker_") || name.startsWith("bottom_bar_icon_")
+        if (base == "font" || sukiImage || name.substringAfterLast('.') in setOf("png","jpg","jpeg","gif","webp")) {
             runCatching { validateSelected(base,file) }.exceptionOrNull()?.let { "$name: decode failed; default renderer fallback" }
         } else null
     }

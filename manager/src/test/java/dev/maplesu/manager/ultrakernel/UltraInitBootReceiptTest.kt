@@ -12,21 +12,20 @@ import org.junit.rules.TemporaryFolder
 /** Uses the same container byte fixtures; no module/shim executes and no runtime support is asserted. */
 class UltraInitBootReceiptTest {
     @get:Rule val temporary = TemporaryFolder()
-    private val credential = UltraKernelCredential.of("A".repeat(48))
 
     @Test fun completeReceiptIsPublishedOnlyAfterCandidateReadback() {
         val (source, artifact) = fixture()
         val before = source.readBytes()
-        val targetBefore = artifact.targetBoot.readBytes()
+        val bridgeBefore = artifact.bridgeBytes()
         val work = temporary.newFolder("complete")
-        val built = UltraKernelBuilder(work).generateInitBoot(source, artifact, credential)
+        val built = UltraKernelBuilder(work).generateInitBoot(source, artifact)
         val receipt = File(work, built.image.nameWithoutExtension + ".json")
         assertTrue(receipt.isFile)
         assertTrue(receipt.readText().contains("\"runtimeVerified\":false"))
         assertTrue(receipt.readText().contains(built.bootSha256))
         assertTrue(work.listFiles().orEmpty().none { it.name.endsWith(".pending") })
         assertArrayEquals(before, source.readBytes())
-        assertArrayEquals(targetBefore, artifact.targetBoot.readBytes())
+        assertArrayEquals(bridgeBefore, artifact.bridgeBytes())
     }
 
     @Test fun partialWriteAndCloseFailureRemoveCandidateAndPartialReceipt() {
@@ -41,7 +40,7 @@ class UltraInitBootReceiptTest {
                 }
                 throw primary
             }
-            val failure = runCatching { builder.generateInitBoot(source, artifact, credential) }.exceptionOrNull()
+            val failure = runCatching { builder.generateInitBoot(source, artifact) }.exceptionOrNull()
             assertSame(primary, failure)
             assertTrue(work.listFiles().orEmpty().isEmpty())
             assertArrayEquals(before, source.readBytes())
@@ -59,7 +58,7 @@ class UltraInitBootReceiptTest {
             File(output, "busy").writeText("force nonempty-directory cleanup failure")
             throw primary
         }
-        val failure = runCatching { builder.generateInitBoot(source, artifact, credential) }.exceptionOrNull()
+        val failure = runCatching { builder.generateInitBoot(source, artifact) }.exceptionOrNull()
         assertSame(primary, failure)
         assertTrue(primary.suppressed.isNotEmpty())
         assertTrue(work.listFiles().orEmpty().none { it.extension == "json" || it.name.endsWith(".pending") })
@@ -68,14 +67,14 @@ class UltraInitBootReceiptTest {
     @Test fun cancellationAfterReceiptWriteDoesNotReturnAnInstallableCandidate() {
         val (source, artifact) = fixture()
         val sourceBefore = source.readBytes()
-        val targetBefore = artifact.targetBoot.readBytes()
+        val bridgeBefore = artifact.bridgeBytes()
         val work = temporary.newFolder("cancel-receipt")
         val builder = UltraKernelBuilder(work) { file, bytes ->
             file.outputStream().use { stream -> stream.write(bytes); stream.fd.sync() }
             Thread.currentThread().interrupt()
         }
         val failure = try {
-            runCatching { builder.generateInitBoot(source, artifact, credential) }.exceptionOrNull().also {
+            runCatching { builder.generateInitBoot(source, artifact) }.exceptionOrNull().also {
                 assertTrue(Thread.currentThread().isInterrupted)
             }
         } finally { Thread.interrupted() }
@@ -83,26 +82,23 @@ class UltraInitBootReceiptTest {
         assertEquals("ULTRA_KERNEL_INIT_BOOT_CANCELLED", failure?.message)
         assertTrue(work.listFiles().orEmpty().isEmpty())
         assertArrayEquals(sourceBefore, source.readBytes())
-        assertArrayEquals(targetBefore, artifact.targetBoot.readBytes())
+        assertArrayEquals(bridgeBefore, artifact.bridgeBytes())
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun fixture(): Pair<File, UltraInitBootProducer.Artifact> {
-        // Reuse the container owner's exact helpers instead of maintaining a second synthetic parser.
-        val fixture = Class.forName("dev.maplesu.image.UltraInitBootProducerTest")
-        fun bytes(name: String, vararg args: Any): ByteArray {
-            val types = args.map { if (it is Boolean) java.lang.Boolean.TYPE else it.javaClass }.toTypedArray()
-            val method = fixture.getDeclaredMethod(name, *types).apply { isAccessible = true }
-            return method.invoke(null, *args) as ByteArray
-        }
-        val target = temporary.newFile().also { it.writeBytes(bytes("image", bytes("kernel"), ByteArray(0))) }
-        val source = temporary.newFile().also { it.writeBytes(bytes("image", ByteArray(0), bytes("stock", false, false))) }
-        val secret = credential.copySecret()
-        val credentialHash = try { UltraKernelSpec.sha256(secret) } finally { secret.fill(0) }
-        val constructor = UltraInitBootProducer.Artifact::class.java.getDeclaredConstructor(
-            File::class.java, String::class.java, String::class.java, String::class.java,
-            String::class.java, ByteArray::class.java, ByteArray::class.java).apply { isAccessible = true }
-        val artifact = constructor.newInstance(target, UltraKernelSpec.sha256(target), "6.6.1-fixture",
-            UltraKernelSpec.sha256(bytes("kernel")), credentialHash, bytes("handoff"), "opaque module fixture".toByteArray())
+        val helpers = Class.forName("dev.maplesu.image.UltraInitBootProducerTest")
+        val files = helpers.getDeclaredMethod("kmiBundle").apply { isAccessible = true }
+            .invoke(null) as Map<String, ByteArray>
+        val directory = temporary.newFolder()
+        files.forEach { (path, bytes) -> File(directory, path).writeBytes(bytes) }
+        val ramdisk = helpers.getDeclaredMethod("stock", java.lang.Boolean.TYPE, java.lang.Boolean.TYPE)
+            .apply { isAccessible = true }.invoke(null, false, false) as ByteArray
+        val image = helpers.getDeclaredMethod("image", ByteArray::class.java, ByteArray::class.java)
+            .apply { isAccessible = true }.invoke(null, ByteArray(0), ramdisk) as ByteArray
+        val source = File(directory, "init_boot.img").also { it.writeBytes(image) }
+        val artifact = UltraInitBootProducer.readArtifact(File(directory, "manifest.json"))
+            .withDeploymentNamespace(UltraKernelDeploymentNamespace.create().record())
         return source to artifact
     }
 }

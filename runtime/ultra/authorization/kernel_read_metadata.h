@@ -79,9 +79,11 @@ struct RequestMetadataFacts {
 // Non-wire validated address facts. Owner snapshots retain v3/80 and binding;
 // no truncated descriptor is relabelled as v2.
 KModErr maplesu_kernel_metadata_facts(RequestMetadataFacts& facts, bool& supported);
-// One validated descriptor per negotiated module identity. An untouched QUERY
-// reports supported=false; this does not prove that the gateway is legacy.
+// Explicit legacy selection only. An untouched QUERY never becomes cached
+// evidence of an old gateway, and a negotiated READ error remains an error.
 __attribute__((visibility("hidden")))
 KModErr maplesu_kernel_metadata_v2(maplesu_metadata_v2& metadata,
                                  uint64_t& descriptor_address, bool& supported);
+__attribute__((visibility("hidden")))
+KModErr maplesu_kernel_legacy_read(uint64_t source, void* destination, uint32_t size);
 }

@@ -97,14 +97,7 @@ def _stage_candidate(build_dir, output, base, backend_bundle, source_validation_
         assert backend_bundle is not None, 'Source helper requires the actual compiled backend bundle manifest'
         bundle_input = Path(backend_bundle).resolve()
     else:
-        assert record(helper, ROOT)['sha256'] == baseline['helper']['sha256'], 'Reference helper differs from retained release'
-        helper_info = copy.deepcopy(baseline['helper'])
-        helper_info.update(record(helper, ROOT))
-        backend_info = baseline['environmentPolicyBoot']['backend']
-        backend_input = checked(backend_info, ROOT)
-        bundle_info = baseline['environmentPolicyBoot']['delivery']['bundleManifest']
-        bundle_input = ROOT / bundle_info['path']
-        assert record(bundle_input, ROOT)['sha256'] == bundle_info['sha256'], 'Retained backend bundle has changed'
+        raise AssertionError('Keyless delivery requires its same-generation source helper and backend')
     backend = copy_file(backend_input, output / 'backend' / backend_info['fileName'])
     bundle = copy_file(bundle_input, output / 'backend/policy-bundles.json')
     bundle_cpp = copy_file(bundle_input.with_suffix('.cpp'), output / 'backend/policy-bundles.cpp')
@@ -113,9 +106,14 @@ def _stage_candidate(build_dir, output, base, backend_bundle, source_validation_
         if path.is_file():
             retained_entry.append(record(copy_file(path, output / 'maintenance/entry' / path.relative_to(base / 'maintenance/entry')), ROOT))
     retained_release = copy_file(baseline_path, output / 'retained/SDK-RELEASE.json')
+    version_source = ROOT / 'runtime/maplesu-sdk/sdk/src/maplesu/install/lifecycle.h'
+    version_match = re.search(r'kSdkVersionText\s*\[\s*\]\s*=\s*"(\d+\.\d+\.\d+)"',
+                              version_source.read_text(encoding='utf-8'))
+    assert version_match, 'SDK version source was not found'
     release = dict(schemaVersion=1, appVersion=app_version or baseline['appVersion'],
                    versionCode=version_code if version_code is not None else baseline['versionCode'],
-                   sdkVersion=baseline['sdkVersion'], sdkBuildId='maplesu-ultra-source-' + record(archive, ROOT)['sha256'][:16],
+                   sdkVersion=version_match.group(1), rootKeyRequired=False,
+                   sdkBuildId='maplesu-ultra-source-' + record(archive, ROOT)['sha256'][:16],
                    generatedUtc=datetime.datetime.now(datetime.timezone.utc).isoformat(), archive=record(archive, ROOT),
                    helper=helper_info, bootstrap=dict(helper_info),
                    environmentPolicyBoot=dict(status='candidate', backend=dict(backend_info, **record(backend, ROOT)),

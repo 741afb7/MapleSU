@@ -37,7 +37,7 @@ class UltraKernelHookSiteTest {
     fun `6_1_141 denial hook replaces the return after its frame and PAC unwind`() {
         val boot = bootFixture()
         assumeTrue("boot fixture absent", boot.isFile)
-        val plan = UltraKernelSpecGenerator().generate(boot, UltraKernelPlanFixtures.freshCredential())
+        val plan = UltraKernelSpecGenerator().generate(boot)
         val hook = plan.records.single { it.role == "avc_denied+0x28" }
         assertEquals("hook must replace RET, not a live frame load", UltraKernelA64.RET,
             UltraKernelA64.le32Bits(hook.original, 0))
@@ -51,7 +51,7 @@ class UltraKernelHookSiteTest {
         val workspace = Files.createTempDirectory("ultrakernel-avc-return-").toFile()
         try {
             val flow = UltraKernelFlow(workspace, UltraKernelFileAssets(File("src/main/assets")))
-            val prepared = flow.prepare(boot, UltraKernelPlanFixtures.freshCredential())
+            val prepared = flow.prepare(boot)
             assertTrue(prepared.generated)
             val candidate = requireNotNull(prepared.candidate)
             val original = UltraKernelPlan.readKernel(boot)
@@ -61,7 +61,7 @@ class UltraKernelHookSiteTest {
                 UltraKernelA64.le32Bits(patched, 0x5E654))
             val branch = UltraKernelA64.le32Bits(patched, 0x5E674)
             assertEquals(0x14000000, branch and 0xFC000000.toInt())
-            val plan = UltraKernelSpecGenerator().generate(original, UltraKernelPlanFixtures.freshCredential())
+            val plan = UltraKernelSpecGenerator().generate(original)
             val target = 0x5E674L + UltraKernelA64.signExtend((branch and 0x03FFFFFF).toLong(), 26) * 4
             assertEquals("AVC must tail-call the relocated helper", plan.records.single { it.role == "drm_dev_printk+0x0" }.offset + 36, target)
         } finally {

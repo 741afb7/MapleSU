@@ -85,9 +85,9 @@ class ModeSwitchRootSession(context: Context) {
         return channel.execute(script)
     }
 
-    fun uninstallUltra(rootKey: String): HookResult {
+    fun uninstallUltra(): HookResult {
         requireBackground()
-        return channel.uninstallUltra(rootKey)
+        return channel.uninstallUltra()
     }
 
     fun acquire(switchId: String): HookResult {

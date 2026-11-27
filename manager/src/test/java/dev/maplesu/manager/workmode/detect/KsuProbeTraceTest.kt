@@ -38,7 +38,7 @@ class KsuProbeTraceTest {
             UltraStartupWarmup.Input(
                 activeMode = null, detectionSettled = true,
                 ksuResponded = result.trace.single { it.id == "S1" }.ok,
-                pendingInstallCredential = true, suspended = false, quiescing = false,
+                pendingInstall = true, suspended = false, quiescing = false,
                 switchPending = false, conflictingRoot = false,
             ),
             setupEnvironment = { called = true }, pairEnvironment = { called = true; true },

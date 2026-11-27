@@ -40,7 +40,7 @@ enum class WebUiRoute {
 
 enum class WebUiFailureReason(val code: String) {
     ENVIRONMENT_NOT_RUNNING("ENVIRONMENT_NOT_RUNNING"),
-    ROOT_KEY_ABSENT("ULTRA_ROOT_KEY_ABSENT"),
+    IDENTITY_UNAVAILABLE("ULTRA_IDENTITY_UNAVAILABLE"),
     SDK_REJECTED("SDK_REJECTED"),
     PORT_MISSING("PORT_MISSING"),
     PORT_NOT_LISTENING("PORT_NOT_LISTENING"),
@@ -314,6 +314,15 @@ data class WebUiOpenSpec(
 enum class WebUiPageOpener {
     SDK,
     MAPLESU,
+    UNKNOWN;
+
+    companion object {
+        fun fromWire(value: Any?): WebUiPageOpener = when (value) {
+            null, "sdk" -> SDK
+            "manager" -> MAPLESU
+            else -> UNKNOWN
+        }
+    }
 }
 
 /**
@@ -756,11 +765,19 @@ object ModuleWebUiPlan {
     fun moduleId32(id: String): String = id.removePrefix(ULTRA_ID_PREFIX)
 
     /**
-     * 严格 id32：1..64 字节、`[A-Za-z0-9._-]`、首字符字母数字、不含 `..`。
-     * 这个值会进 URL 与文件路径，宁可不打开也不猜。
+     * Ultra ID 按 native module_paths::valid_id 的单文件名合同校验。
+     * 脚本 ID 保留 URL 使用的 1..64 字节 ASCII 合同。
      */
     fun moduleId32OrNull(id: String): String? {
         val value = moduleId32(id)
+        if (isUltraModuleId(id)) return value.takeIf {
+            it.isNotEmpty() && it != "." && it != ".." && '/' !in it && '\u0000' !in it &&
+                it.toByteArray(Charsets.UTF_8).size < 1024
+        }
+        return scriptModuleIdOrNull(value)
+    }
+
+    private fun scriptModuleIdOrNull(value: String): String? {
         if (value.isEmpty() || value.length > MAX_ID_LENGTH) return null
         if (!MODULE_ID32.matches(value)) return null
         if (value.contains("..")) return null
@@ -785,7 +802,7 @@ object ModuleWebUiPlan {
      */
     fun modWebUrl(baseUrl: String, moduleId32: String, rel: String = ""): String? {
         val base = normalizeBase(baseUrl) ?: return null
-        if (moduleId32OrNull(moduleId32) == null) return null
+        if (scriptModuleIdOrNull(moduleId32.removePrefix(ULTRA_ID_PREFIX)) == null) return null
         val inner = normalizeModWebRel(rel) ?: return null
         val tail = if (inner.isEmpty()) "" else inner
         return "${base}modweb/$moduleId32/$tail"
@@ -818,8 +835,7 @@ object ModuleWebUiPlan {
     /**
      * SDK 回执 → 失败（null = 可以继续等端口）。
      *
-     * `MAPLESU_ULTRA_ROOT_KEY_ABSENT` 必须和「SDK 拒绝」分开：前者是配置问题，
-     * 提示用户去启用环境；后者是模块/环境真的拒绝了。
+     * 身份暂未就绪与原生业务拒绝分别展示；保留 SDK 的原始错误。
      */
     fun failureFromReceipt(ok: Boolean, sdkError: String, port: Int): WebUiFailure? {
         if (!ok) {
@@ -827,8 +843,8 @@ object ModuleWebUiPlan {
             return when {
                 code.isEmpty() || code == "MAPLESU_BRIDGE_UNPARSEABLE" ->
                     WebUiFailure(WebUiFailureReason.SDK_REJECTED, "bridge answer was not a receipt")
-                code.contains("ROOT_KEY", ignoreCase = true) ->
-                    WebUiFailure(WebUiFailureReason.ROOT_KEY_ABSENT, code)
+                code.contains("IDENTITY", ignoreCase = true) || code.contains("AUTH_REVOKED", ignoreCase = true) ->
+                    WebUiFailure(WebUiFailureReason.IDENTITY_UNAVAILABLE, code)
                 else -> WebUiFailure(WebUiFailureReason.SDK_REJECTED, code)
             }
         }
@@ -840,7 +856,7 @@ object ModuleWebUiPlan {
     const val SERVER_RUNNING_SDK_ERROR = -19918
 
     fun moduleDirectoryOrNull(path: String?): String? = path?.takeIf {
-        it.startsWith('/') && it.any { c -> c != '/' } && it.none { c -> c.code < 0x20 || c == '\\' } &&
+        it.startsWith('/') && it.any { c -> c != '/' } && '\u0000' !in it &&
             it.split('/').none { part -> part == "." || part == ".." }
     }
 
@@ -855,6 +871,9 @@ object ModuleWebUiPlan {
      */
     fun failureFromSdkOpen(outcome: SdkOpenOutcome): WebUiFailure? {
         if (outcome.ok) {
+            if (outcome.pageOpener == WebUiPageOpener.UNKNOWN) {
+                return WebUiFailure(WebUiFailureReason.SDK_REJECTED, "unknown or invalid pageOpener")
+            }
             if (outcome.pageOpener == WebUiPageOpener.MAPLESU && moduleDirectoryOrNull(outcome.moduleDir) == null) {
                 return WebUiFailure(WebUiFailureReason.SDK_REJECTED, "manager receipt missing or invalid moduleDir")
             }

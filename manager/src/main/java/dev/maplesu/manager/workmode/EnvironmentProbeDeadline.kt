@@ -19,16 +19,26 @@ sealed interface EnvironmentProbeResult<out T> {
 }
 
 /** A timed-out native call may keep running; retries never create another worker until it exits. */
-class EnvironmentProbeRunner(private val threadName: String = "maplesu-environment-probe") {
+class EnvironmentProbeRunner(
+    private val threadName: String = "maplesu-environment-probe",
+    private val startWorker: (Thread) -> Unit = { it.start() },
+) {
     private val running = AtomicBoolean(false)
 
     suspend fun <T> run(timeoutMillis: Long, probe: () -> T): EnvironmentProbeResult<T> =
         withContext(Dispatchers.IO) {
-            if (!running.compareAndSet(false, true)) return@withContext EnvironmentProbeResult.Busy
             val task = FutureTask(Callable(probe))
-            Thread({
-                try { task.run() } finally { running.set(false) }
-            }, threadName).apply { isDaemon = true }.start()
+            if (!running.compareAndSet(false, true)) return@withContext EnvironmentProbeResult.Busy
+            try {
+                startWorker(Thread({
+                    try { task.run() } finally { running.set(false) }
+                }, threadName).apply { isDaemon = true })
+            } catch (error: Throwable) {
+                running.set(false)
+                task.cancel(true)
+                if (error is CancellationException) throw error
+                return@withContext EnvironmentProbeResult.Failed(error)
+            }
             try {
                 runInterruptible {
                     // Unwrap before a coroutine boundary can recover/copy ExecutionException.

@@ -49,6 +49,7 @@ void arm64_before_hook_start(asmjit::a64::Assembler*);
 void arm64_before_hook_end(asmjit::a64::Assembler*,bool);
 void arm64_emit_call_original(asmjit::a64::Assembler*);
 bool is_kernel_version_less(const std::string&);
+KModErr install_kernel_function_before_hook(uint64_t,const std::vector<uint8_t>&,HookHandle*);
 }
 ''')
     (inc / "maplesu_request_identity.h").write_text(r'''#pragma once
@@ -95,6 +96,9 @@ HookCleanupReceiptScope::~HookCleanupReceiptScope() noexcept {}
 RequestManagementReply maplesu_hook_reply(){return maplesu_request_management_reply();}
 KModErr maplesu_hook_close(){++closes;return KModErr::OK;}
 bool is_kernel_version_less(const std::string&){return false;}
+KModErr maplesu_hook_legacy_boot_selected(bool& selected){selected=false;return KModErr::OK;}
+KModErr request_kernel_alloc_mem(uint32_t,uint64_t&){assert(false);return KModErr::ERR_MODULE_ASM;}
+KModErr install_kernel_function_before_hook(uint64_t,const std::vector<uint8_t>&,HookHandle*){assert(false);return KModErr::ERR_MODULE_ASM;}
 KModErr read_kernel_mem(uint64_t p,void* b,uint32_t n){assert(p==target-4 && n==4);uint32_t t=0x12345678;std::memcpy(b,&t,4);return fail==1?KModErr::ERR_MODULE_ASM:KModErr::OK;}
 KModErr alloc_kernel_mem(uint32_t,uint64_t&){assert(false);return KModErr::ERR_MODULE_ASM;}
 KModErr maplesu_hook_reserve_code(uint32_t n,uint64_t,uint64_t& p){++allocs;if(fail==2)return KModErr::ERR_NO_MEM;p=allocation;uploaded.resize(n);return KModErr::OK;}

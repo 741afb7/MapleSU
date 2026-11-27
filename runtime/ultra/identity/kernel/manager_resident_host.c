@@ -120,7 +120,7 @@ int msu_manager_resident_init(const struct msu_resident_config *config)
         credential = config2->credential;
         deployment = config2->namespace_record;
     } else return -EINVAL;
-    if (!image || !append || !credential ||
+    if (!image || !append ||
         (append_bytes != MAPLESU_LEGACY_METADATA_V2_BYTES &&
          append_bytes != MAPLESU_LEGACY_METADATA_AUDIT_BYTES &&
          append_bytes != MAPLESU_APPEND64_BYTES)) return -EINVAL;
@@ -218,7 +218,7 @@ int msu_manager_resident_init(const struct msu_resident_config *config)
     common->kernel_base_displacement = (unsigned long)image - descriptor;
     common->legacy_metadata_displacement = (unsigned long)append - descriptor;
     host.helper_metadata.owner_state = MAPLESU_OWNER_STATE_HELPER;
-    host.legacy.version = MSU_MANAGER_CLAIM_BOOT_VERSION;
+    host.legacy.version = credential ? MSU_MANAGER_CLAIM_BOOT_VERSION : 0;
     host.legacy.credential = credential;
     if (deployment) {
         host.deployment = *deployment;
@@ -338,7 +338,7 @@ out:
 static bool msu_owner_snapshot(u32 uid, u32 epoch)
 {
     u32 actual_uid = 0, actual_epoch = 0;
-    return !msu_management_authorize(&actual_uid, &actual_epoch) &&
+    return !msu_management_authorize_request(MAPLESU_REQUEST_ECHO64, &actual_uid, &actual_epoch) &&
         actual_uid == uid && actual_epoch == epoch;
 }
 
@@ -479,7 +479,7 @@ static int msu_owner_request(unsigned long user)
                 goto respond;
             }
         } else if (request.command != MAPLESU_REQUEST_SESSION_CLOSE) {
-            error = msu_management_authorize(&uid, &epoch);
+            error = msu_management_authorize_request(request.command, &uid, &epoch);
             if (error) { response.status = error; goto respond; }
         }
         if (request.arg0) goto respond;
@@ -521,7 +521,7 @@ static int msu_owner_request(unsigned long user)
         response.status = MAPLESU_REQUEST_STATUS_UNSUPPORTED;
         goto respond;
     }
-    error = msu_management_authorize(&uid, &epoch);
+    error = msu_management_authorize_request(request.command, &uid, &epoch);
     if (request.command == MAPLESU_REQUEST_QUERY && error == -EPERM &&
         caller_uid <= 2147483647U && caller_uid % 100000U >= 10000U &&
         caller_uid % 100000U <= 19999U) {

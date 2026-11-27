@@ -3,19 +3,13 @@ package dev.maplesu.manager.litehidden
 /**
  * 「撤销 su 授权所需的身份材料」= **App 作用域**的 `ANDROID_ID` + 管理器包名 + uid。
  *
- * <p>为什么需要这份文件（真机 D1，2026-10-31）：`UltraRecoveryKey` 的 AES-256-GCM 备份用
- * `SHA-256("maplesu-ultra-recovery-v1|<androidId>|<packageName>")` 派生密钥，其中 `androidId`
- * 是 **App 通过 `Settings.Secure.ANDROID_ID` 读到的值**（Android 8+ 按「签名 + 用户 + 包名」
- * 作用域，每个应用不同）。daemon 不是这个 App 的进程，用 `settings get secure android_id`
- * 只能读到**系统值** ⇒ 两者不等 ⇒ GCM tag 校验失败 ⇒ `rootkey_or_androidid_unavailable`
- * ⇒ WebUI 一键解除寄生永久停在 `revoke_su_auth`。
- *
- * <p>所以激活时由 App 把这份身份材料写到 root-only 文件（[ParasitePaths.IDENTITY_FILE]，
- * `0600 root:root`），daemon 优先读它、读不到才回退到旧的 `settings get secure android_id`。
+ * <p>激活时由 App 把当前包名与 fullUID 写到 root-only 文件（[ParasitePaths.IDENTITY_FILE]，
+ * `0600 root:root`），供恢复流程核对撤销目标。应用作用域 androidId 保持既有记录格式，
+ * 不参与当前 Root/Owner 通道授权。
  *
  * <p>**安全边界（硬约束）**：
  *  - 本文件只放 `androidId` / `package` / `uid` 三个字段，**绝不放 rootKey 明文、密文或 token**；
- *  - `androidId` 不是凭据（它只是 KDF 的一段盐），但仍按 root-only 落盘，避免被别的应用读到；
+ *  - `androidId` 不是凭据，仍按 root-only 落盘，避免被别的应用读到；
  *  - 解析是**严格白名单**：整行正则不匹配即 [`parse`] 返回 null（不做宽松 JSON 解析、不猜字段），
  *    任何「看起来像」的值都不会被当成身份材料使用。
  *
@@ -105,7 +99,7 @@ data class RecoveryIdentity(
  *  - **原子**：先 `printf > identity.json.tmp`，`chmod 600`，再 `mv -f` 覆盖（同目录 rename，
  *    不会出现「只写了一半的 identity.json」）；
  *  - **0600 root:root**：`chmod 600` + `stat -c '%a %u'` **回读**，不是 `600 0` 就删掉并失败；
- *  - 目录 0700（与 rootkey 备份同级）；
+ *  - 恢复目录 0700，身份文件与现有恢复材料同级；
  *  - 失败**不留半成品**、不打印文件内容。
  */
 object RecoveryIdentityScripts {

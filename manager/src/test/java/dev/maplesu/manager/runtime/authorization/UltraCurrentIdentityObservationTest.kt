@@ -1,9 +1,7 @@
 package dev.maplesu.manager.runtime.authorization
 
 import dev.maplesu.manager.runtime.ultra.UltraAuthorizationAttempt
-import dev.maplesu.manager.runtime.ultra.UltraManagerSignatureAuthorization
-import dev.maplesu.manager.runtime.ultra.UltraReinstallTrust
-import dev.maplesu.manager.runtime.ultra.currentBrokerManagerIdentity
+import dev.maplesu.manager.runtime.ultra.SuUidProfile
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -88,22 +86,33 @@ class UltraCurrentIdentityObservationTest {
         fun manager(installedAt: Long = 1000) = ApplicationIdentity(10123, "dev.maplesu.manager",
             listOf("dev.maplesu.manager"), setOf("a".repeat(64)), installedAt, 2000, "/data/app/manager/base.apk")
         val recorded = manager()
-        val trust = UltraReinstallTrust(recorded.packageName, 0, recorded.signers)
         val authority = snapshot(recorded)
         val cases = listOf(authority.copy(enabled = false) to recorded,
             authority.copy(tombs = listOf(SuperuserTomb(recorded.uid, recorded.packageName, 5, 3000))) to recorded,
             authority to manager(1500))
         for ((state, installed) in cases) {
-            var listed = listOf(recorded.packageName)
+            var profile = SuUidProfile(recorded.uid, true, recorded.packageName)
             var grants = 0
             var revokes = 0
-            val result = UltraManagerSignatureAuthorization.Session(trust).refreshAttempt(
-                identity = { currentBrokerManagerIdentity(trust, state, installed) }, packages = { listed },
-                grant = { grants++; UltraAuthorizationAttempt.local() },
-                revoke = { revokes++; listed = emptyList(); UltraAuthorizationAttempt.local() })
+            val mirror = UltraAllowlistMirror(object : UltraAllowlistPort {
+                override val supportsUidProfiles = true
+                override fun uidProfiles() = mapOf(profile.uid to profile)
+                override fun identity(uid: Int) = installed.takeIf { it.uid == uid }
+                override fun packages(): Set<String> = error("Owner flow uses full UID profiles")
+                override fun setAllowed(packageName: String, allowed: Boolean): UltraAuthorizationAttempt =
+                    error("Owner flow uses full UID writes")
+                override fun setAllowed(uid: Int, packageName: String, allowed: Boolean): UltraAuthorizationAttempt {
+                    if (allowed) grants++ else revokes++
+                    profile = SuUidProfile(uid, allowed, packageName)
+                    return UltraAuthorizationAttempt.local().withReadback(true)
+                }
+            })
+            val result = mirror.apply(state)
             assertEquals(0, grants)
             assertEquals(1, revokes)
-            assertEquals(UltraManagerSignatureAuthorization.IDENTITY_PENDING, result.status)
+            assertTrue(result.detail, result.ok)
+            assertFalse(profile.allow)
+            assertTrue(SuperuserOps.currentIdentityObservation(state) { installed }.grants.isEmpty())
         }
     }
 }

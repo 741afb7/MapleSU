@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import dev.maplesu.manager.runtime.authorization.DirectPolicy
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
+import dev.maplesu.manager.runtime.ultra.UltraSdkCredentials
 import dev.maplesu.manager.workmode.superuser.ImplantPreparation
 import dev.maplesu.manager.workmode.superuser.LiteImplantCodes
 import dev.maplesu.manager.workmode.superuser.LiteImplantQuiesceGate
@@ -12,29 +13,16 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Delivers a self-admitting client image to **one** authorised application.
- *
- * <p>The image is written into that application's own native library directory, which
- * only that application and root can read, and it carries that application's credential
- * as a fixed trailer. A delivered image admits itself (`get_root`) and executes directly,
- * so an authorised application no longer needs the Manager UI, the directory owner, the
- * Binder endpoint or any resident root service.
+ * Publishes the shipped, unmodified SU client to one authorised application.
+ * The client uses the current caller's SU admission; its bytes carry no reusable secret.
  *
  * <p>Boundaries enforced here:
  *  - only an identity with an active grant is delivered to; everything else is refused
  *    before a single byte is written;
  *  - the Manager never delivers to itself;
- *  - the credential is written to a private temporary file that is deleted in the same
- *    root operation, and it never appears in argv, the environment or a log line;
- *  - [withdraw] removes the image, which is the whole of the revocation mechanism under
- *    the accepted soft-revocation contract (a copy already taken cannot be recalled).
+ *  - [withdraw] removes the delivered file after the durable authority revokes access.
  */
 object SuDelivery {
-    /** Trailer the client looks for: eight byte marker plus the 48 credential bytes. */
-    private val MAGIC = "MPLSUKEY".toByteArray(Charsets.US_ASCII)
-    private const val CREDENTIAL = 48
-    private val TRAILER = MAGIC.size + CREDENTIAL
-
     data class Result(val ok: Boolean, val path: String? = null, val detail: String = "")
 
     /** Filesystem name inside the target's library directory. */
@@ -48,8 +36,8 @@ object SuDelivery {
     /**
      * True when the delivered image is present.
      *
-     * <p>This is the cheapest durable delivery signal: it needs no root, because the library
-     * directory is traversable and only the image itself is unreadable to other identities.
+     * <p>This is the cheapest durable delivery signal: it needs no root because the
+     * installed client and the target library directory are traversable.
      * It says nothing about wiring, and it never decides access - the grant does that.
      */
     fun imagePresent(context: Context, packageName: String): Boolean {
@@ -71,93 +59,66 @@ object SuDelivery {
         val enabled = DirectPolicy.isEnabled(application)
             ?: return Result(false, detail = "AUTH_STATE_UNAVAILABLE")
         if (!enabled) return Result(false, detail = "AUTH_DISABLED")
-        if (DirectPolicy.hasGrantStrict(application, uid) != true) return Result(false, detail = "AUTH_NOT_GRANTED")
+        when (DirectPolicy.hasGrantStrict(application, uid)) {
+            true -> Unit
+            false -> return Result(false, detail = "AUTH_NOT_GRANTED")
+            null -> return Result(false, detail = "AUTH_STATE_UNAVAILABLE")
+        }
+        val current = UltraSdkCredentials.captureOwnerMarker(application)
+        if (!current()) return Result(false, detail = "SDK_IDENTITY_SCOPE_CHANGED")
 
         val source = File(application.applicationInfo.nativeLibraryDir, "libmaplesu_su.so")
         if (!source.isFile) return Result(false, detail = "client image unavailable")
         val directory = runCatching {
             File(application.packageManager.getApplicationInfo(packageName, 0).nativeLibraryDir)
         }.getOrNull() ?: return Result(false, detail = "target library directory unknown")
-        // An application with no native code has no library directory at all. It is still a
-        // valid target: root creates the directory and the client then has somewhere to live,
-        // which is what makes a bare `su` possible for web UIs and pure-Java tools.
-        // Normalise every time, not only when creating: an earlier run may have left the
-        // directory unreadable to the application, and a directory the application cannot
-        // traverse makes its own image unreachable.
-        run {
-            val made = DirectRoot.run(application,
-                // Directories stay traversable and root-owned, exactly like an installed
-                // application's own library directory; only the image inside is private.
-                "/system/bin/mkdir -p '${directory.absolutePath}/arm64' && " +
-                "/system/bin/chown 0:0 '${directory.absolutePath}' '${directory.absolutePath}/arm64' && " +
-                "/system/bin/chmod 0755 '${directory.absolutePath}' '${directory.absolutePath}/arm64' && " +
-                "/system/bin/chcon u:object_r:apk_data_file:s0 '${directory.absolutePath}' '${directory.absolutePath}/arm64' && " +
-                // The parent `lib` directory is created too; if it stays unreadable the
-                // application cannot traverse into it and its own image is unreachable.
-                "/system/bin/chmod 0755 '${File(directory.absolutePath).parent}' && " +
-                "/system/bin/chcon u:object_r:apk_data_file:s0 '${File(directory.absolutePath).parent}'")
-            if (made.code != 0) return Result(false, detail = "target library directory unavailable")
-        }
         val target = File(directory, NAME).absolutePath
-
-        val credential = runCatching { MapleSuCredentialStore(application).load() }.getOrNull()
-            ?: return Result(false, detail = "no paired credential")
-        // W19：**修改前**备份原件并登记（fail closed：备份失败则一个字节都不写）。
-        val preparation = prepareImplantRecord(packageName, uid, target, source, credential, directory)
-        if (preparation != null && !preparation.ok) {
-            credential.fill(0)
-            return Result(false, detail = preparation.code)
-        }
-        // Build the delivered image privately, then let the root operation install it and
-        // delete the staging copy. This keeps the credential out of every command line.
-        val staging = File(application.cacheDir, "deliver-${System.nanoTime()}.img")
+        // W19: back up and register before changing the target or creating directories.
+        val preparation = prepareImplantRecord(packageName, uid, target, source, directory)
+        if (preparation != null && !preparation.ok) return Result(false, detail = preparation.code)
+        if (!current()) return Result(false, detail = "SDK_IDENTITY_SCOPE_CHANGED")
+        // /proc/self/exe must resolve to the installed Manager image: the existing client
+        // derives its APK/bootstrap paths there and retains the executing caller's fullUID.
+        val pending = "$target.maplesu-new"
         try {
-            val expectedSize = source.length() + TRAILER
-            staging.outputStream().use { output ->
-                source.inputStream().use { it.copyTo(output) }
-                output.write(MAGIC)
-                output.write(credential)
-                output.flush()
-            }
-            if (staging.length() != expectedSize) return Result(false, detail = "staging image incomplete")
-            staging.setReadable(false, false)
-            staging.setReadable(true, true)
-            staging.setWritable(false, false)
-            staging.setWritable(true, true)
-
             val script = """
                 set -eu
                 /system/bin/mkdir -p ${quote(directory.absolutePath)}
+                /system/bin/chown 0:0 ${quote(directory.absolutePath)}
                 /system/bin/chmod 0755 ${quote(directory.absolutePath)}
                 /system/bin/chcon u:object_r:apk_data_file:s0 ${quote(directory.absolutePath)}
-                /system/bin/cp -f ${quote(staging.absolutePath)} ${quote(target)}
-                # Owned by the target application and unreadable to every other
-                # application: the library directory itself is traversable, so the mode
-                # is what keeps the delivered credential private to its owner.
-                /system/bin/chown $uid:$uid ${quote(target)}
-                /system/bin/chmod 0700 ${quote(target)}
-                /system/bin/chcon u:object_r:apk_data_file:s0 ${quote(target)}
+                /system/bin/chmod 0755 ${quote(directory.parent.orEmpty())}
+                /system/bin/chcon u:object_r:apk_data_file:s0 ${quote(directory.parent.orEmpty())}
+                trap ${quote("/system/bin/rm -f ${quote(pending)}")} EXIT
+                /system/bin/ln -sfn ${quote(source.absolutePath)} ${quote(pending)}
+                /system/bin/chown -h $uid:$uid ${quote(pending)}
+                /system/bin/chcon -h u:object_r:apk_data_file:s0 ${quote(pending)}
+                /system/bin/mv -f ${quote(pending)} ${quote(target)}
                 test -x ${quote(target)}
-                /system/bin/rm -f ${quote(staging.absolutePath)}
                 /system/bin/printf 'DELIVERED:%s\n' ${quote(target)}
             """.trimIndent()
+            if (!current()) return Result(false, detail = "SDK_IDENTITY_SCOPE_CHANGED")
+            when (DirectPolicy.hasGrantStrict(application, uid)) {
+                true -> Unit
+                false -> return Result(false, detail = "AUTH_NOT_GRANTED")
+                null -> return Result(false, detail = "AUTH_STATE_UNAVAILABLE")
+            }
             val outcome = runRoot(application, script)
             if (outcome.first != 0) {
-                staging.delete()
                 return Result(false, detail = "delivery failed (${outcome.first}): ${outcome.second.take(160)}")
             }
+            if (!current()) return Result(false, detail = "SDK_IDENTITY_SCOPE_CHANGED")
             Log.i("MapleSU", "SU_CLIENT_DELIVERED package=$packageName uid=$uid")
             if (preparation != null) {
                 runCatching { LiteImplantRecorderProvider.current()?.afterDelivery(preparation) }
             }
             return Result(true, target, "delivered")
-        } finally {
-            credential.fill(0)
-            staging.delete()
+        } catch (error: java.io.IOException) {
+            return Result(false, detail = "delivery failed: ${error.javaClass.simpleName}")
         }
     }
 
-    /** Removes the delivered image; the whole revocation mechanism under the contract. */
+    /** Removes only the delivered image; access revocation belongs to the durable authority. */
     fun withdraw(context: Context, packageName: String): Result {
         val application = context.applicationContext
         val path = deliveredPath(application, packageName) ?: return Result(false, detail = "unknown package")
@@ -172,14 +133,10 @@ object SuDelivery {
         else Result(false, detail = "withdraw failed (${outcome.first}): ${outcome.second.take(160)}")
     }
 
-    /** Digest of the delivered image, for records that must not contain the credential. */
+    /** Digest of all bytes actually delivered. */
     fun deliveredDigest(context: Context, packageName: String): String? {
         val path = deliveredPath(context, packageName) ?: return null
-        val bytes = runCatching { File(path).readBytes() }.getOrNull() ?: return null
-        if (bytes.size <= TRAILER) return null
-        return MessageDigest.getInstance("SHA-256")
-            .digest(bytes.copyOfRange(0, bytes.size - TRAILER))
-            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        return deliveredImageSha(File(path))
     }
 
     /**
@@ -191,24 +148,22 @@ object SuDelivery {
         uid: Int,
         target: String,
         source: File,
-        credential: ByteArray,
         directory: File,
     ): ImplantPreparation? {
         val recorder = LiteImplantRecorderProvider.current() ?: return null
-        val sha = deliveredImageSha(source, credential)
+        val sha = deliveredImageSha(source)
             ?: return ImplantPreparation.failed(LiteImplantCodes.BACKUP_FAILED, "image digest")
         val createdDirs = buildList {
+            directory.parentFile?.takeIf { !it.exists() }?.let { add(it.absolutePath) }
             if (!directory.exists()) add(directory.absolutePath)
-            val arm64 = File(directory, "arm64")
-            if (!arm64.exists()) add(arm64.absolutePath)
         }
         return runCatching {
             recorder.beforeDelivery(packageName, uid, target, sha, createdDirs, System.currentTimeMillis())
         }.getOrElse { ImplantPreparation.failed(LiteImplantCodes.BACKUP_FAILED, it.javaClass.simpleName) }
     }
 
-    /** sha256(source + MAGIC + credential)：与真正写进目标的字节完全一致，且不落盘凭据。 */
-    private fun deliveredImageSha(source: File, credential: ByteArray): String? = runCatching {
+    /** The record binds the complete raw client image, including its final byte. */
+    private fun deliveredImageSha(source: File): String? = runCatching {
         val digest = MessageDigest.getInstance("SHA-256")
         source.inputStream().use { input ->
             val buffer = ByteArray(64 * 1024)
@@ -218,8 +173,6 @@ object SuDelivery {
                 digest.update(buffer, 0, count)
             }
         }
-        digest.update(MAGIC)
-        digest.update(credential)
         digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xFF) }
     }.getOrNull()
 
@@ -332,11 +285,8 @@ fun statesFor(
             managerSuState(isGranted, packageName in stale, pending = false, entryReady = wired)
         }
     }
-    // 🟢 Ultra 环境（2026-10-29）：授权真相是 MapleSU SDK 的 su_auth 白名单，内核在应用请求
-    //    root 时直接放行。这里**没有** su 客户端要投递、也没有 PATH 要注入，所以既不存在
-    //    「已投递」也不存在「待运行时接线」—— 在白名单就是 wired，否则就是未授权。
-    //    下面的 `SuAutoWire.probeWiring` / `SuDelivery.imagePresent` 都会起 root 进程，
-    //    在 Ultra 内核上会重启系统，必须在最前面分流。
+    // Ultra uses its durable fullUID authority and kernel SU entry. Its list does not
+    // deploy a traditional client or start PATH probes for display reads.
     if (UltraEnvironmentProbe.usesUltraBackend(context)) {
         val entryReady = !dev.maplesu.manager.runtime.ultra.UltraAuthorization.isDeliveryIncomplete()
         return identities.mapValues { (_, isGranted) ->

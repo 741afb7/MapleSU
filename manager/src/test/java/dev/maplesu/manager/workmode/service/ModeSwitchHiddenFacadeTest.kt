@@ -245,10 +245,10 @@ class ModeSwitchHiddenFacadeTest {
         val notice = workModeSheetNotice(WorkMode.LITE, ui)
 
         assertFalse("Normal first-install must not show the unknown Ultra environment blocker: $notice",
-            notice == WorkModeSheetNotice.Blocked(SwitchBlockerCodes.ULTRA_ENV_STATE_UNKNOWN))
+            notice is WorkModeSheetNotice.Failed && notice.code == SwitchBlockerCodes.ULTRA_ENV_STATE_UNKNOWN)
         assertTrue("Normal root must be allowed to prepare the first Ultra credential: $availability",
             availability.canSwitch)
-        assertTrue("A read-only preflight must run after resolving Normal", h.client.calls.contains("preflight"))
+        assertFalse("Availability uses current local facts before the first root transaction", h.client.calls.contains("preflight"))
         assertFalse("Opening the sheet must not begin a transaction", h.client.calls.contains("begin"))
         assertEquals(ModeState.MODE_B_KERNEL_ONLY, ui.detection)
     }
@@ -302,7 +302,7 @@ class ModeSwitchHiddenFacadeTest {
         var detected = detect().state
         val result = UltraStartupWarmup.run(UltraStartupWarmup.Input(
             activeMode = null, detectionSettled = true, ksuResponded = false,
-            pendingInstallCredential = false, suspended = false, quiescing = false,
+            pendingInstall = false, suspended = false, quiescing = false,
             switchPending = true, conflictingRoot = false,
             postBootUltraSwitchRecovery = ModeSwitchProgress.postBootUltraRecovery(work, "boot-2", "b".repeat(64)) == switchId,
         ), setupEnvironment = { calls += "setup"; ultraState = UltraState.RUNNING },

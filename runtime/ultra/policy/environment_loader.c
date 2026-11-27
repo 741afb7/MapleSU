@@ -1,4 +1,4 @@
-/* Synchronous environment-owned loader. The root credential stays in-process. */
+/* Synchronous environment-owned loader using current-task authority. */
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -54,8 +54,8 @@ static int backend_matches(int fd) {
                   sizeof(maplesu_policy_backend_note)) == 0;
 }
 
-int maplesu_environment_policy_load(const char* key) {
-    if (getuid() != 0 || !key) return 1;
+int maplesu_environment_policy_load(void) {
+    if (getuid() != 0 || geteuid() != 0) return 1;
     int fd = open_backend();
     if (fd < 0) return 2;
     // Publication verifies the complete SHA-256 before rename. Check the paired
@@ -67,9 +67,9 @@ int maplesu_environment_policy_load(const char* key) {
     void* backend = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     close(fd);
     if (!backend) return 4;
-    int (*prepare)(const char*) = (int (*)(const char*))dlsym(backend, "maplesu_environment_policy_start");
+    int (*prepare)(void) = (int (*)(void))dlsym(backend, "maplesu_environment_policy_start");
     if (!prepare) { dlclose(backend); return 5; }
     // Retain the image even on a backend failure: a hook may already exist.
     // There is no worker, background retry, credential argv or per-page query.
-    return prepare(key) == 0 ? 0 : 6;
+    return prepare() == 0 ? 0 : 6;
 }

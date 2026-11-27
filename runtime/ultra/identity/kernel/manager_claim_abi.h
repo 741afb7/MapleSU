@@ -11,9 +11,9 @@ typedef u64 msu_claim_address;
 typedef uint64_t msu_claim_address;
 #endif
 
-/* A private output address is the only request input. Identity, pin, and key
- * come from the running task and boot-owned policy, never from this string.
- * Rejected requests continue the original execve without an existence reply. */
+/* Historical address-only Key-claim framing. New keyless hosts ignore these
+ * names; current-task v3 QUERY verifies the installed APK instead. Retained
+ * declarations identify old artifacts, not a credential recovery fallback. */
 #define MSU_MANAGER_CLAIM_PREFIX "/.msu-ultra-identity-v1/"
 #define MSU_MANAGER_CLAIM_ADDRESS_HEX 16U
 #define MSU_MANAGER_CLAIM_KEY_BYTES 48U

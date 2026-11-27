@@ -35,6 +35,7 @@ void check(bool value, const char* message) {
 }
 void reset() {
     state = {};
+    kernel_module::maplesu_request_set_auth_mode(kernel_module::RequestAuthMode::LegacyKey);
     const auto id = identities.fetch_add(1);
     char number[17];
     std::snprintf(number, sizeof(number), "%016x", id);

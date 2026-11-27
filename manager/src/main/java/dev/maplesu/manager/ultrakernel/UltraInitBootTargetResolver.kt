@@ -62,12 +62,13 @@ internal object UltraInitBootTargetResolver {
             return template
         }
         val module = Module(template.bridgeBytes())
-        if (targetHash == template.targetBootSha256 && template.credentialMode != "module-parameter" && !module.hasTaskProfile()) return template
-        check(template.credentialMode == "module-parameter") { "ULTRA_INIT_DYNAMIC_CREDENTIAL_TEMPLATE" }
-        val sourceKernel = UltraKernelPlan.readKernel(template.targetBoot)
-        check(UltraKernelSpec.sha256(sourceKernel) == template.kernelSha256) { "ULTRA_INIT_TEMPLATE_CHANGED" }
+        if (!template.isTargetTemplate && targetHash == template.targetBootSha256 && template.credentialMode != "keyless" && !module.hasTaskProfile()) return template
+        check(template.credentialMode == "keyless") { "ULTRA_INIT_KEYLESS_TEMPLATE_REQUIRED" }
+        val reference = referenceFacts(template)
+        val sourceKernel = UltraKernelPlan.readKernel(if (reference != null) pairedBoot else template.targetBoot)
+        if (reference == null) check(UltraKernelSpec.sha256(sourceKernel) == template.kernelSha256) { "ULTRA_INIT_TEMPLATE_CHANGED" }
         val sourceSymbols = UltraKernelKallsymsTable.decode(sourceKernel)
-        val legacy = UltraKernelLegacyModuleRoute.required(sourceKernel)
+        val legacy = reference?.legacy ?: UltraKernelLegacyModuleRoute.required(sourceKernel)
         val directCalls = module.legacyDirectCalls(legacy)
         val directImports = directCalls.imports
         val directTargets = directCalls.targets
@@ -75,7 +76,7 @@ internal object UltraInitBootTargetResolver {
         val legacyCallerTypes = if (legacyTaskProfile != null) legacyTaskProfile.report.getValue("legacyTarget").jsonObject
             .getValue("callerTypeSets").jsonObject.mapValues { (_, ids) -> ids.jsonArray.map { it.jsonPrimitive.content }.toSet() }
             else if (legacy) legacyCallerTypes(template) else null
-        if (module.hasTaskProfile() && targetHash == template.targetBootSha256 &&
+        if (!template.isTargetTemplate && module.hasTaskProfile() && targetHash == template.targetBootSha256 &&
             template.targetInputSha256["taskProfileProof"] != null) {
             val payload = if (legacyTaskProfile == null) UltraKernelManagerClaimPayload.load(requireNotNull(claimAssets) {
                 "ULTRA_INIT_TASK_PROFILE_CLAIM_ASSETS_REQUIRED"
@@ -85,7 +86,12 @@ internal object UltraInitBootTargetResolver {
                 "ULTRA_INIT_TASK_PROFILE_IMPLEMENTATION_REQUIRED"
             }
             val mode = if (legacyTaskProfile != null) "legacy-lto-cfi" else requireNotNull(facts).cfiMode
-            val proof = UltraKernelTaskProfileTarget.derive(sourceKernel, sourceSymbols, implementation, mode)
+            // This artifact already carries the proof from the verified loader path.
+            // Its paired boot need not share a directory with the original SDK manifest.
+            val normalLoader = template.targetInputSha256["taskProfileLoaderAbi"]?.let {
+                it.matches(Regex("[0-9a-f]{64}")) && it == template.targetInputSha256["abiEvidence"]
+            } ?: false
+            val proof = UltraKernelTaskProfileTarget.derive(sourceKernel, sourceSymbols, implementation, mode, normalLoader)
             val generationMatches = if (legacyTaskProfile != null)
                 template.targetInputSha256["taskProfileModule"] == legacyTaskProfile.report.getValue("bundledModuleSha256").jsonPrimitive.content
                 else template.targetInputSha256["taskProfileClaim"] == UltraKernelSpec.sha256(requireNotNull(payload).elf)
@@ -98,39 +104,67 @@ internal object UltraInitBootTargetResolver {
             return template
         }
         val session = if (module.hasSession()) sessionFacts(template, module) else null
-        if (targetHash == template.targetBootSha256 && !module.hasTaskProfile() && session == null) {
+        fun bindExactReference(): UltraInitBootProducer.Artifact {
+            check(reference != null && targetHash == reference.bootSha256 &&
+                UltraKernelSpec.sha256(sourceKernel) == sourceKernelHash(template) &&
+                UltraKernelSpec.releaseOf(sourceKernel) == reference.release && UltraKernelSpec.sha256(pairedBoot) == targetHash) {
+                "ULTRA_INIT_TEMPLATE_EXACT_TARGET" }
+            return template.forTarget(pairedBoot, targetHash, reference.release, sourceKernelHash(template), module.bytes,
+                template.targetInputSha256 + ("templateBridge" to sourceBridge(template)), reference.page,
+                template.metadataDisplacement, reference.vermagic, reference.config["CONFIG_MODVERSIONS"] == "y")
+        }
+        if (reference != null && template.isTargetTemplate && targetHash == reference.bootSha256 &&
+            !module.hasTaskProfile() && session == null) return bindExactReference()
+        if (reference != null && !template.isTargetTemplate && targetHash == template.targetBootSha256 && !module.hasTaskProfile()) {
+            if (session != null) verifySession(sourceKernel, sourceSymbols, session, legacyCallerTypes,
+                sourceManifest(template)["abiEvidence"] != null)
+            template.forTarget(pairedBoot, targetHash, template.kernelRelease, template.kernelSha256, module.bytes,
+                template.targetInputSha256, pageBytes(sourceKernel, configuration(sourceKernel)), template.metadataDisplacement,
+                vermagic(sourceKernel, template.kernelRelease), configuration(sourceKernel)["CONFIG_MODVERSIONS"] == "y")
+            return template
+        }
+        if (!template.isTargetTemplate && targetHash == template.targetBootSha256 && !module.hasTaskProfile() && session == null) {
             check(UltraKernelSpec.sha256(pairedBoot) == targetHash) { "ULTRA_INIT_INPUT_CHANGED" }
             return template
         }
         val (contractFile, contract, manifest) = templateContract(template)
-        val loaderAbi = sameKmiLoaderEvidence(template, module, sourceKernel, sourceSymbols, legacy, contract, manifest, directImports)
+        val loaderAbi = sameKmiLoaderEvidence(template, module, sourceKernel, sourceSymbols, legacy, contract, manifest, directImports, reference)
         fun verifyInputs() {
             check(UltraKernelSpec.sha256(pairedBoot) == targetHash &&
-                UltraKernelSpec.sha256(template.targetBoot) == template.targetBootSha256 &&
+                (reference != null || UltraKernelSpec.sha256(template.targetBoot) == template.targetBootSha256) &&
+                (reference == null || UltraKernelSpec.sha256(reference.file) == reference.sha256) &&
                 UltraKernelSpec.sha256(contractFile) == manifest.getValue("targetContractSha256").jsonPrimitive.content &&
-                (loaderAbi == null || UltraKernelSpec.sha256(File(template.targetBoot.parentFile,
+                (loaderAbi == null || UltraKernelSpec.sha256(File(bundleDirectory(template),
                     manifest.getValue("abiEvidence").jsonPrimitive.content)) == manifest.getValue("abiEvidenceSha256").jsonPrimitive.content)) {
                 "ULTRA_INIT_INPUT_CHANGED"
             }
         }
-        if (session != null) verifySession(sourceKernel, sourceSymbols, session, legacyCallerTypes, loaderAbi != null)
-        if (targetHash == template.targetBootSha256 && !module.hasTaskProfile()) {
+        if (session != null && reference == null) verifySession(sourceKernel, sourceSymbols, session, legacyCallerTypes, loaderAbi != null)
+        if (reference != null && template.isTargetTemplate && targetHash == reference.bootSha256 && !module.hasTaskProfile()) {
+            if (session != null) verifySession(sourceKernel, sourceSymbols, session, legacyCallerTypes, loaderAbi != null)
+            verifyInputs()
+            return bindExactReference()
+        }
+        if (!template.isTargetTemplate && targetHash == template.targetBootSha256 && !module.hasTaskProfile()) {
+            if (session != null && reference != null) verifySession(sourceKernel, sourceSymbols, session, legacyCallerTypes, loaderAbi != null)
             verifyInputs()
             return template
         }
-        val targetKernel = UltraKernelPlan.readKernel(pairedBoot)
+        val targetKernel = if (reference != null) sourceKernel else UltraKernelPlan.readKernel(pairedBoot)
         val targetKernelHash = UltraKernelSpec.sha256(targetKernel)
         val targetRelease = UltraKernelSpec.releaseOf(targetKernel)
         check(targetRelease.isNotEmpty()) { "ULTRA_INIT_TARGET_RELEASE" }
         val targetSymbols = UltraKernelKallsymsTable.decode(targetKernel)
         check(UltraKernelLegacyModuleRoute.required(targetKernel) == legacy) { "ULTRA_INIT_TARGET_CFI_MODE" }
         for (name in directTargets) {
-            for ((kernel, symbols) in listOf(sourceKernel to sourceSymbols, targetKernel to targetSymbols)) {
+            if (reference != null) check(name in reference.directTargets) { "ULTRA_INIT_TEMPLATE_DIRECT_TARGET:$name" }
+            for ((kernel, symbols) in if (reference == null) listOf(sourceKernel to sourceSymbols, targetKernel to targetSymbols)
+                else listOf(targetKernel to targetSymbols)) {
                 val entry = unique(symbols, name)
                 check(entry >= 0 && entry % 4 == 0 && entry <= kernel.size - 4) { "ULTRA_INIT_LEGACY_DIRECT_TARGET:$name" }
             }
         }
-        val sourceConfig = configuration(sourceKernel)
+        val sourceConfig = reference?.config ?: configuration(sourceKernel)
         val targetConfig = configuration(targetKernel)
         verifyTargetConfiguration(sourceConfig, targetConfig)
         if (loaderAbi != null) check(kernelSeries(targetRelease) == loaderAbi.getValue("targetSeries").jsonPrimitive.content) {
@@ -138,7 +172,7 @@ internal object UltraInitBootTargetResolver {
         }
         val embeddedTypes = localTypes + if (session != null) setOf("group_info") else emptySet()
         if (loaderAbi == null) {
-            val sourceTypes = UltraKernelBtf.typeSignatures(sourceKernel, sourceSymbols, embeddedTypes)
+            val sourceTypes = reference?.localTypes ?: UltraKernelBtf.typeSignatures(sourceKernel, sourceSymbols, embeddedTypes)
                 ?: error("ULTRA_INIT_TEMPLATE_BTF_REQUIRED")
             val targetTypes = UltraKernelBtf.typeSignatures(targetKernel, targetSymbols, embeddedTypes)
                 ?: error("ULTRA_INIT_TARGET_BTF_REQUIRED")
@@ -148,7 +182,7 @@ internal object UltraInitBootTargetResolver {
         }
         if (session != null) verifySession(targetKernel, targetSymbols, session, legacyCallerTypes, loaderAbi != null)
         val modversions = targetConfig["CONFIG_MODVERSIONS"] == "y"
-        val sourceExports = exports(sourceKernel, sourceSymbols, modversions)
+        val sourceExports = reference?.exports ?: exports(sourceKernel, sourceSymbols, modversions)
         val targetExports = exports(targetKernel, targetSymbols, modversions)
         val versions = module.versions()
         check(versions.isNotEmpty() == modversions) { "ULTRA_INIT_TARGET_CRC_REQUIRED" }
@@ -163,7 +197,7 @@ internal object UltraInitBootTargetResolver {
         if (loaderAbi != null) check(modversions && "module_layout" in versions &&
             ordinaryImports.all { it in versions } && changed.isEmpty()) { "ULTRA_INIT_TARGET_KMI_IMPORT_CRC" }
         val sourceChanged = if (changed.isEmpty()) emptyMap() else
-            UltraKernelBtf.signatures(sourceKernel, sourceSymbols, changed, emptySet()).orEmpty()
+            reference?.importSignatures ?: UltraKernelBtf.signatures(sourceKernel, sourceSymbols, changed, emptySet()).orEmpty()
         val targetChanged = if (changed.isEmpty()) emptyMap() else
             UltraKernelBtf.signatures(targetKernel, targetSymbols, changed, emptySet()).orEmpty()
         for (name in ordinaryImports + (versions.keys - directImports)) {
@@ -202,14 +236,20 @@ internal object UltraInitBootTargetResolver {
                 optional.distinct().size == optional.size && required.none { it in optional }) { "ULTRA_INIT_TEMPLATE_PRIVATE_SYMBOLS" }
             (required + optional.filter { targetSymbols.offsetsOf(it).isNotEmpty() }).toSet()
         }
-        for (name in privateNames - directTargets) {
+        for (name in privateNames - directTargets - optionalPrivateNames) {
             if (legacy) {
-                if (name !in optionalPrivateNames || sourceSymbols.offsetsOf(name).isNotEmpty())
-                    UltraKernelLegacyCfi.canonicalEntry(sourceKernel, sourceSymbols, name)
+                if (name !in optionalPrivateNames || (reference?.privatePresence?.get(name) ?: sourceSymbols.offsetsOf(name).isNotEmpty())) {
+                    if (reference == null) UltraKernelLegacyCfi.canonicalEntry(sourceKernel, sourceSymbols, name)
+                    else check(name in reference.privateCanonical) { "ULTRA_INIT_TEMPLATE_PRIVATE_CFI:$name" }
+                }
                 UltraKernelLegacyCfi.canonicalEntry(targetKernel, targetSymbols, name)
             } else if (targetConfig["CONFIG_CFI_CLANG"] == "y" || targetConfig["CONFIG_CFI"] == "y") {
-                val a = unique(sourceSymbols, name); val b = unique(targetSymbols, name)
-                check(a >= 4 && b >= 4 && word(sourceKernel, a - 4) == word(targetKernel, b - 4)) {
+                val b = unique(targetSymbols, name)
+                val sourceCfi = if (reference != null) reference.privateKcfi[name] else {
+                    val a = unique(sourceSymbols, name)
+                    check(a >= 4) { "ULTRA_INIT_TEMPLATE_PRIVATE_CFI:$name" }; word(sourceKernel, a - 4)
+                }
+                check(b >= 4 && sourceCfi != null && sourceCfi == word(targetKernel, b - 4)) {
                     "ULTRA_INIT_TARGET_PRIVATE_CFI:$name"
                 }
             }
@@ -227,8 +267,8 @@ internal object UltraInitBootTargetResolver {
         if (loaderAbi == null) module.bindRuntime(targetKernel, targetSymbols)
         val page = pageBytes(targetKernel, targetConfig)
         if (loaderAbi == null) module.bindSdk(targetKernel, targetSymbols, targetConfig, page)
-        else check(page == pageBytes(sourceKernel, sourceConfig)) { "ULTRA_INIT_TARGET_KMI_PAGE" }
-        module.bindProfiles(sourceKernel, sourceSymbols, targetKernel, targetSymbols, loaderAbi != null)
+        else check(page == (reference?.page ?: pageBytes(sourceKernel, sourceConfig))) { "ULTRA_INIT_TARGET_KMI_PAGE" }
+        module.bindProfiles(sourceKernel, sourceSymbols, targetKernel, targetSymbols, loaderAbi != null, reference?.profileSignatures)
         val taskProfileInputs = if (module.hasTaskProfile()) {
             val payload = if (legacyTaskProfile == null) UltraKernelManagerClaimPayload.load(requireNotNull(claimAssets) {
                 "ULTRA_INIT_TASK_PROFILE_CLAIM_ASSETS_REQUIRED"
@@ -240,19 +280,20 @@ internal object UltraInitBootTargetResolver {
             val (report, metadataHash) = if (legacyTaskProfile != null) legacyTaskProfile.report to legacyTaskProfile.sha256
                 else taskProfileFacts(template, module, requireNotNull(payload), implementation)
             val mode = if (legacyTaskProfile != null) "legacy-lto-cfi" else requireNotNull(facts).cfiMode
-            val proof = UltraKernelTaskProfileTarget.derive(targetKernel, targetSymbols, implementation, mode)
+            val proof = UltraKernelTaskProfileTarget.derive(targetKernel, targetSymbols, implementation, mode, loaderAbi != null)
             check(proof.complete) { "ULTRA_INIT_TASK_PROFILE_TARGET_PROOFS:" +
                 proof.missing.entries.joinToString(";") { "${it.key}=${it.value}" } }
             module.verifyTaskProfile(implementation, mode, report, null)
             module.bindTaskProfile(implementation, proof, mode)
             mapOf("taskProfileMetadata" to metadataHash, "taskProfileProof" to proof.proofSha256,
                 "taskProfileSource" to implementation.sourceSha256) +
+                (if (loaderAbi != null) mapOf("taskProfileLoaderAbi" to manifest.getValue("abiEvidenceSha256").jsonPrimitive.content) else emptyMap()) +
                 if (legacyTaskProfile != null) mapOf("taskProfileModule" to report.getValue("bundledModuleSha256").jsonPrimitive.content)
                 else mapOf("taskProfileClaim" to UltraKernelSpec.sha256(requireNotNull(payload).elf))
         } else emptyMap()
         val magic = vermagic(targetKernel, targetRelease)
         module.verifyOrSetVermagic(magic, versions.isNotEmpty())
-        val sourcePage = pageBytes(sourceKernel, sourceConfig)
+        val sourcePage = reference?.page ?: pageBytes(sourceKernel, sourceConfig)
         val displacement = Math.addExact(template.metadataDisplacement, page - sourcePage)
         val abiInputs = if (loaderAbi != null) mapOf("abiEvidence" to manifest.getValue("abiEvidenceSha256").jsonPrimitive.content)
         else {
@@ -261,7 +302,7 @@ internal object UltraInitBootTargetResolver {
             check(targetBtfStart >= 0 && targetBtfEnd > targetBtfStart && targetBtfEnd <= targetKernel.size) { "ULTRA_INIT_TARGET_BTF_BOUNDS" }
             mapOf("btf" to UltraKernelSpec.sha256(targetKernel.copyOfRange(targetBtfStart, targetBtfEnd)))
         }
-        val inputs = mapOf("templateBridge" to template.bridgeSha256,
+        val inputs = mapOf("templateBridge" to sourceBridge(template),
             "templateContract" to UltraKernelSpec.sha256(contractFile),
             "config" to UltraKernelSpec.sha256(configBytes(targetKernel)),
             "moduleSymvers" to UltraKernelSpec.sha256(targetExports.toSortedMap().entries.joinToString("") {
@@ -273,10 +314,98 @@ internal object UltraInitBootTargetResolver {
         return if (legacyTaskProfile != null) resolved.withTaskProfileMetadata(legacyTaskProfile.encoded) else resolved
     }
 
+    private data class ReferenceFacts(val file: File, val sha256: String, val legacy: Boolean,
+        val bootSha256: String, val release: String, val vermagic: String, val page: Int,
+        val configSha256: String, val config: Map<String, String>, val exports: Map<String, Export>,
+        val importSignatures: Map<String, String>, val localTypes: Map<String, String>,
+        val profileSignatures: Map<String, String>, val directTargets: Set<String>,
+        val privatePresence: Map<String, Boolean>, val privateKcfi: Map<String, Int>, val privateCanonical: Set<String>)
+
+    private fun bundleDirectory(template: UltraInitBootProducer.Artifact): File =
+        (template.bundleDirectory ?: requireNotNull(template.targetBoot).parentFile).canonicalFile
+    private fun sourceManifest(template: UltraInitBootProducer.Artifact): JsonObject =
+        Json.parseToJsonElement((template.templateManifest ?: File(bundleDirectory(template), "manifest.json")).readText()).jsonObject
+    private fun sourceBridge(template: UltraInitBootProducer.Artifact): String = template.targetInputSha256["templateBridge"] ?: template.bridgeSha256
+    private fun sourceKernelHash(template: UltraInitBootProducer.Artifact): String =
+        if (template.templateManifest != null) sourceManifest(template).getValue("kernelSha256").jsonPrimitive.content else template.kernelSha256
+
+    private fun referenceFacts(template: UltraInitBootProducer.Artifact): ReferenceFacts? {
+        if (template.templateManifest == null) return null
+        val manifest = sourceManifest(template)
+        check(manifest["schemaVersion"]?.jsonPrimitive?.intOrNull == 3 && manifest["kind"]?.jsonPrimitive?.content == "target-template" &&
+            listOf("targetBoot", "btf", "btfSha256").none { it in manifest }) { "ULTRA_INIT_TEMPLATE_SCHEMA" }
+        val base = bundleDirectory(template)
+        val (file, facts) = retainedJson(base, manifest, "referenceFacts")
+        check(facts.keys == setOf("schema", "referenceBootSha256", "referenceKernelSha256", "bridgeSha256", "contractSha256",
+            "sourceGenerationSha256", "sourceRelease", "sourceVermagic", "sourcePageSize", "sourceConfigSha256", "exports",
+            "importSignatures", "localTypeSignatures", "profileSignatures", "profileSymbols", "directTargets", "privateSymbolPresence",
+            "privateKcfi", "privateCanonicalSymbols", "sourceProofs", "legacyCfi") &&
+            facts.getValue("schema").jsonPrimitive.content == "maplesu-init-bridge-reference-facts/1") { "ULTRA_INIT_TEMPLATE_REFERENCE_FIELDS" }
+        fun text(key: String): String = facts.getValue(key).jsonPrimitive.let {
+            check(it.isString) { "ULTRA_INIT_TEMPLATE_REFERENCE_STRING:$key" }; it.content }
+        fun hash(key: String): String = text(key).also { check(it.matches(Regex("[0-9a-f]{64}"))) { "ULTRA_INIT_TEMPLATE_REFERENCE_HASH:$key" } }
+        for ((fact, field) in mapOf("referenceBootSha256" to "targetBootSha256", "referenceKernelSha256" to "kernelSha256",
+            "bridgeSha256" to "bridgeSha256", "contractSha256" to "targetContractSha256", "sourceGenerationSha256" to "sourceGenerationSha256",
+            "sourceConfigSha256" to "configSha256")) check(hash(fact) == manifest.getValue(field).jsonPrimitive.content) {
+                "ULTRA_INIT_TEMPLATE_REFERENCE_IDENTITY:$fact" }
+        check(hash("bridgeSha256") == sourceBridge(template) && text("sourceRelease") == manifest.getValue("kernelRelease").jsonPrimitive.content &&
+            text("sourceVermagic") == manifest.getValue("targetVermagic").jsonPrimitive.content) { "ULTRA_INIT_TEMPLATE_REFERENCE_MODULE" }
+        val page = facts.getValue("sourcePageSize").jsonPrimitive.int
+        check(page in setOf(4096, 16384, 65536)) { "ULTRA_INIT_TEMPLATE_REFERENCE_PAGE" }
+        fun names(key: String): Set<String> = facts.getValue(key).jsonArray.map { it.jsonPrimitive.let { value ->
+            check(value.isString) { "ULTRA_INIT_TEMPLATE_REFERENCE_SYMBOL:$key" }; value.content } }.also { values ->
+            check(values.size <= 4096 && values == values.sorted().distinct() && values.all { it.matches(Regex("[A-Za-z0-9_.$]{1,256}")) }) {
+                "ULTRA_INIT_TEMPLATE_REFERENCE_SYMBOL:$key" } }.toSet()
+        fun strings(key: String): Map<String, String> = facts.getValue(key).jsonObject.mapValues { (_, value) -> value.jsonPrimitive.let {
+            check(it.isString && it.content.length in 1..65536) { "ULTRA_INIT_TEMPLATE_REFERENCE_SIGNATURE:$key" }; it.content }
+        }.also { values -> check(values.size <= 4096 && values.keys.all { it.matches(Regex("[A-Za-z0-9_.$]{1,256}")) }) {
+            "ULTRA_INIT_TEMPLATE_REFERENCE_MAP:$key" } }
+        val sourceExports = facts.getValue("exports").jsonObject.mapValues { (_, value) ->
+            val row = value.jsonObject
+            check(row.keys == setOf("crc", "namespace")) { "ULTRA_INIT_TEMPLATE_REFERENCE_EXPORT" }
+            val crc = row.getValue("crc").jsonPrimitive.content; val namespace = row.getValue("namespace").jsonPrimitive.content
+            check(crc.matches(Regex("[0-9a-f]{8}")) && namespace.matches(Regex("[A-Za-z0-9_.$]{0,256}"))) { "ULTRA_INIT_TEMPLATE_REFERENCE_EXPORT" }
+            Export(Integer.parseUnsignedInt(crc, 16), namespace)
+        }
+        check(sourceExports.size <= 4096 && sourceExports.keys.all { it.matches(Regex("[A-Za-z0-9_.$]{1,256}")) }) { "ULTRA_INIT_TEMPLATE_REFERENCE_EXPORTS" }
+        val profiles = names("profileSymbols"); val signatures = strings("profileSignatures"); val local = strings("localTypeSignatures")
+        check(profiles.all { it in profileNames }) { "ULTRA_INIT_TEMPLATE_REFERENCE_PROFILES" }
+        val (_, contract) = retainedJson(base, manifest, "targetContract")
+        val loader = contract["abiEvidence"]?.jsonObject?.get("method")?.jsonPrimitive?.content == "same-kmi-module-loader"
+        val module = Module(template.bridgeBytes())
+        check(if (loader) signatures.isEmpty() && local.isEmpty() else signatures.keys == profiles &&
+            local.keys == (localTypes + if (module.hasSession()) setOf("group_info") else emptySet())) { "ULTRA_INIT_TEMPLATE_REFERENCE_ABI_SET" }
+        val presence = facts.getValue("privateSymbolPresence").jsonObject.mapValues { (_, value) ->
+            requireNotNull(value.jsonPrimitive.booleanOrNull) { "ULTRA_INIT_TEMPLATE_REFERENCE_PRESENCE" } }
+        val privateNames = if (loader) contract.getValue("privateSymbols").jsonArray.map { it.jsonPrimitive.content }.toSet() +
+            contract.getValue("optionalPrivateSymbols").jsonArray.map { it.jsonPrimitive.content } else contract.getValue("prototypes").jsonObject.keys
+        check(presence.keys == privateNames) { "ULTRA_INIT_TEMPLATE_REFERENCE_PRIVATE_SET" }
+        val kcfi = strings("privateKcfi").mapValues { (_, value) ->
+            check(value.matches(Regex("[0-9a-f]{8}"))) { "ULTRA_INIT_TEMPLATE_REFERENCE_KCFI" }; Integer.parseUnsignedInt(value, 16) }
+        val proofs = facts.getValue("sourceProofs").jsonObject
+        check(proofs.keys == setOf("sessionAbiSha256", "taskProfileAbiSha256") &&
+            proofs["sessionAbiSha256"] == (manifest["sessionAbiSha256"] ?: JsonNull) &&
+            proofs["taskProfileAbiSha256"] == (manifest["taskProfileAbiSha256"] ?: JsonNull)) { "ULTRA_INIT_TEMPLATE_REFERENCE_PROOFS" }
+        val configName = manifest.getValue("config").jsonPrimitive.content
+        check(configName.matches(Regex("[A-Za-z0-9_.-]+"))) { "ULTRA_INIT_TEMPLATE_REFERENCE_CONFIG" }
+        val configFile = File(base, configName).canonicalFile
+        check(configFile.parentFile == base && configFile.length() in 1L..1048576L) { "ULTRA_INIT_TEMPLATE_REFERENCE_CONFIG" }
+        val configBytes = configFile.readBytes()
+        check(UltraKernelSpec.sha256(configBytes) == hash("sourceConfigSha256")) { "ULTRA_INIT_TEMPLATE_REFERENCE_CONFIG" }
+        val config = configBytes.toString(Charsets.US_ASCII).lineSequence().filter { it.startsWith("CONFIG_") && '=' in it }
+            .associate { it.substringBefore('=') to it.substringAfter('=') }
+        check(listOf(4, 16, 64).singleOrNull { config["CONFIG_ARM64_${it}K_PAGES"] == "y" }?.times(1024) == page) {
+            "ULTRA_INIT_TEMPLATE_REFERENCE_CONFIG_PAGE" }
+        return ReferenceFacts(file, manifest.getValue("referenceFactsSha256").jsonPrimitive.content,
+            requireNotNull(facts.getValue("legacyCfi").jsonPrimitive.booleanOrNull), hash("referenceBootSha256"), text("sourceRelease"),
+            text("sourceVermagic"), page, hash("sourceConfigSha256"), config, sourceExports, strings("importSignatures"), local, signatures,
+            names("directTargets"), presence, kcfi, names("privateCanonicalSymbols"))
+    }
+
     private fun templateContract(template: UltraInitBootProducer.Artifact): Triple<File, JsonObject, JsonObject> {
-        val base = template.targetBoot.parentFile.canonicalFile
-        val manifest = Json.parseToJsonElement(File(base, "manifest.json").readText()).jsonObject
-        check(manifest["bridgeSha256"]?.jsonPrimitive?.content == template.bridgeSha256) { "ULTRA_INIT_TEMPLATE_CONTRACT_MODULE" }
+        val base = bundleDirectory(template)
+        val manifest = sourceManifest(template)
+        check(manifest["bridgeSha256"]?.jsonPrimitive?.content == sourceBridge(template)) { "ULTRA_INIT_TEMPLATE_CONTRACT_MODULE" }
         val (file, contract) = retainedJson(base, manifest, "targetContract")
         return Triple(file, contract, manifest)
     }
@@ -297,10 +426,10 @@ internal object UltraInitBootTargetResolver {
         ?: error("ULTRA_INIT_TARGET_KMI_RELEASE")
 
     private fun sameKmiLoaderEvidence(template: UltraInitBootProducer.Artifact, module: Module, source: ByteArray,
-        sourceSymbols: UltraKernelSymbols, legacy: Boolean, contract: JsonObject, manifest: JsonObject, direct: Set<String>): JsonObject? {
+        sourceSymbols: UltraKernelSymbols, legacy: Boolean, contract: JsonObject, manifest: JsonObject, direct: Set<String>, reference: ReferenceFacts? = null): JsonObject? {
         val declared = contract["abiEvidence"]?.jsonObject ?: return null
         if (declared["method"]?.jsonPrimitive?.content != "same-kmi-module-loader") return null
-        val (_, evidence) = retainedJson(template.targetBoot.parentFile.canonicalFile, manifest, "abiEvidence")
+        val (_, evidence) = retainedJson(bundleDirectory(template), manifest, "abiEvidence")
         check(template.targetInputSha256["abiEvidence"] == manifest.getValue("abiEvidenceSha256").jsonPrimitive.content) {
             "ULTRA_INIT_TEMPLATE_KMI_EVIDENCE_BINDING"
         }
@@ -313,20 +442,20 @@ internal object UltraInitBootTargetResolver {
             evidence["privatePrototypeMethod"]?.jsonPrimitive?.content == "runtime-native-typed-cfi-resolver") {
             "ULTRA_INIT_TEMPLATE_KMI_EVIDENCE"
         }
-        val config = configuration(source)
-        val release = UltraKernelSpec.releaseOf(source)
+        val config = reference?.config ?: configuration(source)
+        val release = reference?.release ?: UltraKernelSpec.releaseOf(source)
         val series = kernelSeries(release)
-        check(config["CONFIG_MODVERSIONS"] == "y" && evidence["targetBootSha256"]?.jsonPrimitive?.content == template.targetBootSha256 &&
-            evidence["targetKernelSha256"]?.jsonPrimitive?.content == template.kernelSha256 &&
-            evidence["targetConfigSha256"]?.jsonPrimitive?.content == UltraKernelSpec.sha256(configBytes(source)) &&
-            evidence["targetRelease"]?.jsonPrimitive?.content == release && release == template.kernelRelease &&
+        check(config["CONFIG_MODVERSIONS"] == "y" && evidence["targetBootSha256"]?.jsonPrimitive?.content == (reference?.bootSha256 ?: template.targetBootSha256) &&
+            evidence["targetKernelSha256"]?.jsonPrimitive?.content == sourceKernelHash(template) &&
+            evidence["targetConfigSha256"]?.jsonPrimitive?.content == (reference?.configSha256 ?: UltraKernelSpec.sha256(configBytes(source))) &&
+            evidence["targetRelease"]?.jsonPrimitive?.content == release && release == (reference?.release ?: template.kernelRelease) &&
             evidence["targetSeries"]?.jsonPrimitive?.content == series && evidence["buildSeries"]?.jsonPrimitive?.content == series &&
             kernelSeries(evidence.getValue("buildRelease").jsonPrimitive.content) == series &&
-            evidence["targetVermagic"]?.jsonPrimitive?.content == vermagic(source, release) &&
-            evidence["bridgeSha256"]?.jsonPrimitive?.content == template.bridgeSha256 &&
-            evidence["targetSymversSha256"]?.jsonPrimitive?.content == template.targetInputSha256["moduleSymvers"] &&
+            evidence["targetVermagic"]?.jsonPrimitive?.content == (reference?.vermagic ?: vermagic(source, release)) &&
+            evidence["bridgeSha256"]?.jsonPrimitive?.content == sourceBridge(template) &&
+            evidence["targetSymversSha256"]?.jsonPrimitive?.content == (manifest["moduleSymversSha256"]?.jsonPrimitive?.content ?: template.targetInputSha256["moduleSymvers"]) &&
             evidence["buildSymversSha256"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{64}")) == true &&
-            UltraKernelSpec.sha256(module.bytes) == template.bridgeSha256) { "ULTRA_INIT_TEMPLATE_KMI_IDENTITY" }
+            UltraKernelSpec.sha256(module.bytes) == sourceBridge(template)) { "ULTRA_INIT_TEMPLATE_KMI_IDENTITY" }
         val ordinary = module.imports() - direct
         val versions = module.versions()
         val crc = evidence.getValue("moduleLayoutCrc").jsonPrimitive.content
@@ -336,7 +465,7 @@ internal object UltraInitBootTargetResolver {
                 ordinary.sorted().joinToString("") { "$it\n" }.toByteArray(Charsets.US_ASCII))) {
             "ULTRA_INIT_TEMPLATE_KMI_IMPORTS"
         }
-        val exports = exports(source, sourceSymbols, true)
+        val exports = reference?.exports ?: exports(source, sourceSymbols, true)
         val namespaces = module.tags().filter { it.startsWith("import_ns=") }.map { it.substring(10) }.toSet()
         for (name in ordinary + (versions.keys - direct)) {
             val entry = exports[name] ?: error("ULTRA_INIT_TEMPLATE_EXPORT_MISSING:$name")
@@ -346,9 +475,9 @@ internal object UltraInitBootTargetResolver {
         }
         val layout = evidence.getValue("compiledNativeLayout").jsonObject
         check(layout["method"]?.jsonPrimitive?.content == "same-kmi-ddk-compiled-native-tables" &&
-            layout["derivedModuleSha256"]?.jsonPrimitive?.content == template.bridgeSha256 &&
+            layout["derivedModuleSha256"]?.jsonPrimitive?.content == sourceBridge(template) &&
             layout["sourceModuleSha256"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{64}")) == true &&
-            layout["targetKernelSha256"]?.jsonPrimitive?.content == template.kernelSha256 &&
+            layout["targetKernelSha256"]?.jsonPrimitive?.content == sourceKernelHash(template) &&
             layout["compilerLayoutIsTargetBtf"]?.jsonPrimitive?.booleanOrNull == false) { "ULTRA_INIT_TEMPLATE_KMI_NATIVE_EVIDENCE" }
         module.verifyCompiledNativeLayouts(layout)
         return evidence
@@ -387,9 +516,9 @@ internal object UltraInitBootTargetResolver {
                 template.targetInputSha256["taskProfileMetadata"]) { "ULTRA_INIT_LEGACY_TASK_PROFILE_RETAINED_IDENTITY" }
             retained
         } else {
-            val base = template.targetBoot.parentFile.canonicalFile
-            val manifest = Json.parseToJsonElement(File(base, "manifest.json").readText()).jsonObject
-            check(manifest.getValue("bridgeSha256").jsonPrimitive.content == template.bridgeSha256) {
+            val base = bundleDirectory(template)
+            val manifest = sourceManifest(template)
+            check(manifest.getValue("bridgeSha256").jsonPrimitive.content == sourceBridge(template)) {
                 "ULTRA_INIT_LEGACY_TASK_PROFILE_TEMPLATE"
             }
             val name = manifest.getValue("taskProfileAbi").jsonPrimitive.content
@@ -403,7 +532,7 @@ internal object UltraInitBootTargetResolver {
             }
         }
         val report = Json.parseToJsonElement(encoded.toString(Charsets.UTF_8)).jsonObject
-        if (retained == null) check(report.getValue("legacyTarget").jsonObject["targetSha256"]?.jsonPrimitive?.content == template.kernelSha256) {
+        if (retained == null) check(report.getValue("legacyTarget").jsonObject["targetSha256"]?.jsonPrimitive?.content == sourceKernelHash(template)) {
             "ULTRA_INIT_LEGACY_TASK_PROFILE_TARGET_IMAGE"
         }
         val expectedModule = template.targetInputSha256["templateBridge"] ?: template.bridgeSha256
@@ -417,9 +546,9 @@ internal object UltraInitBootTargetResolver {
     }
 
     private fun legacyCallerTypes(template: UltraInitBootProducer.Artifact): Map<String, Set<String>> {
-        val base = template.targetBoot.parentFile.canonicalFile
-        val manifest = Json.parseToJsonElement(File(base, "manifest.json").readText()).jsonObject
-        check(manifest.getValue("bridgeSha256").jsonPrimitive.content == template.bridgeSha256) {
+        val base = bundleDirectory(template)
+        val manifest = sourceManifest(template)
+        check(manifest.getValue("bridgeSha256").jsonPrimitive.content == sourceBridge(template)) {
             "ULTRA_INIT_LEGACY_TEMPLATE_MODULE"
         }
         val path = manifest.getValue("targetContract").jsonPrimitive.content
@@ -432,7 +561,7 @@ internal object UltraInitBootTargetResolver {
         val contract = Json.parseToJsonElement(file.readText()).jsonObject
         check(contract.getValue("cfiMode").jsonPrimitive.content == "legacy-lto-cfi" &&
             contract.getValue("inputs").jsonObject.getValue("kernelImage").jsonObject
-                .getValue("sha256").jsonPrimitive.content == template.kernelSha256) {
+                .getValue("sha256").jsonPrimitive.content == sourceKernelHash(template)) {
             "ULTRA_INIT_LEGACY_CONTRACT_IMAGE"
         }
         return contract.getValue("legacyCfi").jsonObject.getValue("callerTypeSets").jsonObject.mapValues { (_, value) ->
@@ -444,9 +573,9 @@ internal object UltraInitBootTargetResolver {
 
     private fun taskProfileFacts(template: UltraInitBootProducer.Artifact, module: Module,
         payload: UltraKernelManagerClaimPayload, implementation: UltraKernelTaskProfileTarget.Implementation): Pair<JsonObject, String> {
-        val base = template.targetBoot.parentFile.canonicalFile
-        val manifest = Json.parseToJsonElement(File(base, "manifest.json").readText()).jsonObject
-        check(manifest.getValue("bridgeSha256").jsonPrimitive.content == template.bridgeSha256) {
+        val base = bundleDirectory(template)
+        val manifest = sourceManifest(template)
+        check(manifest.getValue("bridgeSha256").jsonPrimitive.content == sourceBridge(template)) {
             "ULTRA_INIT_TASK_PROFILE_TEMPLATE_MODULE"
         }
         val name = manifest["taskProfileAbi"]?.jsonPrimitive?.content
@@ -464,7 +593,7 @@ internal object UltraInitBootTargetResolver {
             report["originalModuleWritten"]?.jsonPrimitive?.booleanOrNull == false &&
             report["targetQualified"]?.jsonPrimitive?.booleanOrNull == false &&
             report["deviceQualified"]?.jsonPrimitive?.booleanOrNull == false &&
-            report["bundledModuleSha256"]?.jsonPrimitive?.content == template.bridgeSha256 &&
+            report["bundledModuleSha256"]?.jsonPrimitive?.content == sourceBridge(template) &&
             report["bundledModuleBytes"]?.jsonPrimitive?.intOrNull == module.bytes.size &&
             report["claimSha256"]?.jsonPrimitive?.content == UltraKernelSpec.sha256(payload.elf) &&
             report["sourceSuccessorIdentity"]?.jsonObject?.get("sha256")?.jsonPrimitive?.content == implementation.sourceSha256) {
@@ -507,10 +636,10 @@ internal object UltraInitBootTargetResolver {
     }
 
     private fun sessionFacts(template: UltraInitBootProducer.Artifact, module: Module): UltraKernelManagerClaimPayload.SessionAbiFacts {
-        val base = template.targetBoot.parentFile.canonicalFile
-        val manifestFile = File(base, "manifest.json")
+        val base = bundleDirectory(template)
+        val manifestFile = template.templateManifest ?: File(base, "manifest.json")
         val manifest = Json.parseToJsonElement(manifestFile.readText()).jsonObject
-        check(manifest.getValue("bridgeSha256").jsonPrimitive.content == template.bridgeSha256) {
+        check(manifest.getValue("bridgeSha256").jsonPrimitive.content == sourceBridge(template)) {
             "ULTRA_INIT_TEMPLATE_SESSION_MODULE"
         }
         fun retained(field: String): Pair<JsonObject, String> {
@@ -530,7 +659,7 @@ internal object UltraInitBootTargetResolver {
         check(proof.getValue("schemaVersion").jsonPrimitive.int == 1 &&
             proof.getValue("method").jsonPrimitive.content in setOf("same-tu-object-derived-btf", "same-final-module-derived-btf") &&
             proof.getValue("originalModuleWritten").jsonPrimitive.content == "false" &&
-            report.getValue("bundledModuleSha256").jsonPrimitive.content == template.bridgeSha256) {
+            report.getValue("bundledModuleSha256").jsonPrimitive.content == sourceBridge(template)) {
             "ULTRA_INIT_TEMPLATE_SESSION_PROVENANCE"
         }
         for (field in listOf("bridge", "sessionObject", "sessionCommand", "sourceSelection", "strictBuild", "derivedObject", "claimBuilder")) {
@@ -545,7 +674,7 @@ internal object UltraInitBootTargetResolver {
         val abi = inputs.getValue("session_abi").jsonObject
         check(bridge.getValue("sha256").jsonPrimitive.content == proof.getValue("bridge").jsonObject.getValue("sha256").jsonPrimitive.content &&
             bridge.getValue("bytes").jsonPrimitive.long == proof.getValue("bridge").jsonObject.getValue("bytes").jsonPrimitive.long &&
-            bridge.getValue("bundledSha256").jsonPrimitive.content == template.bridgeSha256 &&
+            bridge.getValue("bundledSha256").jsonPrimitive.content == sourceBridge(template) &&
             bridge.getValue("bundledBytes").jsonPrimitive.int == module.bytes.size &&
             abi.getValue("bundledSha256").jsonPrimitive.content == reportHash) { "ULTRA_INIT_TEMPLATE_SESSION_BUNDLE" }
         val expected = setOf("runtime/maplesu-sdk/sdk/src/module/su_redirect_tu/kernel/su_exec_session.c",
@@ -765,12 +894,13 @@ internal object UltraInitBootTargetResolver {
                 checker["sha256"]?.jsonPrimitive?.content == UltraKernelSpec.sha256(bytes.copyOfRange(checkAt, checkAt + checkSymbol.size.toInt()))) {
                 "ULTRA_INIT_TASK_PROFILE_LEGACY_CHECKER_CHANGED"
             }
+            // The native module-init consumer is separate from the task callbacks below.
             val normal = legacy.getValue("normalModule").jsonObject
             check(normal["mode"]?.jsonPrimitive?.content == "legacy-lto-cfi" &&
                 listOf("moduleLoaded", "runtimeOwnerQualified", "deviceQualified").all {
                     normal[it]?.jsonPrimitive?.booleanOrNull == false
                 } && normal.getValue("members").jsonArray.map { it.jsonObject.getValue("symbol").jsonPrimitive.content }.toSet() ==
-                    setOf("init_module", "msu_legacy_kernel_probe_work")) { "ULTRA_INIT_TASK_PROFILE_LEGACY_NORMAL_ROUTE" }
+                    setOf("init_module")) { "ULTRA_INIT_TASK_PROFILE_LEGACY_NORMAL_ROUTE" }
             val members = legacy.getValue("members").jsonObject
             check(members.keys == setOf("msu_task_profile_sys_enter", "msu_task_profile_marker_entry", "msu_task_profile_marker_return")) {
                 "ULTRA_INIT_TASK_PROFILE_LEGACY_MEMBERS"
@@ -787,12 +917,48 @@ internal object UltraInitBootTargetResolver {
             }
             for ((name, element) in members) {
                 val member = element.jsonObject
-                check(member["symbol"]?.jsonPrimitive?.content == name &&
+                val unchecked = UltraKernelTaskProfileTarget.legacyUncheckedTrace(implementation, name, member)
+                if (unchecked == null) check(member["symbol"]?.jsonPrimitive?.content == name &&
                     member["typeIdHex"]?.jsonPrimitive?.content?.matches(Regex("[0-9a-f]{16}")) == true &&
                     member["proof"]?.jsonPrimitive?.content == "actual-relocated-module-checker-path" &&
                     member["runtimeOwnerQualified"]?.jsonPrimitive?.booleanOrNull == false) { "ULTRA_INIT_TASK_PROFILE_LEGACY_TYPE64:$name" }
                 val canonical = member.getValue("canonical").jsonObject
                 val (code, offset) = location(canonical)
+                if (unchecked != null) {
+                    val registrations = member.getValue("registration").jsonArray
+                    val expected = listOf("msu_task_profile_trace_open" to "tracepoint_probe_register_prio",
+                        "msu_task_profile_trace_close" to "tracepoint_probe_unregister")
+                    check(registrations.size == expected.size) { "ULTRA_INIT_TASK_PROFILE_LEGACY_REGISTRATION:$name" }
+                    for ((row, entry) in registrations.zip(expected)) {
+                        val fact = row.jsonObject
+                        val (function, functionSection, _) = profileSymbol(entry.first, 2)
+                        val (callSection, callOffset) = location(fact.getValue("call").jsonObject)
+                        val (callbackSection, callbackOffset) = location(fact.getValue("callback").jsonObject)
+                        check(fact["function"]?.jsonPrimitive?.content == entry.first &&
+                            fact["imported"]?.jsonPrimitive?.content == entry.second &&
+                            fact["relocationType"]?.jsonPrimitive?.intOrNull == 283 &&
+                            fact["proof"]?.jsonPrimitive?.content == "actual-relocated-native-registration-argument" &&
+                            functionSection.index == callSection.index && callOffset.toLong() + callSection.address >= function.value &&
+                            callOffset.toLong() + callSection.address < function.value + function.size &&
+                            callbackSection.index == code.index && callbackOffset == offset &&
+                            word(bytes, callSection.offset + callOffset) and 0xfc000000.toInt() == 0x94000000.toInt()) {
+                            "ULTRA_INIT_TASK_PROFILE_LEGACY_REGISTRATION:$name"
+                        }
+                        val calls = sections.filter { it.type == 4 && it.info == callSection.index }.flatMap { relocation ->
+                            check(relocation.link == section(".symtab").index && relocation.entry == 24 && relocation.size % 24 == 0) {
+                                "ULTRA_INIT_TASK_PROFILE_LEGACY_REGISTRATION_RELOCATIONS:$name"
+                            }
+                            (relocation.offset until relocation.offset + relocation.size step 24).filter {
+                                elf.getLong(it) == callOffset.toLong() + callSection.address
+                            }
+                        }
+                        check(calls.size == 1 && calls.single().let { at ->
+                            val info = elf.getLong(at + 8); val symbol = info ushr 32
+                            info and 0xffffffffL == 283L && symbol < symbols.size &&
+                                symbols[symbol.toInt()].name == entry.second && elf.getLong(at + 16) == 0L
+                        }) { "ULTRA_INIT_TASK_PROFILE_LEGACY_REGISTRATION_IMPORT:$name" }
+                    }
+                }
                 val prefix = word(bytes, code.offset + offset)
                 val branchOffset = offset + if (prefix == 0xd503245f.toInt() || prefix == 0xd50324df.toInt()) 4 else 0
                 val (branchCode, branchAt) = location(canonical.getValue("branch").jsonObject)
@@ -1162,7 +1328,7 @@ internal object UltraInitBootTargetResolver {
             }
         }
         fun bindProfiles(source: ByteArray, sourceSymbols: UltraKernelSymbols, target: ByteArray,
-                         targetSymbols: UltraKernelSymbols, loaderAbi: Boolean = false) {
+                         targetSymbols: UltraKernelSymbols, loaderAbi: Boolean = false, referenceSignatures: Map<String, String>? = null) {
             val table = section(".msu.su-runtime.profiles"); val at = table.offset
             check(table.type == 1 && (table.flags and 3L) == 3L && table.size == 372 &&
                 word(bytes, at) == 0x4d535550 && word(bytes, at + 4) == 1 &&
@@ -1174,7 +1340,7 @@ internal object UltraInitBootTargetResolver {
             val available = profileNames.filter { targetSymbols.offsetsOf(it).isNotEmpty() }.toSet()
             check(profileNames.take(3).all { it in available }) { "ULTRA_INIT_TARGET_PROFILE_REQUIRED" }
             val sourceAvailable = profileNames.filter { sourceSymbols.offsetsOf(it).isNotEmpty() }.toSet()
-            val sourceSignatures = if (loaderAbi) emptyMap() else UltraKernelBtf.signatures(source, sourceSymbols, sourceAvailable, emptySet())
+            val sourceSignatures = if (loaderAbi) emptyMap() else referenceSignatures ?: UltraKernelBtf.signatures(source, sourceSymbols, sourceAvailable, emptySet())
                 ?: error("ULTRA_INIT_TEMPLATE_BTF_REQUIRED")
             val targetSignatures = if (loaderAbi) emptyMap() else UltraKernelBtf.signatures(target, targetSymbols, available, emptySet())
                 ?: error("ULTRA_INIT_TARGET_BTF_REQUIRED")

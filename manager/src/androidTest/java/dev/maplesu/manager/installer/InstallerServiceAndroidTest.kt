@@ -119,7 +119,9 @@ class InstallerServiceAndroidTest {
             assertEquals(expected.firmware, actual.firmware)
             assertEquals(expected.slotSuffix, actual.slotSuffix)
             assertEquals(expected.selinux, actual.selinux)
-            assertEquals(expected.partitions, actual.partitions.mapValues { it.value.copy(identity = null) })
+            // Ordinary observation excludes partitions reserved for explicit signing sessions.
+            val expectedBootChain = expected.partitions.filterKeys { it !in setOf("recovery", "vbmeta_system") }
+            assertEquals(expectedBootChain, actual.partitions.mapValues { it.value.copy(identity = null) })
             assertEquals(actual.partitions, InstallerServiceClient.decode(InstallerServiceClient.observe(service)).partitions)
             instrumentation.sendStatus(2, Bundle().apply {
                 putString("installerServiceUid", response.getInt("serviceUid").toString())
@@ -152,26 +154,32 @@ class InstallerServiceAndroidTest {
         requireSelectedDevice()
         InstallerServiceClient.withService(context) { service ->
             val valid = InstallerServiceClient.observe(service)
-            val mutations: List<(Bundle) -> Unit> = listOf(
-                { it.putInt("serviceUid", 2000) },
-                { it.putInt("servicePid", Process.myPid()) },
-                { it.putInt("callerUid", Process.myUid() + 100_000) },
-                { it.putStringArrayList("partitions", arrayListOf("boot", "boot", "vbmeta")) },
-                { it.putStringArrayList("partitions", arrayListOf("boot", "system", "vbmeta")) },
-                { it.remove("boot") },
-                { it.getBundle("boot")!!.putLong("deviceNumber", 0) },
-                { it.getBundle("boot")!!.remove("deviceNumber") },
-                { it.getBundle("boot")!!.remove("inode") },
-                { it.getBundle("boot")!!.remove("filesystem") },
-                { it.getBundle("boot")!!.putLong("filesystem", -1) },
-                { it.getBundle("boot")!!.putString("resolvedPath", "/data/boot.img") },
-                { it.putString("slotSuffix", "_c") },
-                { it.putString("selinux", "Permissive") },
+            val mutations: List<Pair<String, (Bundle) -> Unit>> = listOf(
+                "service UID" to { it.putInt("serviceUid", 2000) },
+                "service PID" to { it.putInt("servicePid", Process.myPid()) },
+                "caller full UID" to { it.putInt("callerUid", Process.myUid() + 100_000) },
+                "duplicate partition" to { it.putStringArrayList("partitions", arrayListOf("boot", "boot", "vbmeta")) },
+                "unsupported partition" to { it.putStringArrayList("partitions", arrayListOf("boot", "system", "vbmeta")) },
+                "missing boot" to { it.remove("boot") },
+                "zero device number" to { it.getBundle("boot")!!.putLong("deviceNumber", 0) },
+                "missing device number" to { it.getBundle("boot")!!.remove("deviceNumber") },
+                "missing inode" to { it.getBundle("boot")!!.remove("inode") },
+                "missing filesystem" to { it.getBundle("boot")!!.remove("filesystem") },
+                "negative filesystem" to { it.getBundle("boot")!!.putLong("filesystem", -1) },
+                "non-device path" to { it.getBundle("boot")!!.putString("resolvedPath", "/data/boot.img") },
+                "invalid slot" to { it.putString("slotSuffix", "_c") },
             )
-            for (mutate in mutations) {
+            for ((name, mutate) in mutations) {
                 val invalid = valid.deepCopy()
                 mutate(invalid)
-                assertThrows(RuntimeException::class.java) { InstallerServiceClient.decode(invalid) }
+                assertThrows("Response mutation: $name", RuntimeException::class.java) {
+                    InstallerServiceClient.decode(invalid)
+                }
+            }
+            // SELinux is an observed fact; identity and transaction checks control qualification.
+            for (status in listOf("Enforcing", "Permissive", "Unknown")) {
+                val observed = valid.deepCopy().apply { putString("selinux", status) }
+                assertEquals(status, InstallerServiceClient.decode(observed).selinux)
             }
         }
     }

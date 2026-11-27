@@ -3,6 +3,7 @@
 #include "kernel_module_kit_umbrella.h"
 
 #include <array>
+#include "maplesu_request_identity.h"
 #include <cstring>
 #include <new>
 #include <string>
@@ -10,7 +11,6 @@
 #include <unistd.h>
 
 extern "C" const char* __get_current_module_id32_1b0494ae8a788541db46b82cc1f0577c();
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
 
 namespace kernel_module {
 namespace {
@@ -18,17 +18,15 @@ constexpr size_t kIdentityBytes = 1024;
 struct OffsetCache {
     pid_t process = 0;
     std::array<char, kIdentityBytes> module{};
-    std::array<char, kIdentityBytes> root_key{};
+    RequestIdentity identity;
     std::unordered_map<std::string, uint32_t> values;
 };
 thread_local OffsetCache cache;
 
 bool select_current_scope() {
     const char* module = __get_current_module_id32_1b0494ae8a788541db46b82cc1f0577c();
-    const char* root_key = __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
     const size_t module_size = module ? strnlen(module, kIdentityBytes) : 0;
-    const size_t key_size = root_key ? strnlen(root_key, kIdentityBytes) : 0;
-    if (!module_size || module_size == kIdentityBytes || !key_size || key_size == kIdentityBytes) {
+    if (!module_size || module_size == kIdentityBytes) {
         cache.values.clear();
         cache.process = 0;
         return false;
@@ -36,10 +34,10 @@ bool select_current_scope() {
     const auto process = getpid();
     if (cache.process != process ||
         std::memcmp(cache.module.data(), module, module_size + 1) ||
-        std::memcmp(cache.root_key.data(), root_key, key_size + 1)) {
+        !cache.identity.matches()) {
         cache.values.clear();
         std::memcpy(cache.module.data(), module, module_size + 1);
-        std::memcpy(cache.root_key.data(), root_key, key_size + 1);
+        if (!cache.identity.capture()) return false;
         cache.process = process;
     }
     return true;

@@ -35,7 +35,7 @@ class UltraKernelKallsymsAlignmentTest {
     @Test
     fun `Y700 generation hooks the real execve and AVC functions`() {
         val kernel = y700Kernel()
-        val plan = UltraKernelSpecGenerator().generate(kernel, UltraKernelPlanFixtures.freshCredential())
+        val plan = UltraKernelSpecGenerator().generate(kernel)
         val exec = plan.records.single { it.role == "do_execveat_common+0x0" }
         assertEquals("hook retains the native PAC/SCS entry", 0x3E7208L, exec.offset)
         assertArrayEquals(kernel.copyOfRange(0x3E7208, 0x3E720C), exec.original)
@@ -53,8 +53,7 @@ class UltraKernelKallsymsAlignmentTest {
         val workspace = Files.createTempDirectory("ultrakernel-y700-alignment-").toFile()
         try {
             val flow = UltraKernelFlow(workspace, UltraKernelFileAssets(File("src/main/assets")))
-            val prepared = flow.prepare(File("../Boot_Research/北/Original.img"),
-                UltraKernelPlanFixtures.freshCredential())
+            val prepared = flow.prepare(File("../Boot_Research/北/Original.img"))
             assertTrue(prepared.generated)
             val patched = UltraKernelPlan.readKernel(requireNotNull(prepared.candidate).image)
             for ((start, end) in listOf(0 to 0x10000, 0x3E74C8 to 0x3E74E8,
@@ -65,7 +64,7 @@ class UltraKernelKallsymsAlignmentTest {
             assertEquals(UltraKernelA64.PACIA1716, UltraKernelA64.le32Bits(patched, 0x3E7204))
             val branch = UltraKernelA64.le32Bits(patched, 0x3E7208)
             assertEquals(0x14000000, branch and 0xFC000000.toInt())
-            val plan = UltraKernelSpecGenerator().generate(original, UltraKernelPlanFixtures.freshCredential())
+            val plan = UltraKernelSpecGenerator().generate(original)
             val target = 0x3E7208L + UltraKernelA64.signExtend((branch and 0x03FFFFFF).toLong(), 26) * 4
             assertEquals("execve must enter the actual save-frame helper", plan.records.single { it.role == "arm64_notify_die+0x0" }.offset + 28, target)
         } finally {

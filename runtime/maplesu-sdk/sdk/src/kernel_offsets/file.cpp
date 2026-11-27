@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "kernel_module_kit_umbrella.h"
+#include "maplesu_storage_private.h"
 #include "maplesu_kernel_layout_private.h"
 
 #include "offset_probe_private.h"
@@ -22,19 +23,10 @@
 
 namespace maplesu::sdk {
 
-// The module's system file directory name: the first 16 characters of the
-// module root key followed by that same first character again.
-static inline std::string get_system_file_dir_name() {
-    std::string root_key(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
-    std::string head = root_key.substr(0, FOLDER_HEAD_ROOT_KEY_LEN);
-    return head + head[0];
-}
-
-// The module's system file directory, "/data/<17-character name>/".
-static std::string get_system_file_dir_path() {
-    char path_buf[1024] = {0};
-    snprintf(path_buf, sizeof(path_buf), "/data/%s/", get_system_file_dir_name().c_str());
-    return std::string(path_buf);
+static inline std::string get_system_file_dir_path() {
+    std::string path;
+    if (is_failed(maplesu::storage::current_system_directory(path))) return {};
+    return path;
 }
 
 } // namespace maplesu::sdk

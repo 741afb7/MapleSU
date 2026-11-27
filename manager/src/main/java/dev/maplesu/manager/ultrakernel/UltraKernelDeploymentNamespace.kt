@@ -7,6 +7,8 @@ import java.util.zip.CRC32
 
 /** Immutable public path name. It is not a Key, installation generation or grant. */
 internal class UltraKernelDeploymentNamespace private constructor(private val name: ByteArray) {
+    fun name(): String = String(name, Charsets.US_ASCII)
+
     fun record(): ByteArray = ByteBuffer.allocate(RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN)
         .putInt(MAGIC).putShort(1).putShort(RECORD_BYTES.toShort()).put(name).array()
 

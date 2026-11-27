@@ -55,8 +55,7 @@ internal object UltraKernelManagerClaimCarrier {
     ): List<UltraKernelPlan.PatchRecord> {
         val frame = records.single { it.role == "arm64_notify_die+0x0" }
         val gate = records.single { it.role == "die+0x0" }
-        val credential = records.single { it.role == "panic+0x0" }
-        require(credential.replacement.size == 48 && frame.replacement.size >= 4) {
+        require(frame.replacement.size >= 4) {
             "ULTRA_KERNEL_MANAGER_CLAIM_RECORDS"
         }
         val frameBranch = frame.offset.toInt() + frame.replacement.size - 4
@@ -121,7 +120,8 @@ internal object UltraKernelManagerClaimCarrier {
                     (if ("task_state" in it.enabledFeatures) it.taskState?.callbackOrigins.orEmpty() else emptyMap())
             }.orEmpty()
             UltraKernelResidentAbi.verifyFunctions(kernel, symbols, reference.functions +
-                reference.bootstrapFunctions.filterKeys { it in bootstrapNames }, reference.callbacks, origins)
+                reference.bootstrapFunctions.filterKeys { it in bootstrapNames }, reference.callbacks, origins,
+                reference.assemblyFunctions)
             if (managementWords != null) {
                 val managementBytes = buffer(managementWords.size * 4).apply { managementWords.forEach { putInt(it) } }.array()
                 require(reference.managementLayoutSha256 == UltraKernelSpec.sha256(managementBytes)) {
@@ -148,7 +148,8 @@ internal object UltraKernelManagerClaimCarrier {
                 }
                 supplemental("msu_task_state_compiled_layout", management.taskState, 53)?.let {
                     if ("task_state" !in management.enabledFeatures) require(
-                        setOf("__seccomp_filter_release", "seccomp_filter_release").none { it in elf.importNames } &&
+                        "__seccomp_filter_release" !in elf.importNames &&
+                            (reference.coreTaskCleanupQualified || "seccomp_filter_release" !in elf.importNames) &&
                             "msu_task_state_release_current.validate" !in reference.callbacks) {
                         "ULTRA_KERNEL_TASK_STATE_UNQUALIFIED_IMPORT"
                     }
@@ -298,7 +299,7 @@ internal object UltraKernelManagerClaimCarrier {
         }
         val anchor = buffer(96).apply {
             for (value in intArrayOf(0x4143534d, if (deploymentRecord != null) 4 else if (bootEntry != null) 3 else if (resident) 2 else 1, placed.anchorOffset, pageShift,
-                placed.materializerOffset, credential.offset.toInt(), allocate, release,
+                placed.materializerOffset, 0, allocate, release,
                 *permissions.toIntArray(), cacheEntry, if (execmem) 1 else 0)) putInt(value)
             if (resident) putInt(80, residentBindingAt)
             placed.permissionsOffset?.let { putInt(84, it) }
@@ -1120,8 +1121,8 @@ internal object UltraKernelManagerClaimCarrier {
             }
         }
         UltraKernelResidentAbi.verifyCfi(kernel, facts.cfiMode, facts.normalizeIntegers)
-        val signatures = facts.callbacks.values.map { it.signature }.toSet()
-        val targetTypes = if (facts.cfiMode == "kcfi") UltraKernelBtf.functionTypeids(kernel, symbols, signatures) else emptyMap()
+        val callbacks = facts.callbacks.values.associate { it.member to it.signature }
+        val targetTypes = if (facts.cfiMode == "kcfi") UltraKernelBtf.sessionCallbackTypeids(kernel, symbols, callbacks) else emptyMap()
         for ((name, callback) in facts.callbacks) {
             val code = payload.sections.singleOrNull { it.flags and 4 != 0 && callback.offset >= it.offset &&
                 callback.offset.toLong() + 4 <= it.offset.toLong() + it.file.size }
@@ -1132,7 +1133,7 @@ internal object UltraKernelManagerClaimCarrier {
             }
             if (facts.cfiMode == "kcfi") require(callback.offset - code.offset >= 4 &&
                 UltraKernelA64.le32Bits(code.file, callback.offset - code.offset - 4) == callback.kcfiPrefix &&
-                callback.kcfiPrefix == callback.objectKcfiType && targetTypes[callback.signature] == setOf(callback.kcfiPrefix)) {
+                callback.kcfiPrefix == callback.objectKcfiType && targetTypes[callback.member] == setOf(callback.kcfiPrefix)) {
                 "ULTRA_KERNEL_BOOT_EVENTS_ABI_CALLBACK_KCFI:$name"
             }
         }
@@ -1158,8 +1159,8 @@ internal object UltraKernelManagerClaimCarrier {
             }
         }
         UltraKernelResidentAbi.verifyCfi(kernel, facts.cfiMode, facts.normalizeIntegers)
-        val signatures = facts.callbacks.values.map { it.signature }.toSet()
-        val targetTypes = if (facts.cfiMode == "kcfi") UltraKernelBtf.functionTypeids(kernel, symbols, signatures) else emptyMap()
+        val callbacks = facts.callbacks.values.associate { it.member to it.signature }
+        val targetTypes = if (facts.cfiMode == "kcfi") UltraKernelBtf.sessionCallbackTypeids(kernel, symbols, callbacks) else emptyMap()
         for ((name, callback) in facts.callbacks) {
             val code = payload.sections.singleOrNull { it.flags and 4 != 0 && callback.offset >= it.offset &&
                 callback.offset.toLong() + 4 <= it.offset.toLong() + it.file.size }
@@ -1170,7 +1171,7 @@ internal object UltraKernelManagerClaimCarrier {
             }
             if (facts.cfiMode == "kcfi") require(callback.offset - code.offset >= 4 &&
                 UltraKernelA64.le32Bits(code.file, callback.offset - code.offset - 4) == callback.kcfiPrefix &&
-                callback.kcfiPrefix == callback.objectKcfiType && targetTypes[callback.signature] == setOf(callback.kcfiPrefix)) {
+                callback.kcfiPrefix == callback.objectKcfiType && targetTypes[callback.member] == setOf(callback.kcfiPrefix)) {
                 "ULTRA_KERNEL_KSU_COMPAT_ABI_CALLBACK_KCFI:$name"
             }
         }

@@ -543,7 +543,8 @@ internal class UltraKernelKallsymsTable private constructor(
             val tokens = readTokens(tokenTable)
             val validTypes = "ABDRTVWGINPCSUuvw-?"
             var names = startNames
-            val explored = ArrayList<Int>(markers - startNames + 8)
+            var explored = IntArray(markers - startNames + 8)
+            var exploredSize = 0
             while (true) {
                 check(names >= 0) { "KALLSYMS_NAMES_UNDERFLOW" }
                 check(names + 1 < size) { "KALLSYMS_NAMES_UNDERFLOW" }
@@ -561,7 +562,9 @@ internal class UltraKernelKallsymsTable private constructor(
                 }
                 val span = markers - names
                 check(span > 0 && span < size) { "KALLSYMS_NAMES_UNDERFLOW" }
-                var tail = explored.size
+                if (span >= explored.size) explored = explored.copyOf(maxOf(span + 1,
+                    explored.size + explored.size / 2))
+                var tail = exploredSize
                 while (tail <= span) {
                     val value = byteAt(markers - tail)
                     val symbolSize = if (value and 0x80 != 0) {
@@ -576,10 +579,11 @@ internal class UltraKernelKallsymsTable private constructor(
                         hop < 0 || explored[hop] == -1 -> -1
                         else -> explored[hop] + 1
                     }
-                    explored.add(reached)
+                    explored[tail] = reached
                     tail++
                 }
-                val count = explored[explored.size - 1]
+                exploredSize = tail
+                val count = explored[exploredSize - 1]
                 if (count < 256) {
                     names -= 4
                     continue

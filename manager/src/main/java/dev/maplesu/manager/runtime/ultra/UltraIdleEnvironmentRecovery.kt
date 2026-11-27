@@ -11,14 +11,14 @@ internal object UltraIdleEnvironmentRecovery {
     private const val PREFS = "ultra-idle-recovery"
     private const val SUBMITTED = "submittedBoot"
 
-    fun ensure(context: Context, key: String, bootId: String): UltraEnvironmentAutoSetup.Result? =
-        ensure(context, key, bootId) { true }
+    fun ensure(context: Context, bootId: String): UltraEnvironmentAutoSetup.Result? =
+        ensure(context, bootId) { true }
 
-    internal fun ensure(context: Context, key: String, bootId: String,
+    internal fun ensure(context: Context, bootId: String,
                         isCurrent: () -> Boolean): UltraEnvironmentAutoSetup.Result? =
         synchronized(UltraEnvironmentUpgrade) {
-            if (!isCurrent()) UltraEnvironmentAutoSetup.Result(false, false, "SDK_CREDENTIAL_SCOPE_CHANGED")
-            else ensureExclusive(context, key, bootId, isCurrent)
+            if (!isCurrent()) UltraEnvironmentAutoSetup.Result(false, false, "SDK_IDENTITY_SCOPE_CHANGED")
+            else ensureExclusive(context, bootId, isCurrent)
         }
 
     internal fun submittedThisBoot(context: Context): Boolean {
@@ -26,25 +26,25 @@ internal object UltraIdleEnvironmentRecovery {
         return context.ultraPreferences(PREFS, Context.MODE_PRIVATE).getString(SUBMITTED, null) == bootId
     }
 
-    private fun ensureExclusive(context: Context, key: String, bootId: String,
+    private fun ensureExclusive(context: Context, bootId: String,
                                 isCurrent: () -> Boolean): UltraEnvironmentAutoSetup.Result? {
         // A temporary SDK has its own durable HotLoad owner and submission history.
         val session = UltraSdkSession.current(context)
-        if (!isCurrent()) return UltraEnvironmentAutoSetup.Result(false, false, "SDK_CREDENTIAL_SCOPE_CHANGED")
+        if (!isCurrent()) return UltraEnvironmentAutoSetup.Result(false, false, "SDK_IDENTITY_SCOPE_CHANGED")
         if (session != null) return null
-        val helper = UltraInstalledIdentityProbe.installedHelperPath(key) ?: return null
+        val helper = UltraInstalledIdentityProbe.installedHelperPath() ?: return null
         val prefs = context.ultraPreferences(PREFS, Context.MODE_PRIVATE)
-        fun allowed() = isCurrent() && current(context, key, bootId)
-        val client = UltraRuntimeClient { key.takeIf { allowed() } }
+        fun allowed() = isCurrent() && current(context, bootId)
+        val client = UltraSdkCredentials.client(context, ::allowed)
         val result = UltraIdleRecoveryAttempt.run(object : UltraIdleRecoveryAttempt.Port {
             override fun blockedReason() = when {
-                !isCurrent() -> "SDK_CREDENTIAL_SCOPE_CHANGED"
+                !isCurrent() -> "SDK_IDENTITY_SCOPE_CHANGED"
                 !allowed() -> "SCOPE_CHANGED"
                 else -> null
             }
             override fun alreadySubmitted() = prefs.getString(SUBMITTED, null) == bootId ||
                 context.ultraPreferences("ultra-auto-setup", Context.MODE_PRIVATE)
-                    .getString("lastBootId", null) == bootId ||
+                    .getString("submittedBootId", null) == bootId ||
                 context.ultraPreferences("ultra-env-upgrade", Context.MODE_PRIVATE)
                     .getString("submittedBootId", null) == bootId
             override fun idleVerified(): Boolean {
@@ -65,9 +65,9 @@ internal object UltraIdleEnvironmentRecovery {
             override fun markSubmitted() = allowed() &&
                 prefs.edit().putString(SUBMITTED, bootId).commit() && allowed()
             override fun prepare(): String? {
-                if (!allowed()) return "SDK_CREDENTIAL_SCOPE_CHANGED"
+                if (!allowed()) return "SDK_IDENTITY_SCOPE_CHANGED"
                 val failure = UltraPolicyBackendDeployment.prepare(context, client)
-                return if (allowed()) failure else "SDK_CREDENTIAL_SCOPE_CHANGED"
+                return if (allowed()) failure else "SDK_IDENTITY_SCOPE_CHANGED"
             }
             override fun submit() = client.installEnvironment("HotLoad", "").succeeded
             override fun running() = allowed() &&
@@ -84,13 +84,13 @@ internal object UltraIdleEnvironmentRecovery {
                     client.environmentState().let { it.succeeded && it.string("state") == "Running" } && allowed()
             }
         })
-        return if (isCurrent()) result else result?.copy(reason = "SDK_CREDENTIAL_SCOPE_CHANGED")
-            ?: UltraEnvironmentAutoSetup.Result(false, false, "SDK_CREDENTIAL_SCOPE_CHANGED")
+        return if (isCurrent()) result else result?.copy(reason = "SDK_IDENTITY_SCOPE_CHANGED")
+            ?: UltraEnvironmentAutoSetup.Result(false, false, "SDK_IDENTITY_SCOPE_CHANGED")
     }
 
-    private fun current(context: Context, key: String, bootId: String): Boolean =
+    private fun current(context: Context, bootId: String): Boolean =
         !Thread.currentThread().isInterrupted && ModeRuntime.active == WorkMode.LITE &&
-            UltraEnvironmentAutoSetup.currentBootId() == bootId && UltraSdkCredentials.read(context) == key &&
+            UltraEnvironmentAutoSetup.currentBootId() == bootId &&
             UltraSdkSession.current(context) == null && !UltraSdkCredentials.hookWithoutSdk(context) &&
             UltraEnvironmentAutoSetup.blockedReason(context) == null
 

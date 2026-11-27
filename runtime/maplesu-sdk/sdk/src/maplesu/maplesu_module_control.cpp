@@ -5,7 +5,7 @@
 
 namespace maplesu::compat {
 std::vector<ModuleControlResult> get_module_controls_legacy(
-    const char* key, const std::vector<sdk::module_record>& records) {
-    return maplesu::get_module_controls(key, records);
+    const std::vector<sdk::module_record>& records) {
+    return maplesu::get_module_controls( records);
 }
 } // namespace maplesu::compat

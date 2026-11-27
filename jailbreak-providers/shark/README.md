@@ -56,7 +56,7 @@ exec /system/bin/sh /data/local/tmp/maplesu-93260/batch.sh "$@"
 | `plant-61238` | `6.12.38-android16-5-g844001fb8721-ab14552068-4k` |
 | `plant-61258` | `6.12.58-android16-6-g7704a1ae279b-ab15213644-4k`<br>`6.12.58-android16-6-g0a092cc0037a-abogki521987229-4k`<br>`6.12.58-android16-6-g690108013dcc-abogki576129896-4k` |
 | `plant-61223` | `6.12.23-android16-5-g41f4cb1fa7c7-abogki465038634-4k` |
-| `plant-66118` | `6.6.118-android15-8-g9bc34d5b0c79-abogki537459655-4k`<br>`6.6.118-android15-8-gc4127a25dcf3-ab15863337-4k` |
+| `plant-66118` | `6.6.118-android15-8-g9bc34d5b0c79-abogki537459655-4k`<br>`6.6.118-android15-8-gc4127a25dcf3-ab15863337-4k`<br>`6.6.118-android15-8-ga812a1946391-abogki576098434-4k` |
 | `plant-66127` | `6.6.127-android15-8-gd489d4ad2a70-abogki567717946-4k` |
 
 PD2546 的 `6.12.58-…-gdd6fd…` 仍走原来的 `louise` 引擎，行为不变。

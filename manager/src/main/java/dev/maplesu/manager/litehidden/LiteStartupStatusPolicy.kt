@@ -64,8 +64,8 @@ data class LiteStartupFacts(
      */
     val detectedState: ModeState? = null,
     /**
-     * Ultra 已配对（`maplesu-ultra/keyVerified`）。
-     * 只有「Ultra 环境 Running **且**已配对」才当已安装证据 —— 与写入种子的条件同一套判据。
+     * 当前 boot 已观测到 Ultra 运行通道；字段名保留旧调用兼容。
+     * 只有「Ultra 环境 Running 且通道已确认」才当已安装证据，与写入种子的判据一致。
      * 这个字段只在 IO 线程（`probeRoot = true`）读，主线程首帧一律 false，不额外读磁盘。
      */
     val ultraPaired: Boolean = false,
@@ -258,7 +258,7 @@ object LiteStartupStatusPolicy {
      * 已安装证据（不含"模式已判定为 LITE"这一条，KSU 模式下整体不参与）：
      *   ① 本地证据（凭据 / 六态 A 态）；
      *   ② **判定中窗口**里的持久化种子（判定落定后作废，避免把"真没装"永久说成已安装）；
-     *   ③ Ultra 环境 Running **且**已配对（"检测到 Ultra 环境就优先显示已安装"）。
+     *   ③ Ultra 环境 Running 且当前通道已确认（只作安装展示证据）。
      */
     fun hasInstalledEvidence(facts: LiteStartupFacts): Boolean =
         hasLocalLiteEvidence(facts) ||

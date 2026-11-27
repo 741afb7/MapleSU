@@ -82,7 +82,7 @@ class ModuleRepositoryImpl(
         ModeRuntime.activation,
         if (requestedMode == WorkMode.LITE && litePort === DefaultLiteModuleOpsPort) listOf(
             dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.currentBootId(),
-            dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.read(ksuApp),
+            dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.currentSnapshot(ksuApp).managerOwnerIdentity,
             dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.suspended(ksuApp),
             dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.hookWithoutSdk(ksuApp),
             dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.usesUltraBackend(ksuApp),

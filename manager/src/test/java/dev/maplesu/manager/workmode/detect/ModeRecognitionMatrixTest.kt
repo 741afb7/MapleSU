@@ -47,6 +47,11 @@ class ModeRecognitionMatrixTest {
                     if (ultra == "failed") error("SDK read unavailable")
                     return ultra
                 }
+                override fun currentUltraFingerprint(): String? {
+                    calls += "currentUltra"
+                    if (ultra == "failed") error("current SDK read unavailable")
+                    return ultra
+                }
                 override fun ksuNormal(): Boolean? { calls += "ksu"; return ksu }
                 override fun rootShellAvailable(): Boolean = error("no fallback shell")
             }
@@ -69,8 +74,11 @@ class ModeRecognitionMatrixTest {
                 mismatches++
                 if (examples.size < 8) examples += "cache=$previous su=$su ksu=$ksu ultra=$ultra -> ${result.verdict}/${result.mode}; expected=$expected unknown=$unknown"
             }
-            assertEquals(1, calls.count { it == "su" })
-            assertTrue("each identity probe runs at most once: $calls", calls.count { it == "ultra" } <= 1 && calls.count { it == "ksu" } <= 1)
+            val currentIdentityConfirmed = ksu == true || ultra == "ultra:kernel"
+            assertEquals(if (currentIdentityConfirmed) 0 else 1, calls.count { it == "su" })
+            assertEquals(if (ksu == true) 0 else 1, calls.count { it == "currentUltra" })
+            assertEquals(if (currentIdentityConfirmed) 0 else 1, calls.count { it == "ultra" })
+            assertEquals(if (currentIdentityConfirmed) 1 else 2, calls.count { it == "ksu" })
         }
         println("MATRIX resolver: $cases combinations; $mismatches mismatches")
         assertEquals(examples.joinToString("\n"), 0, mismatches)
@@ -208,16 +216,17 @@ class ModeRecognitionMatrixTest {
                     "fault" -> UltraEnvironmentProbe.State.Fault
                     else -> UltraEnvironmentProbe.State.Unknown
                 }
-                val snapshot = UltraEnvironmentProbe.Snapshot(ultraState, kernelRootVerified = source == "kernel")
-                val paired = UltraAutoPair.complete(snapshot, current = { true }, alreadyPaired = { false }, persist = {}, maintain = {}).paired
-                assertEquals(source in listOf("kernel", "running"), paired)
+                val snapshot = UltraEnvironmentProbe.Snapshot(ultraState,
+                    kernelRootVerified = source in listOf("kernel", "running"))
+                val paired = UltraAutoPair.complete(snapshot, current = { true },
+                    verifyManagerSu = { su == SuReadiness.USABLE }, maintain = {}).paired
+                assertEquals(source in listOf("kernel", "running") && su == SuReadiness.USABLE, paired)
                 fun executor(backend: RootBackend, usable: Boolean) = object : RootExecutor {
                     override val backend = backend
                     override fun available() = usable
                     override fun run(script: String) = RootExecResult(backend, 0, "verified")
                 }
-                val router = RootExecutionRouter(executor(RootBackend.LITE_KERNEL, source == "legacy"),
-                    executor(RootBackend.ULTRA_ENV, paired), modeProvider = { active },
+                val router = RootExecutionRouter(executor(RootBackend.ULTRA_ENV, paired), modeProvider = { active },
                     ksuProvider = { executor(RootBackend.KSU, ksu.isManager) },
                     ultraIdentity = { source in listOf("kernel", "running", "fault") },
                     hook = executor(RootBackend.HOOK, source == "hook"))
@@ -225,7 +234,6 @@ class ModeRecognitionMatrixTest {
                     active == WorkMode.KSU -> RootBackend.KSU
                     paired -> RootBackend.ULTRA_ENV
                     source == "hook" -> RootBackend.HOOK
-                    source == "legacy" -> RootBackend.LITE_KERNEL
                     else -> RootBackend.NONE
                 }
                 assertEquals(backend, router.capability(true).backend)

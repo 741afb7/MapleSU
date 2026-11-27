@@ -9,7 +9,7 @@ import dev.maplesu.manager.runtime.RootBackend
 import dev.maplesu.manager.runtime.RootExec
 import dev.maplesu.manager.runtime.RootExecResult
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
-import dev.maplesu.manager.runtime.ultra.UltraKeyPairedStore
+import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
 import java.io.File
@@ -46,7 +46,8 @@ class InstallMigrationReadinessAndroidTest {
             val deadline = SystemClock.elapsedRealtime() + 60_000
             var root: RootExecResult? = null
             while (SystemClock.elapsedRealtime() < deadline) {
-                if (ModeRuntime.active == WorkMode.LITE && UltraKeyPairedStore.isPaired(context) &&
+                if (ModeRuntime.active == WorkMode.LITE &&
+                    UltraEnvironmentProbe.currentSnapshot(context).managerOwnerIdentity?.fullUid == android.os.Process.myUid() &&
                     UltraEnvironmentProbe.usesUltraBackend(context)) {
                     root = RootExec.execute(context,
                         "/system/bin/id -u\n/system/bin/cat /proc/sys/kernel/random/boot_id")
@@ -57,7 +58,10 @@ class InstallMigrationReadinessAndroidTest {
             }
             report(if (root?.ok == true) "ROOT_OBSERVED" else "ROOT_NOT_READY", root?.backend ?: RootBackend.NONE)
             assertEquals("Normal startup did not activate Ultra within its budget", WorkMode.LITE, ModeRuntime.active)
-            assertTrue("Normal startup did not pair the SDK identity", UltraKeyPairedStore.isPaired(context))
+            val owner = requireNotNull(UltraEnvironmentProbe.currentSnapshot(context).managerOwnerIdentity)
+            assertEquals(android.os.Process.myUid(), owner.fullUid)
+            assertEquals("Normal startup owner identity is stale", owner,
+                UltraRuntimeClient().queryManagerOwnerIdentity().identity)
             assertTrue("Startup identity does not match a verified Ultra identity", UltraEnvironmentProbe.usesUltraBackend(context))
             assertNotNull("Startup never reached a verified Root execution", root)
             val verifiedRoot = requireNotNull(root)

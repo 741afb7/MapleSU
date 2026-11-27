@@ -6,8 +6,9 @@
   "kind": "COMPOSED",
   "sources": [
     "src/kernel_request/module_base_kernel_request.cpp",
-    "../../ultra/authorization/request_context.cpp",
-    "../../ultra/authorization/kernel_read.cpp"
+    "../../ultra/authorization/kernel_read.cpp",
+    "../../ultra/authorization/kernel_read_legacy.cpp",
+    "../../ultra/authorization/request_context.cpp"
   ],
   "flagsProfile": "core-oz-elf-fexceptions",
   "extraFlags": [

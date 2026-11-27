@@ -1,8 +1,8 @@
 // su -- root handshake and process identity.
 //
 // The SDK's su consumes an inherited kernel session receipt for the already
-// applied Profile. With no session descriptor it retains the legacy root-key
-// handshake. Only explicit identity and namespace options replace the Profile.
+// applied Profile. With no session descriptor only an already-root task may
+// continue. Only explicit identity and namespace options replace the Profile.
 //
 #pragma once
 
@@ -13,9 +13,9 @@ namespace maplesu::payload::su {
 
 // Claims and closes the inherited session fd, consuming its receipt once and
 // checking all real/effective/saved UID/GID values. A failed scan or session never
-// falls back. A complete scan without a session retains the existing UID0/key
-// behavior. On failure, errno retains the syscall error or EPROTO/EPERM/EINVAL.
-bool acquire_root(const char* root_key);
+// falls back. A complete scan without a session accepts only real/effective UID0.
+// On failure, errno retains the syscall error or EPROTO/EPERM.
+bool acquire_root();
 
 // Applies an explicitly requested identity using the granted credentials:
 // setgroups, then setresgid, then setresuid; preserves the first syscall error.

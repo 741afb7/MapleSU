@@ -259,7 +259,7 @@ class UltraSdkBuildUpgradeTest {
             "upgrade() 必须走升级意图（Running 不得短路）",
             upgrade.contains("Intent.UpgradeToBundledBuild"),
         )
-        val guard = upgrade.indexOf("if (!upgradeAllowed(UltraEnvUpgradePolicy.decide(readFacts(app))))")
+        val guard = upgrade.indexOf("if (!upgradeAllowed(UltraEnvUpgradePolicy.decide(readObservation(app, {}, binding).first)))")
         val submit = upgrade.indexOf("UltraEnvironmentInstaller.install(")
         assertTrue("拒绝判定必须在写设备之前（guard=$guard submit=$submit）", guard >= 0 && guard < submit)
         assertTrue(
@@ -301,7 +301,8 @@ class UltraSdkBuildUpgradeTest {
         val installer = source("UltraEnvironmentInstaller.kt")
         assertTrue(
             "生产适配必须真的调用 install_maplesu_environment（Boot 模式）",
-            installer.contains("client.installEnvironment(\"Boot\", \"\")"),
+            installer.contains("client.installEnvironment(") &&
+                installer.contains("if (intent == Intent.RefreshToBundledBuild) \"Refresh\" else \"Boot\", \"\""),
         )
         val client = source("UltraRuntimeClient.kt")
         val installCall = client.indexOf("NativeBridge.installEnvironment(")
@@ -318,28 +319,12 @@ class UltraSdkBuildUpgradeTest {
 
     // ── 身份回读：typed 回执 / 解析 / 核对（纯函数）─────────────────────
 
-    @Test
-    fun readbackReceiptUsesTheExactSdkPathAndNormalizedOffset() {
-        val path = UltraInstalledIdentityProbe.installedHelperPath("0123456789abcdef" + "K".repeat(32))!!
-        assertEquals("/data/0123456789abcdef/init", path)
-        assertNull(UltraInstalledIdentityProbe.installedHelperPath(null))
-        assertNull(UltraInstalledIdentityProbe.installedHelperPath("short"))
-        assertNull(UltraInstalledIdentityProbe.installedHelperPath("'".repeat(48)))
-        for (offset in listOf<Long?>(null, -1, 0, 4096)) {
-            val receipt = readbackReceipt {
-                getJSONObject("data").put("normalizedOffset", offset?.takeIf { it > 0 } ?: 0L)
-            }
-            val hit = UltraInstalledIdentityProbe.parseReadback(receipt, path, offset)
-            assertEquals("c".repeat(64), hit?.sha256)
-            assertEquals(path, hit?.path)
-            assertEquals(1_163_328L, hit?.size)
-        }
-    }
+
 
     @Test
     fun readbackReceiptRequiresFullBytesAndSuccessfulRootProof() {
         val path = "/data/0123456789abcdef/init"
-        assertNull(UltraInstalledIdentityProbe.parseReadback(null, path, 4096))
+        assertNull(UltraInstalledIdentityProbe.parseReadback(null, path))
         for ((field, value) in listOf(
             "bytesRead" to 1_163_327L, "complete" to false, "rootVerified" to false,
             "path" to "$path/extra", "path" to "relative/path",
@@ -347,27 +332,27 @@ class UltraSdkBuildUpgradeTest {
             "sha256" to "${"c".repeat(64)}suffix", "sha256" to "g".repeat(64),
         )) {
             val receipt = readbackReceipt { getJSONObject("data").put(field, value) }
-            assertNull(field, UltraInstalledIdentityProbe.parseReadback(receipt, path, 4096))
+            assertNull(field, UltraInstalledIdentityProbe.parseReadback(receipt, path))
         }
-        assertNull(UltraInstalledIdentityProbe.parseReadback(readbackReceipt(), "/data/xxxxxxxxxxxxxxxx/init", 4096))
-        assertNull(UltraInstalledIdentityProbe.parseReadback(readbackReceipt(), "/data/adb/maplesu/init", 4096))
+        assertNull(UltraInstalledIdentityProbe.parseReadback(readbackReceipt(), "/data/xxxxxxxxxxxxxxxx/init"))
+        assertNull(UltraInstalledIdentityProbe.parseReadback(readbackReceipt(), "/data/adb/maplesu/init"))
     }
 
     @Test
     fun readbackReceiptChecksSlotBoundsWithoutOverflow() {
         val path = "/data/0123456789abcdef/init"
-        for ((size, offset) in listOf(4096L to 0L, 8192L to 4096L)) {
+        for ((size, offset) in listOf(4096L to 0L, 8192L to 0L)) {
             val receipt = readbackReceipt {
                 getJSONObject("data").put("size", size).put("bytesRead", size).put("normalizedOffset", offset)
             }
-            assertEquals(size, UltraInstalledIdentityProbe.parseReadback(receipt, path, offset)?.size)
+            assertEquals(size, UltraInstalledIdentityProbe.parseReadback(receipt, path)?.size)
         }
         for ((size, offset) in listOf(4095L to 0L, 8192L to 4097L,
             9_007_199_254_740_992L to 0L, 8192L to Long.MAX_VALUE)) {
             val receipt = readbackReceipt {
                 getJSONObject("data").put("size", size).put("bytesRead", size).put("normalizedOffset", offset)
             }
-            assertNull("size=$size offset=$offset", UltraInstalledIdentityProbe.parseReadback(receipt, path, offset))
+            assertNull("size=$size offset=$offset", UltraInstalledIdentityProbe.parseReadback(receipt, path))
         }
     }
 
@@ -377,10 +362,10 @@ class UltraSdkBuildUpgradeTest {
         for ((field, value) in listOf(
             "abiVersion" to "1", "complete" to "true", "rootVerified" to "true",
             "size" to "1163328", "size" to 1_163_328.5, "bytesRead" to "1163328",
-            "normalizedOffset" to "4096",
+            "normalizedOffset" to "0",
         )) {
             val receipt = readbackReceipt { getJSONObject("data").put(field, value) }
-            assertNull(field, UltraInstalledIdentityProbe.parseReadback(receipt, path, 4096))
+            assertNull(field, UltraInstalledIdentityProbe.parseReadback(receipt, path))
         }
         for ((field, value) in listOf(
             "schemaVersion" to "1", "bridgeVersion" to "1", "bridgeVersion" to 2,
@@ -388,18 +373,18 @@ class UltraSdkBuildUpgradeTest {
             "ok" to false, "sdkError" to "FAILED", "sdkErrorCode" to "0",
         )) {
             val receipt = readbackReceipt { put(field, value) }
-            assertNull(field, UltraInstalledIdentityProbe.parseReadback(receipt, path, 4096))
+            assertNull(field, UltraInstalledIdentityProbe.parseReadback(receipt, path))
         }
         val success = readbackReceipt()
         val floatingSize = success.raw.replace("\"size\":1163328", "\"size\":1163328.0")
-        assertNull(UltraInstalledIdentityProbe.parseReadback(success.copy(raw = floatingSize), path, 4096))
+        assertNull(UltraInstalledIdentityProbe.parseReadback(success.copy(raw = floatingSize), path))
         for (field in listOf("rootVerified", "complete", "sha256", "bytesRead")) {
             val receipt = readbackReceipt { getJSONObject("data").remove(field) }
-            assertNull(field, UltraInstalledIdentityProbe.parseReadback(receipt, path, 4096))
+            assertNull(field, UltraInstalledIdentityProbe.parseReadback(receipt, path))
         }
-        assertNull(UltraInstalledIdentityProbe.parseReadback(success.copy(raw = "{}"), path, 4096))
-        assertNull(UltraInstalledIdentityProbe.parseReadback(success.copy(raw = "not json"), path, 4096))
-        assertNull(UltraInstalledIdentityProbe.parseReadback(success.copy(ok = false), path, 4096))
+        assertNull(UltraInstalledIdentityProbe.parseReadback(success.copy(raw = "{}"), path))
+        assertNull(UltraInstalledIdentityProbe.parseReadback(success.copy(raw = "not json"), path))
+        assertNull(UltraInstalledIdentityProbe.parseReadback(success.copy(ok = false), path))
     }
 
     @Test
@@ -414,18 +399,18 @@ class UltraSdkBuildUpgradeTest {
                     .put("result", "0000000000000018").put("handle", "0000000000000000"))
                 .apply(change)
         }
-        assertEquals(path, UltraInstalledIdentityProbe.parseOwnerReadback(ownerReceipt(), 4096, 12345)?.path)
+        assertEquals(path, UltraInstalledIdentityProbe.parseOwnerReadback(ownerReceipt(), 12345)?.path)
         for ((field, value) in listOf("ownerMode" to false, "namespaceRequested" to false, "namespaceResolved" to false,
             "namespaceResolved" to "true", "path" to "/data/adb/maplesu/init", "rootVerified" to false,
             "ownerEpoch" to 0, "ownerFullUid" to -1, "ownerHostLow" to "0000000000000000")) {
-            assertNull(field, UltraInstalledIdentityProbe.parseOwnerReadback(ownerReceipt { put(field, value) }, 4096, 12345))
+            assertNull(field, UltraInstalledIdentityProbe.parseOwnerReadback(ownerReceipt { put(field, value) }, 12345))
         }
         for ((field, value) in listOf("completed" to false, "error" to "-13", "effects" to 1,
             "result" to "0000000000000000", "command" to 26)) {
             val invalid = ownerReceipt { getJSONObject("deployment").put(field, value) }
-            assertNull(field, UltraInstalledIdentityProbe.parseOwnerReadback(invalid, 4096, 12345))
+            assertNull(field, UltraInstalledIdentityProbe.parseOwnerReadback(invalid, 12345))
         }
-        assertNull(UltraInstalledIdentityProbe.parseOwnerReadback(readbackReceipt(), 4096, 12345))
+        assertNull(UltraInstalledIdentityProbe.parseOwnerReadback(readbackReceipt(), 12345))
     }
 
     private fun readbackReceipt(change: JSONObject.() -> Unit = {}): NativeReceipt =
@@ -434,7 +419,7 @@ class UltraSdkBuildUpgradeTest {
             .put("operation", "read_installed_helper").put("ok", true).put("sdkError", "OK").put("sdkErrorCode", 0)
             .put("data", JSONObject().put("abiVersion", 1).put("complete", true).put("rootVerified", true)
                 .put("sha256", "c".repeat(64)).put("path", "/data/0123456789abcdef/init")
-                .put("size", 1_163_328L).put("bytesRead", 1_163_328L).put("normalizedOffset", 4096L))
+                .put("size", 1_163_328L).put("bytesRead", 1_163_328L).put("normalizedOffset", 0L))
             .apply(change).toString()))
 
     @Test
@@ -517,13 +502,13 @@ class UltraSdkBuildUpgradeTest {
             UltraEnvironmentInstaller.Intent.UpgradeToBundledBuild,
             UltraEnvironmentInstaller.Attachments(
                 whitelist = { order += "whitelist"; base.whitelist() },
-                backup = { order += "backup"; base.backup() },
+
                 verify = { order += "verify"; base.verify() },
                 persist = { order += "persist" },
                 refreshProbe = { order += "refresh" },
             ))
         assertTrue(outcome.ok && outcome.verified)
-        assertEquals(listOf("verify", "persist", "whitelist", "backup", "refresh"), order)
+        assertEquals(listOf("verify", "persist", "whitelist", "refresh"), order)
     }
 
     @Test fun aSubmittedButUnverifiedInstallKeepsItsMarkerAgainstDuplicateWrites() {
@@ -581,29 +566,18 @@ class UltraSdkBuildUpgradeTest {
         }
     }
 
-    @Test fun optionalKeyBackupFailureDoesNotBlockAReadBackCurrentRestorer() {
-        val backup = UltraRecoveryKeyStore.BackupOutcome(false, false, "WRITE_FAILED;IDENTITY_UPGRADE_PREPARED",
-            identityPrepared = true)
-        assertNull(UltraEnvironmentInstaller.upgradePreparationFailure(backup))
-        val failed = UltraEnvironmentInstaller.upgradePreparationFailure(backup.copy(identityPrepared = false))
-        assertFalse(failed!!.ok)
-        assertEquals(backup.reason, failed.reason)
-        assertEquals("UPGRADE_PREPARATION_FAILED", failed.sdkError)
-    }
+
 
     @Test fun ownerUpgradeObservationsAreBoundToTheFullIdentityTuple() {
         val owner = UltraRuntimeClient.ManagerOwnerIdentity(112345, 3, "00000000000000010000000000000002")
-        val identity = UltraEnvironmentUpgrade.observationIdentity(null, owner)
+        val identity = UltraEnvironmentUpgrade.observationIdentity(owner)
         assertTrue(identity != null)
-        assertNull(UltraEnvironmentUpgrade.observationIdentity(null, null))
+        assertNull(UltraEnvironmentUpgrade.observationIdentity(null))
         for (changed in listOf(owner.copy(fullUid = 12345), owner.copy(epoch = 4),
             owner.copy(hostInstance = "00000000000000010000000000000003"))) {
-            assertFalse(identity == UltraEnvironmentUpgrade.observationIdentity(null, changed))
+            assertFalse(identity == UltraEnvironmentUpgrade.observationIdentity(changed))
         }
-        val key = "K".repeat(48)
-        assertFalse(identity == UltraEnvironmentUpgrade.observationIdentity(key, owner))
-        assertEquals(UltraEnvironmentUpgrade.observationIdentity(key, owner),
-            UltraEnvironmentUpgrade.observationIdentity(key, owner.copy(epoch = 4)))
+
     }
 
     @Test fun explicitInstallationReportsAuthorityFailureAfterVerifiedHelperWithoutGrantingAroundIt() {
@@ -613,7 +587,7 @@ class UltraSdkBuildUpgradeTest {
             UltraEnvironmentInstaller.Intent.InstallToBundledBuild,
             UltraEnvironmentInstaller.Attachments(
                 whitelist = { events += "whitelist"; base.whitelist() },
-                backup = { events += "backup"; "OK" },
+
                 verify = { events += "verify"; base.verify() },
                 persist = { events += "persist" },
                 initializeAuthority = { events += "authority"; "AUTH_DISABLED" },
@@ -621,7 +595,7 @@ class UltraSdkBuildUpgradeTest {
         assertTrue(outcome.ok)
         assertFalse(outcome.verified)
         assertEquals("UNVERIFIED:AUTHORITY:AUTH_DISABLED", outcome.detail)
-        assertEquals(listOf("verify", "persist", "authority", "backup"), events)
+        assertEquals(listOf("verify", "persist", "authority"), events)
     }
 
     @Test fun upgradeAndReopeningNeverInitializeOrReenableTheAuthority() {
@@ -629,7 +603,7 @@ class UltraSdkBuildUpgradeTest {
             UltraEnvironmentInstaller.Intent.ReuseRunning)) {
             val base = attachments()
             val outcome = UltraEnvironmentInstaller.install(FakePort(), intent,
-                UltraEnvironmentInstaller.Attachments(base.whitelist, base.backup,
+                UltraEnvironmentInstaller.Attachments(base.whitelist,
                     verify = base.verify, persist = base.persist,
                     initializeAuthority = { error("Existing authority must be preserved") }))
             assertTrue(outcome.ok && outcome.verified)
@@ -640,7 +614,7 @@ class UltraSdkBuildUpgradeTest {
         val base = attachments(IdentityVerification(false, "HELPER_MISMATCH", null))
         val outcome = UltraEnvironmentInstaller.install(FakePort(),
             UltraEnvironmentInstaller.Intent.InstallToBundledBuild,
-            UltraEnvironmentInstaller.Attachments(base.whitelist, base.backup,
+            UltraEnvironmentInstaller.Attachments(base.whitelist,
                 verify = base.verify, persist = base.persist,
                 initializeAuthority = { error("The helper was not verified") }))
         assertTrue(outcome.ok)
@@ -701,7 +675,7 @@ class UltraSdkBuildUpgradeTest {
                 listVerified = true,
             )
         },
-        backup = { "OK" },
+
         verify = {
             IdentityObservation(
                 // 回读本身反查不到构建号（磁盘上没有该字段）：构建号只能由 verified 结论盖章。

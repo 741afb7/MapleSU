@@ -82,13 +82,20 @@ class SettingsViewModel(
     init {
         // Visible screens own refresh; pager precomposition only consumes the local snapshot.
         viewModelScope.launch {
-            com.maplesu.core.ui.security.HiddenFactsSignal.revision.collectLatest {
+            kotlinx.coroutines.flow.combine(
+                com.maplesu.core.ui.security.HiddenFactsSignal.revision,
+                dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelRevision,
+                dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.pendingFlow,
+            ) { _, _, _ -> Unit }.collectLatest {
                 // 只读取内存/prefs 确认事实，不等慢 root 读取才收起模式信息。
                 // 不调用 refresh()：readState() 本身会发出该信号，否则会形成 root 读取循环。
-                val masked = withContext(Dispatchers.IO) { mustMaskModeUi() }
+                val (masked, kernelUpdate) = withContext(Dispatchers.IO) {
+                    mustMaskModeUi() to canOfferInstalledKernelUpdate()
+                }
                 if (masked) {
                     _uiState.update { state ->
-                        state.copy(hiddenMasked = true, workModeEntry = WorkModeEntryPolicy.NONE,
+                        state.copy(hiddenMasked = true, installedKernelUpdateRequired = kernelUpdate,
+                            workModeEntry = WorkModeEntryPolicy.NONE,
                             liteHiddenCard = LiteHiddenCardUi.HIDDEN, showWebUiSelfCheck = false)
                     }
                 } else if (refreshJob != null) {
@@ -109,6 +116,7 @@ class SettingsViewModel(
             SettingsUiState(modePolicy = policy, capabilities = dev.maplesu.manager.workmode.ModeRuntime.capabilities)
         }.copy(
             hiddenMasked = true,
+            installedKernelUpdateRequired = false,
             workModeEntry = WorkModeEntryPolicy.NONE,
             showWebUiSelfCheck = false,
             liteHiddenCard = LiteHiddenCardUi.HIDDEN,
@@ -127,6 +135,18 @@ class SettingsViewModel(
         ) return true
         return runCatching { currentWorkModeHiddenMask() }.getOrDefault(true)
     }
+
+    private fun canOfferInstalledKernelUpdate(): Boolean = runCatching {
+        com.maplesu.core.ui.screen.settings.installedUltraUpgradeVisible(
+            mode = dev.maplesu.manager.workmode.ModeRuntime.active,
+            installed = dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelKnown(ksuApp),
+            updateRequired = dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelUpdateRequired(ksuApp),
+            hidden = com.maplesu.core.ui.security.HiddenStartupConfirm.masking(ksuApp) ||
+                com.maplesu.core.ui.security.HiddenStartupConfirm.current(ksuApp) ||
+                com.maplesu.core.ui.security.HiddenStartupConfirm.isPending(ksuApp),
+            pending = dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.pending,
+        )
+    }.getOrDefault(false)
 
     /** Reuse confirmed startup facts before slower settings reads; no root/SDK calls here. */
     private fun publishKnownModeUi(managerValid: Boolean? = null) {
@@ -150,6 +170,7 @@ class SettingsViewModel(
                 capabilities = dev.maplesu.manager.workmode.ModeRuntime.capabilities,
                 managerValid = managerValid ?: current.managerValid,
                 hiddenMasked = masked,
+                installedKernelUpdateRequired = canOfferInstalledKernelUpdate(),
                 workModeEntry = entry,
                 liteHiddenCard = hiddenCard,
                 showWebUiSelfCheck = policy.shows(SettingsSection.WEBUI_SELF_CHECK) && !masked &&
@@ -372,6 +393,7 @@ class SettingsViewModel(
                     capabilities = capabilities,
                     managerValid = managerValid,
                     hiddenMasked = hiddenMasked,
+                    installedKernelUpdateRequired = canOfferInstalledKernelUpdate(),
                     workModeEntry = if (hiddenMasked) WorkModeEntryPolicy.NONE else workModeEntry,
                     appearance = if (acceptPreferences) appearance else it.appearance,
                     bFeatures = if (acceptPreferences) bFeatures else it.bFeatures,

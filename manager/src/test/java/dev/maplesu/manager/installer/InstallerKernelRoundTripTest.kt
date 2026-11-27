@@ -1,7 +1,6 @@
 package dev.maplesu.manager.installer
 
 import dev.maplesu.installer.BlockDeviceTransaction
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import dev.maplesu.manager.ultrakernel.UltraKernelFileAssets
 import dev.maplesu.manager.ultrakernel.UltraKernelFlow
 import dev.maplesu.manager.ultrakernel.UltraKernelSpec
@@ -28,7 +27,7 @@ class InstallerKernelRoundTripTest(private val directory: String, private val vi
         assumeTrue("real boot fixture absent: $directory", source.isFile)
         val originalHash = UltraKernelSpec.sha256(source)
         val flow = UltraKernelFlow(File(temporary.root, "patch"), UltraKernelFileAssets(File("src/main/assets")), vivoVrFilter)
-        val preparation = flow.prepare(source, UltraKernelCredential.of("Aa1".repeat(16)))
+        val preparation = flow.prepare(source)
         val candidate = flow.candidateForInstall(source, preparation)
         assertEquals(candidate.bootSha256, UltraKernelSpec.sha256(candidate.image))
         if (vivoVrFilter) assertTrue("the image retains its early vr filter",
@@ -43,8 +42,8 @@ class InstallerKernelRoundTripTest(private val directory: String, private val vi
             assertEquals("REBOOT_REQUIRED", installed.state)
             assertEquals(BlockDeviceTransaction.paddedDigest(candidate.image.toPath(), device.size()),
                 BlockDeviceTransaction.digest(device))
-            assertTrue("the flashed image retains its exact credential",
-                flow.prepare(partition, preparation.credential).alreadyInstalled)
+            assertTrue("the flashed image remains recognizable without a supplied credential",
+                flow.prepare(partition).alreadyInstalled)
             assertEquals("RESTORED", BlockDeviceTransaction.restore(device, pre.toPath(), originalHash, journal).state)
             assertEquals(originalHash, UltraKernelSpec.sha256(partition))
 

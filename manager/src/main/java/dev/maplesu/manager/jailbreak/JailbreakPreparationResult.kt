@@ -1,18 +1,24 @@
 package dev.maplesu.manager.jailbreak
 
+/** Automatic selection may record its selected backend; explicit targets must match. */
+internal fun matchingJailbreakStatus(request: JailbreakRequest, observed: JailbreakStatus?): JailbreakStatus? =
+    observed?.takeIf {
+        it.attemptId == request.attemptId && it.bootId == request.bootId &&
+            (request.rootBackend == null || it.rootBackend == request.rootBackend)
+    }
+
 /** The preparation reply is authoritative, including failures not persisted by the provider. */
 internal fun preparedJailbreakOutcome(request: JailbreakRequest, observed: JailbreakStatus?): JailbreakController.Outcome {
-    if (observed == null || observed.attemptId != request.attemptId || observed.bootId != request.bootId ||
-        observed.rootBackend != request.rootBackend
-    ) return JailbreakController.Outcome(JailbreakStatus.STAGE_FAILED, "attempt produced no matching status record",
+    val status = matchingJailbreakStatus(request, observed) ?: return JailbreakController.Outcome(
+        JailbreakStatus.STAGE_FAILED, "attempt produced no matching status record",
         "JAILBREAK_ATTEMPT_NOT_CONFIRMED")
-    if (observed.failure != null || observed.stage != JailbreakStatus.STAGE_DAEMON_READY) {
+    if (status.failure != null || status.stage != JailbreakStatus.STAGE_DAEMON_READY) {
         return JailbreakController.Outcome(
-            if (observed.stage == JailbreakStatus.STAGE_CANCELLED) JailbreakStatus.STAGE_CANCELLED else JailbreakStatus.STAGE_FAILED,
-            observed.message, observed.failure ?: "JAILBREAK_ATTEMPT_NOT_CONFIRMED:" + observed.stage,
+            if (status.stage == JailbreakStatus.STAGE_CANCELLED) JailbreakStatus.STAGE_CANCELLED else JailbreakStatus.STAGE_FAILED,
+            status.message, status.failure ?: "JAILBREAK_ATTEMPT_NOT_CONFIRMED:" + status.stage,
         )
     }
-    return JailbreakController.Outcome(observed.stage, observed.message, null, request.attemptId)
+    return JailbreakController.Outcome(status.stage, status.message, null, request.attemptId)
 }
 
 /** Reuse the bounded startup detector; a successful operation is not an implicit mode activation. */

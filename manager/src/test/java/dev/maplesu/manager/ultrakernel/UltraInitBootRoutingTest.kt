@@ -31,7 +31,7 @@ class UltraInitBootRoutingTest {
             assertEquals(source, it)
             artifact
         })
-        val prepared = flow.prepare(source, UltraKernelCredential.of("A".repeat(48)))
+        val prepared = flow.prepare(source)
         val candidate = requireNotNull(prepared.candidate)
         assertEquals("init_boot", candidate.partition)
         assertEquals("android15-6.6", candidate.componentKmi)
@@ -47,7 +47,7 @@ class UltraInitBootRoutingTest {
         val (source, artifact) = componentFixture(true)
         val flow = UltraKernelFlow(temporary.newFolder(), UltraKernelMemoryAssets(emptyMap()),
             moduleArtifact = { error("explicit component must not open the default target template") })
-        val prepared = flow.prepareTarget(source, UltraKernelCredential.of("A".repeat(48)), "generated", artifact)
+        val prepared = flow.prepareTarget(source, "generated", artifact)
         val candidate = requireNotNull(prepared.candidate)
         assertEquals("boot", candidate.partition)
         assertEquals("android15-6.6", candidate.componentKmi)
@@ -64,7 +64,7 @@ class UltraInitBootRoutingTest {
         val before = input.readBytes()
         val work = temporary.newFolder()
         val prepared = UltraKernelFlow(work, UltraKernelMemoryAssets(emptyMap()))
-            .prepareTarget(input, UltraKernelCredential.of("B".repeat(48)), "generated", artifact)
+            .prepareTarget(input, "generated", artifact)
         val candidate = requireNotNull(prepared.candidate)
         assertArrayEquals("old raw hook and credential are removed before installing the bridge",
             raw, UltraKernelPlan.readKernel(candidate.image))
@@ -89,12 +89,11 @@ class UltraInitBootRoutingTest {
         val namespace = UltraKernelDeploymentNamespace.create()
         val raw = rawPatched(stock, namespace)
         val input = File(temporary.newFolder(), "old-module.img")
-        UltraInitBootProducer.produce(raw, input, artifact.withCredential("A".repeat(48).toByteArray())
-            .withDeploymentNamespace(namespace.record()))
+        UltraInitBootProducer.produce(raw, input, artifact.withDeploymentNamespace(namespace.record()))
         val before = input.readBytes()
         val rawBefore = raw.readBytes()
         val prepared = UltraKernelFlow(temporary.newFolder(), UltraKernelMemoryAssets(emptyMap()))
-            .prepareTarget(input, UltraKernelCredential.of("B".repeat(48)), "generated", artifact)
+            .prepareTarget(input, "generated", artifact)
         val candidate = requireNotNull(prepared.candidate)
         assertEquals(UltraKernelSpec.sha256(before), candidate.baseBootSha256)
         assertArrayEquals(UltraKernelPlan.readKernel(stock), UltraKernelPlan.readKernel(candidate.image))
@@ -114,7 +113,7 @@ class UltraInitBootRoutingTest {
         val work = temporary.newFolder()
         val failure = runCatching {
             UltraKernelFlow(work, UltraKernelMemoryAssets(emptyMap()))
-                .prepareTarget(input, UltraKernelCredential.of("B".repeat(48)), "generated", artifact)
+                .prepareTarget(input, "generated", artifact)
         }.exceptionOrNull()
         assertEquals("ULTRA_KERNEL_RECOVERY_CURRENT_MISMATCH", failure?.message)
         assertArrayEquals(before, input.readBytes())
@@ -125,13 +124,12 @@ class UltraInitBootRoutingTest {
         val (stock, artifact) = componentFixture(true)
         val raw = rawPatched(stock, UltraKernelDeploymentNamespace.create())
         val input = File(temporary.newFolder(), "old-module.img")
-        UltraInitBootProducer.produce(raw, input, artifact.withCredential("A".repeat(48).toByteArray())
-            .withDeploymentNamespace(UltraKernelDeploymentNamespace.create().record()))
+        UltraInitBootProducer.produce(raw, input, artifact.withDeploymentNamespace(UltraKernelDeploymentNamespace.create().record()))
         val before = input.readBytes()
         val work = temporary.newFolder()
         val failure = runCatching {
             UltraKernelFlow(work, UltraKernelMemoryAssets(emptyMap()))
-                .prepareTarget(input, UltraKernelCredential.of("B".repeat(48)), "generated", artifact)
+                .prepareTarget(input, "generated", artifact)
         }.exceptionOrNull()
         assertEquals("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_CONFLICT", failure?.message)
         assertArrayEquals(before, input.readBytes())
@@ -150,7 +148,7 @@ class UltraInitBootRoutingTest {
             UltraKernelPlan.PatchRecord("hook", 3072, ByteArray(4), byteArrayOf(0, 0, 0, 0x14)),
         ), credential, baseKernelSha256 = UltraKernelSpec.sha256(raw))
             .let { it.withDerived(it.apply(raw).derived) }
-        val text = plan.specText(plan.credential)
+        val text = plan.specText()
         val asset = UltraKernelGeneratedAsset.of(plan, base.length(), BootImageInspector.inspect(base).ramdiskSize, text)
         return UltraKernelBuilder(temporary.newFolder()).generate(base, asset, UltraKernelSpec.parse(text)).image
     }
@@ -188,7 +186,7 @@ class UltraInitBootRoutingTest {
         val workspace = temporary.newFolder("candidate-work")
         val flow = UltraKernelFlow(workspace, UltraKernelMemoryAssets(emptyMap()))
         val error = runCatching {
-            flow.prepareTarget(input, UltraKernelCredential.of("A".repeat(48)))
+            flow.prepareTarget(input)
         }.exceptionOrNull()
         assertNotNull(error)
         assertTrue(error!!.message.orEmpty().startsWith("ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED:"))

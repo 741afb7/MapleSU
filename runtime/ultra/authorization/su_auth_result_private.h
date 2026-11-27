@@ -179,9 +179,9 @@ inline bool decode(const uint8_t* p, size_t size, Operation operation, ResultV1&
 }
 } // namespace wire
 
-KModErr add(const char* root_key, const char* package, ResultV1& result);
-KModErr remove(const char* root_key, const char* package, ResultV1& result);
-KModErr clear(const char* root_key, ResultV1& result);
+KModErr add(const char* package, ResultV1& result);
+KModErr remove(const char* package, ResultV1& result);
+KModErr clear(ResultV1& result);
 namespace detail {
 KModErr write_allowlist(const std::vector<std::string>&, const char*, bool, ResultV1&);
 KModErr sdk_add(const char*, ResultV1&);

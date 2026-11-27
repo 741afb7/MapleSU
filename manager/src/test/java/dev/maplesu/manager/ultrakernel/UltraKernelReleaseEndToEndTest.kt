@@ -30,53 +30,63 @@ class UltraKernelReleaseEndToEndTest {
         UltraKernelReleaseFixtures.tempWorkspace("ultrakernel-e2e").also { workspaces += it }
 
     @Test
-    fun prepareBuildsExperimentalCandidateAndRecognizesItAsInstalled() {
+    fun keylessPreparationBuildsExperimentalCandidateAndRecognizesItAsInstalled() {
         assumeTrue("6.6.89 boot sample not available", sample.isFile)
         val workspace = workspace()
         val flow = UltraKernelFlow(workspace, UltraKernelFileAssets(assetsRoot))
         val notices = ArrayList<String>()
 
         val preparation = flow.prepare(sample) { notices += it }
-        assertEquals("k22", preparation.variant!!.id)
-        val asset = requireNotNull(preparation.variant)
+        assertTrue(preparation.generated)
+        val asset = preparation.variant as UltraKernelGeneratedAsset
+        assertTrue(asset.id.startsWith("generated-"))
         assertFalse(preparation.alreadyInstalled)
         assertEquals("experimental", preparation.verification)
-        assertEquals("ULTRA_KERNEL_ASSET_EXPERIMENTAL:k22", preparation.warning)
+        assertEquals("ULTRA_KERNEL_ASSET_EXPERIMENTAL:${requireNotNull(preparation.variant).id}", preparation.warning)
         assertTrue(preparation.experimental)
-        val spec = UltraKernelSpec.read(File(assetsRoot, "ultra-kernels/k22-ultra-6.6.89.spec"))
-        assertEquals(UltraKernelCredential.of(spec.key), preparation.credential)
+        val plan = asset.plan
+        val spec = UltraKernelSpec.parse(plan.specText())
+        assertTrue(spec.key.isEmpty())
+        assertNull(plan.credential)
+        assertNull(plan.slots)
 
         val candidate = requireNotNull(preparation.candidate)
-        assertEquals(UltraKernelReleaseFixtures.K22_KERNEL, candidate.kernelSha256)
+        assertEquals(plan.derived!!.patchedKernelSha256, candidate.kernelSha256)
         assertEquals(UltraKernelReleaseFixtures.RELEASE, candidate.kernelRelease)
         assertEquals("experimental", candidate.verification)
-        assertEquals("sample", candidate.source)
-        assertTrue("base kernel must match the pinned digest", candidate.strictBase)
+        assertEquals("generated", candidate.source)
+        assertTrue("base kernel must match the digest derived from this input", candidate.strictBase)
         assertFalse("the rebuilt container must differ from the input", 
             candidate.bootSha256 == candidate.baseBootSha256)
         assertEquals(UltraKernelReleaseFixtures.IMAGE_SIZE, candidate.image.length())
 
         // Re-open the candidate exactly like the installer would: the read-back kernel digest is
         // the expected one even though the untouched records are no longer "pristine".
-        val readback = flow.inspect(candidate.image, asset)
-        assertEquals(UltraKernelReleaseFixtures.K22_KERNEL, readback.kernelSha256)
+        val readback = UltraKernelBuilder(workspace).inspectBase(candidate.image, asset, spec)
+        assertEquals(candidate.kernelSha256, readback.kernelSha256)
         assertEquals(UltraKernelReleaseFixtures.RELEASE, readback.kernelRelease)
 
         val receipt = Json.parseToJsonElement(
-            File(workspace, "candidate-k22.json").readText(),
+            File(workspace, "candidate-${asset.id}.json").readText(),
         ).jsonObject
         assertTrue(receipt.getValue("readbackVerified").jsonPrimitive.boolean)
-        assertEquals("k22", receipt.getValue("asset").jsonPrimitive.content)
-        assertEquals(UltraKernelReleaseFixtures.K22_KERNEL,
+        assertEquals(asset.id, receipt.getValue("asset").jsonPrimitive.content)
+        assertEquals(candidate.kernelSha256,
             receipt.getValue("patchedKernelSha256").jsonPrimitive.content)
 
         // The candidate is already patched: a second prepare must stop before a build.
         val again = flow.prepare(candidate.image)
         assertTrue(again.alreadyInstalled)
         assertNull(again.candidate)
-        assertEquals("k22", again.variant!!.id)
-        assertEquals("A reusable patched image must retain its embedded identity",
-            preparation.credential, again.credential)
+        val repeated = again.variant as UltraKernelGeneratedAsset
+        assertEquals(asset.id, repeated.id)
+        assertNull(repeated.plan.credential)
+        assertNull(repeated.plan.slots)
+        assertEquals(plan.records.size, repeated.plan.records.size)
+        plan.records.zip(repeated.plan.records).forEach { (first, next) ->
+            assertEquals(first.role, next.role)
+            assertTrue("retry must retain its deployment path", first.replacement.contentEquals(next.replacement))
+        }
         val reused = flow.candidateForInstall(candidate.image, again)
         assertEquals(candidate.image, reused.image)
         assertEquals(candidate.bootSha256, reused.bootSha256)
@@ -128,7 +138,8 @@ class UltraKernelReleaseEndToEndTest {
         val preparation = flow.prepare(sample) { notices += it }
         assertNotNull(preparation.variant)
         assertTrue(preparation.experimental)
-        assertEquals("ULTRA_KERNEL_ASSET_EXPERIMENTAL:k22", preparation.warning)
-        assertTrue(notices.contains("ULTRA_KERNEL_ASSET_EXPERIMENTAL:k22"))
+        assertEquals("ULTRA_KERNEL_ASSET_EXPERIMENTAL:${requireNotNull(preparation.variant).id}", preparation.warning)
+        assertTrue(notices.any { it.contains("根据目标内核生成") })
+        assertEquals("GENERATED", preparation.planOrigin)
     }
 }

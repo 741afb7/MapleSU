@@ -9,7 +9,7 @@ namespace maplesu::sdk {
 enum class InstallMode : uint32_t {
     Boot      = 0, // 刷 Boot 模式（固化到内核，自动重启）
     HotLoad   = 1, // 热启动模式
-    Refresh   = 2, // 仅刷新已有 Legacy Key 环境的软件载荷，不启动 helper 或重启
+    Refresh   = 2, // 仅刷新已安装且经验证环境的软件载荷，不启动 helper 或重启
 };
 
 // 使用的漏洞策略
@@ -27,24 +27,21 @@ struct InstallConfig {
 /***************************************************************************
  * 安装 MapleSU 环境
  * 说明: 首次使用前必须调用此函数，用于创建 MapleSU 所需的环境文件。
- * 参数: root_key  ROOT权限密钥文本
  *      mode      部署模式 (默认为刷 Boot 模式)
  *      config    安装配置 (默认为无特定漏洞)
  * 返回: OK 表示成功；其它值为错误码
  ***************************************************************************/
-KModErr install_maplesu_environment(const char* root_key, InstallMode mode = InstallMode::Boot, const InstallConfig& config = InstallConfig());
+KModErr install_maplesu_environment(InstallMode mode = InstallMode::Boot, const InstallConfig& config = InstallConfig());
 
 /***************************************************************************
  * 卸载 MapleSU 环境
  * 说明: 彻底删除所有MapleSU环境文件。
- * 参数: root_key  ROOT权限密钥文本
  * 返回: OK 表示成功；其它值为错误码
  ***************************************************************************/
-KModErr uninstall_maplesu_environment(const char* root_key);
+KModErr uninstall_maplesu_environment();
 
 /***************************************************************************
  * 获取当前 MapleSU 环境状态
- * 参数: root_key  ROOT权限密钥文本
  * 返回: 环境状态信息
  ***************************************************************************/
 enum class MapleSUEnvState : uint32_t {
@@ -53,15 +50,14 @@ enum class MapleSUEnvState : uint32_t {
     Fault        = 2, // 本次启动已进入故障保护
     Unknown      = 3  // 初始化中或状态读取未确认；保留重试，禁止推断安装/运行
 };
-MapleSUEnvState get_maplesu_environment_state(const char* root_key);
+MapleSUEnvState get_maplesu_environment_state();
 
 /***************************************************************************
  * 查询已安装的 MapleSU 环境版本号
- * 参数: root_key  ROOT权限密钥文本
  * 返回: OK 表示成功；其它值为错误码
  ***************************************************************************/
 struct MapleSUSdkVersion { uint32_t major = 0, minor = 0, patch = 0; };
-KModErr get_installed_maplesu_environment_version(const char* root_key, MapleSUSdkVersion& out_ver);
+KModErr get_installed_maplesu_environment_version(MapleSUSdkVersion& out_ver);
 
 /***************************************************************************
  * 读取当前 SDK 的版本号

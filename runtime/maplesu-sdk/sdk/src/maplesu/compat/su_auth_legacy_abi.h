@@ -9,8 +9,8 @@ struct su_auth_item {
 };
 static_assert(sizeof(su_auth_item) == 256 && alignof(su_auth_item) == 1);
 
-KModErr get_su_auth_list_with_cb(const char* root_key, void (*callback)(const su_auth_item*));
-KModErr add_su_auth_list(const char* root_key, const char* app_package_name);
-KModErr remove_su_auth_list(const char* root_key, const char* app_package_name);
-KModErr clear_su_auth_list(const char* root_key);
+KModErr get_su_auth_list_with_cb(void (*callback)(const su_auth_item*));
+KModErr add_su_auth_list(const char* app_package_name);
+KModErr remove_su_auth_list(const char* app_package_name);
+KModErr clear_su_auth_list();
 }  // namespace skroot_env

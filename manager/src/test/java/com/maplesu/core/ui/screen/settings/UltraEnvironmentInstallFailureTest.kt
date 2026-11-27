@@ -9,6 +9,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class UltraEnvironmentInstallFailureTest {
+    @Test fun upgradeRequiresAProtectedInstalledCarrierAndAnActualUpdate() {
+        for (mode in listOf(null, dev.maplesu.manager.workmode.WorkMode.LITE)) {
+            assertFalse(installedUltraUpgradeVisible(mode, false, true, false, false))
+            assertFalse(installedUltraUpgradeVisible(mode, true, false, false, false))
+            assertTrue(installedUltraUpgradeVisible(mode, true, true, false, false))
+            assertFalse(installedUltraUpgradeVisible(mode, true, true, true, false))
+            assertFalse(installedUltraUpgradeVisible(mode, true, true, false, true))
+        }
+        assertFalse(installedUltraUpgradeVisible(dev.maplesu.manager.workmode.WorkMode.KSU,
+            true, true, false, false))
+    }
+
     @Test fun installationRequiresAnActualMissingEnvironmentOrKernelReceipt() {
         for (state in UltraEnvironmentProbe.State.entries) {
             assertEquals(state == UltraEnvironmentProbe.State.NotInstalled,
@@ -24,7 +36,6 @@ class UltraEnvironmentInstallFailureTest {
         assertEquals(R.string.ui_d_env_install_summary, environmentReadinessSummaryResId(UltraEnvironmentInstallReadiness.NotChecked))
         assertEquals(R.string.ui_d_env_install_summary, environmentReadinessSummaryResId(UltraEnvironmentInstallReadiness.Ready))
         assertEquals(R.string.ui_d_env_install_kernel_channel, environmentReadinessSummaryResId(UltraEnvironmentInstallReadiness.NeedsImage))
-        assertEquals(R.string.ui_d_env_install_key_mismatch, environmentReadinessSummaryResId(UltraEnvironmentInstallReadiness.KeyMismatch))
         assertEquals(R.string.ui_d_env_install_failed, environmentReadinessSummaryResId(UltraEnvironmentInstallReadiness.Unavailable))
     }
 
@@ -37,9 +48,9 @@ class UltraEnvironmentInstallFailureTest {
     }
 
     @Test
-    fun `credential mismatch has its own message`() {
+    fun `retired credential errors retain the generic failure message`() {
         assertEquals(
-            R.string.ui_d_env_install_key_mismatch,
+            R.string.ui_d_env_install_failed,
             environmentInstallFailureResId("ERR_MODULE_ROOT_KEY"),
         )
     }

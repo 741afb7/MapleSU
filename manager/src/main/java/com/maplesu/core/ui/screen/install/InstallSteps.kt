@@ -65,8 +65,10 @@ internal fun InstallUltraStatusSection(state: InstallUiState,
     Column(modifier) {
         if (state.installMethod == InstallMethod.DirectInstall) InstallTargetInfo(
             title = stringResource(R.string.install_ultra_current_carrier),
-            summary = state.observedCarrier?.let { it + state.observedSlotSuffix.orEmpty() }
-                ?: stringResource(R.string.install_ultra_carrier_unknown),
+            summary = listOfNotNull(
+                state.observedCarrier ?: stringResource(R.string.install_ultra_carrier_unknown),
+                state.observedSlotSuffix?.takeIf { it.isNotEmpty() },
+            ).joinToString(" / "),
         )
         if (state.hasInstallSource) state.ultraRoute.blocker?.let { reason ->
             InstallTargetInfo(title = stringResource(R.string.install_step_kernel_unavailable), summary = reason)

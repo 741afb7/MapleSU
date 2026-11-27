@@ -5,7 +5,6 @@ import dev.maplesu.manager.recovery.RecoveryCommandRunner
 import dev.maplesu.manager.recovery.RecoveryPaths
 import java.io.File
 import dev.maplesu.manager.litehidden.RecoveryIdentity
-import dev.maplesu.manager.runtime.ultra.UltraRecoveryKey
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 
 /** Fixed manager-only operation. Runs in the recovery daemon, never the app being removed. */
@@ -98,10 +97,9 @@ class DaemonManagerUninstall(
     }
 }
 
-/** Validate the recovery credential selected by the daemon, plus its live SDK authorization backend. */
+/** Validate the protected installation identity and current SDK authorization backend. */
 class DaemonManagerRecoveryReadiness(
     private val identityText: () -> String? = { File("${RecoveryPaths.DIR}/identity.json").readText() },
-    private val payload: () -> String? = { File("${RecoveryPaths.DIR}/rootkey").readText() },
     private val sdkReady: (UltraRuntimeClient) -> Boolean = { client ->
         val state = client.environmentState()
         val auth = client.suAuthSnapshot()
@@ -114,13 +112,6 @@ class DaemonManagerRecoveryReadiness(
         val identity = identityText()?.let(RecoveryIdentity::parse) ?: return false
         if (identity.packageName != DaemonManagerUninstall.PACKAGE || identity.uid !in 10000..99999) return false
         val sdk = sdkAccess() as? DaemonUltraSdkResult.Ready ?: return false
-        when (sdk.source) {
-            // Access.open already verifies the sealed session, boot, package and private-file ownership.
-            // Temporary recovery deliberately has no permanent rootkey to decrypt.
-            "boot-session" -> Unit
-            "identity" -> if (UltraRecoveryKey.open(payload(), identity.androidId, identity.packageName) == null) return false
-            else -> return false
-        }
         sdkReady(sdk.client)
     }.getOrDefault(false)
 }

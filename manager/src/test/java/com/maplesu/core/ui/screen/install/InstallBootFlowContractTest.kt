@@ -96,10 +96,9 @@ class InstallBootFlowContractTest {
             source.contains("LiteBootPatcher"),
         )
         assertFalse(source.contains("install_patched_boot_root_mismatch"))
-        // 「暂不支持」必须是显式失败 + 稳定码；54 起它还必须是"缺凭据 / 生成器拒绝"这两种
-        // **可执行**的原因，而不是一句笼统的 unsupported。
+        // Target and renderer failures retain stable codes without falling back to another mode.
         assertTrue(ultraInstall().contains("UltraImageBuild.Refused(78"))
-        assertTrue(ultraInstall().contains("UltraKernelCredentialRequiredException"))
+        assertFalse(ultraInstall().contains("UltraKernelCredentialRequiredException"))
         assertTrue(ultraInstall().contains("UltraKernelGenerateException"))
     }
 
@@ -129,34 +128,24 @@ class InstallBootFlowContractTest {
         assertTrue(install.contains("class UltraKernelSourcedGeneration("))
         assertTrue(install.contains("object UltraKernelGeneration"))
         // 生产装配真的会渲染（不是返回常量）。
-        assertTrue(install.contains("generatePlan(boot, credential)"))
+        assertTrue(install.contains("generatePlan(boot)"))
     }
 
     @Test
-    fun bothSourcesPrepareCandidateIdentityIndependentlyOfRuntimePairing() {
+    fun bothSourcesUseKeylessGenerationWithoutPreparingCredentials() {
         val install = ultraInstall()
-        val wiring = source("src/main/java/dev/maplesu/manager/runtime/ultra/UltraInstallCredentials.kt")
-        val policy = source("src/main/java/dev/maplesu/manager/runtime/ultra/UltraInstallCredentialPolicy.kt")
-        assertTrue(install.contains("UltraInstallCredentials.existing(ksuApp)"))
-        assertTrue(wiring.contains("UltraRootKeyStore.read(app)"))
-        assertTrue(wiring.contains("imageSeed(app, create = false)"))
-        assertTrue(wiring.contains("runCatching { store.load() }.getOrNull()"))
-        assertTrue(wiring.contains("imageSeed(app, create = true)"))
-        assertFalse(wiring.contains("store::getOrCreate"))
-        assertFalse(policy.contains("if (!imageOnly && !knownNonUltra()) return null"))
-        assertFalse(install.contains("canProvision ="))
-        assertTrue(install.contains("UltraInstallCredentials.forCandidate(ksuApp, imageOnly)"))
-        assertTrue(policy.contains("existing()?.let { return it }"))
+        assertFalse(install.contains("UltraInstallCredentials"))
+        assertFalse(install.contains("UltraRootKeyStore"))
         assertFalse(install.contains("getOrCreate("))
-        assertFalse(install.contains("need=ultra-root-key-or-device-credential"))
+        assertTrue(install.contains("generatePlan(boot)"))
     }
 
     @Test
     fun bothInstallEntriesUseTheTargetPreparationAndTheirOwnSource() {
         val install = ultraInstall()
-        assertTrue(install.contains("flow.prepareTarget(source, UltraInstallCredentials.forCandidate(ksuApp, imageOnly), variantId,"))
+        assertTrue(install.contains("flow.prepareTarget(source, variantId,"))
         assertTrue(install.contains("artifact, recoveredDeployment, onStdout)"))
-        assertTrue(install.contains("flow.prepareTarget(backup, UltraInstallCredentials.forCandidate(ksuApp), variantId, onStdout)"))
+        assertTrue(install.contains("flow.prepareTarget(backup, variantId, onStdout)"))
         assertFalse(install.contains("flow.prepare(base, credential, onStdout)"))
         assertTrue(install.contains("repository.withCurrentImage(sourceSha256)"))
         assertTrue(install.contains("val backup = flow.backupCurrentBoot()"))
@@ -450,11 +439,14 @@ class InstallBootFlowContractTest {
     }
 
     @Test
-    fun bothPackagedAndGeneratedExportsRetainTheirCandidateIdentity() {
+    fun packagedAndGeneratedExportsKeepTheSourceFenceWithoutSavingASecret() {
         val body = ultraInstall().substringAfter("internal fun ultraImageBuildCandidate(")
-            .substringBefore("private fun ultraGeneratedPreparation(")
-        assertTrue(body.contains("UltraInstallCredentials.retainCandidate("))
-        assertFalse("Packaged boot exports need their embedded identity too",
-            body.contains("if (preparation.generated) UltraInstallCredentials.retainCandidate("))
+        assertTrue(body.contains("repository.withCurrentImage(sourceSha256)"))
+        assertTrue(body.contains("flow.candidateForInstall(source, preparation)"))
+        assertTrue(body.contains("bootSha256 = candidate.bootSha256"))
+        assertTrue(body.contains("kernelSha256 = candidate.kernelSha256"))
+        assertFalse(body.contains("retainCandidate("))
     }
+
+
 }

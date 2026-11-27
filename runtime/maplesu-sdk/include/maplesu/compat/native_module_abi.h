@@ -2,21 +2,22 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #define MAPLESU_MODULE_ENTRY_NAME maplesu_module_entry
-#define MAPLESU_MODULE_ENTRY_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x6d\x61\x69\x6e\x5f\x31\x38\x66\x64\x66\x33\x39\x33\x38\x38\x35\x33\x36\x33\x37\x31\x32\x33\x34\x39\x65\x66\x33\x64\x65\x35\x34\x31\x31\x62\x64\x35"
+#define MAPLESU_MODULE_ENTRY_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x6d\x61\x69\x6e\x5f\x31\x38\x66\x64\x66\x33\x39\x33\x38\x38\x35\x33\x36\x33\x37\x31\x32\x33\x34\x39\x65\x66\x33\x64\x65\x35\x34\x31\x31\x62\x64\x35" "_keyless_v1"
 #define MAPLESU_MODULE_ENTRY_ASM __asm__(MAPLESU_MODULE_ENTRY_SYMBOL)
 #define MAPLESU_MODULE_IDENTITY_NAME maplesu_module_identity
 #define MAPLESU_MODULE_IDENTITY_SYMBOL "\x69\x6e\x6a\x65\x63\x74\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x75\x75\x69\x64\x33\x32\x5f\x65\x34\x63\x31\x34\x33\x39\x35\x35\x66\x32\x65\x62\x37\x65\x65\x62\x65\x31\x64\x37\x31\x31\x33\x30\x66\x34\x32\x38\x66\x37\x61"
 #define MAPLESU_MODULE_IDENTITY_ASM __asm__(MAPLESU_MODULE_IDENTITY_SYMBOL)
 #define MAPLESU_MODULE_INSTALL_NAME maplesu_module_install_entry
-#define MAPLESU_MODULE_INSTALL_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x6f\x6e\x5f\x69\x6e\x73\x74\x61\x6c\x6c\x5f\x6b\x36\x4a\x6b\x69\x62\x72\x6a\x55\x77\x7a\x58\x46\x70\x73\x68\x76\x46\x75\x49\x77\x64\x55\x4e\x52\x50\x34\x66\x59\x74\x4c\x41"
+#define MAPLESU_MODULE_INSTALL_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x6f\x6e\x5f\x69\x6e\x73\x74\x61\x6c\x6c\x5f\x6b\x36\x4a\x6b\x69\x62\x72\x6a\x55\x77\x7a\x58\x46\x70\x73\x68\x76\x46\x75\x49\x77\x64\x55\x4e\x52\x50\x34\x66\x59\x74\x4c\x41" "_keyless_v1"
 #define MAPLESU_MODULE_INSTALL_ASM __asm__(MAPLESU_MODULE_INSTALL_SYMBOL)
 #define MAPLESU_MODULE_UNINSTALL_NAME maplesu_module_uninstall_entry
-#define MAPLESU_MODULE_UNINSTALL_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x6f\x6e\x5f\x75\x6e\x69\x6e\x73\x74\x61\x6c\x6c\x5f\x65\x70\x6d\x6f\x73\x6f\x38\x35\x68\x77\x34\x77\x31\x72\x7a\x6a\x61\x67\x69\x75\x7a\x64\x6d\x6e\x79\x71\x61\x6d\x6b\x37\x65\x70"
+#define MAPLESU_MODULE_UNINSTALL_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x6f\x6e\x5f\x75\x6e\x69\x6e\x73\x74\x61\x6c\x6c\x5f\x65\x70\x6d\x6f\x73\x6f\x38\x35\x68\x77\x34\x77\x31\x72\x7a\x6a\x61\x67\x69\x75\x7a\x64\x6d\x6e\x79\x71\x61\x6d\x6b\x37\x65\x70" "_keyless_v1"
 #define MAPLESU_MODULE_UNINSTALL_ASM __asm__(MAPLESU_MODULE_UNINSTALL_SYMBOL)
 #define MAPLESU_MODULE_WEBUI_NAME maplesu_module_webui_entry
-#define MAPLESU_MODULE_WEBUI_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x77\x65\x62\x5f\x75\x69\x5f\x6d\x61\x69\x6e\x5f\x63\x65\x62\x36\x66\x30\x62\x62\x65\x62\x65\x35\x63\x38\x39\x37\x38\x65\x62\x32\x31\x36\x38\x37\x39\x39\x61\x61\x30\x63\x61\x34"
+#define MAPLESU_MODULE_WEBUI_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x77\x65\x62\x5f\x75\x69\x5f\x6d\x61\x69\x6e\x5f\x63\x65\x62\x36\x66\x30\x62\x62\x65\x62\x65\x35\x63\x38\x39\x37\x38\x65\x62\x32\x31\x36\x38\x37\x39\x39\x61\x61\x30\x63\x61\x34" "_keyless_v1"
 #define MAPLESU_MODULE_WEBUI_ASM __asm__(MAPLESU_MODULE_WEBUI_SYMBOL)
 #define MAPLESU_MODULE_LAST_SERVER_PORT_NAME maplesu_module_last_server_port_entry
 #define MAPLESU_MODULE_LAST_SERVER_PORT_SYMBOL "\x5f\x5f\x73\x6b\x72\x6f\x6f\x74\x5f\x6d\x6f\x64\x75\x6c\x65\x5f\x6c\x61\x73\x74\x5f\x77\x65\x62\x5f\x75\x69\x5f\x73\x65\x72\x76\x65\x72\x5f\x70\x6f\x72\x74\x5f\x64\x62\x32\x61\x32\x62\x65\x62\x65\x32\x62\x31\x39\x30\x34\x38\x32\x61\x64\x30\x61\x63\x37\x33\x39\x39\x36\x63\x37\x62\x38\x36"
@@ -48,16 +49,38 @@
 
 #define MAPLESU_MODULE_DECLARE_EXPORTS(ErrorType, ExitActionType) \
     extern "C" { \
-    int MAPLESU_MODULE_ENTRY_NAME(const char*, const char*) MAPLESU_MODULE_ENTRY_ASM; \
+    int MAPLESU_MODULE_ENTRY_NAME(const char*) MAPLESU_MODULE_ENTRY_ASM; \
     void MAPLESU_MODULE_IDENTITY_NAME() MAPLESU_MODULE_IDENTITY_ASM; \
-    void MAPLESU_MODULE_INSTALL_NAME(const char*, const char*, void (*)(const char*)) MAPLESU_MODULE_INSTALL_ASM; \
-    void MAPLESU_MODULE_UNINSTALL_NAME(const char*, const char*) MAPLESU_MODULE_UNINSTALL_ASM; \
-    void MAPLESU_MODULE_WEBUI_NAME(const char*, const char*, const char*, const char*, int, ErrorType&) MAPLESU_MODULE_WEBUI_ASM; \
+    void MAPLESU_MODULE_INSTALL_NAME(const char*, void (*)(const char*)) MAPLESU_MODULE_INSTALL_ASM; \
+    void MAPLESU_MODULE_UNINSTALL_NAME(const char*) MAPLESU_MODULE_UNINSTALL_ASM; \
+    void MAPLESU_MODULE_WEBUI_NAME(const char*, const char*, const char*, int, ErrorType&) MAPLESU_MODULE_WEBUI_ASM; \
     void MAPLESU_MODULE_LAST_SERVER_PORT_NAME(int&, ErrorType&) MAPLESU_MODULE_LAST_SERVER_PORT_ASM; \
     void MAPLESU_MODULE_BEFORE_SERVER_EXIT_NAME(ExitActionType&, ErrorType&) MAPLESU_MODULE_BEFORE_SERVER_EXIT_ASM; \
     }
 
 namespace maplesu::compat::native_module {
+
+inline constexpr char kLegacyModuleEntrySymbol[] = "__skroot_module_main_18fdf393885363712349ef3de5411bd5";
+inline constexpr char kLegacyModuleInstallSymbol[] = "__skroot_module_on_install_k6JkibrjUwzXFpshvFuIwdUNRP4fYtLA";
+inline constexpr char kLegacyModuleUninstallSymbol[] = "__skroot_module_on_uninstall_epmoso85hw4w1rzjagiuzdmnyqamk7ep";
+inline constexpr char kLegacyWebUiMainSymbol[] = "__skroot_module_web_ui_main_ceb6f0bbebe5c8978eb2168799aa0ca4";
+
+enum class Abi { KeylessV1, LegacyRootKey };
+struct Export {
+    void* address = nullptr;
+    Abi abi = Abi::KeylessV1;
+    explicit operator bool() const { return address != nullptr; }
+};
+
+template <typename Lookup>
+Export resolve_export(Lookup lookup, const char* keyless, const char* legacy) {
+    if (void* address = lookup(keyless)) return {address, Abi::KeylessV1};
+    return {lookup(legacy), Abi::LegacyRootKey};
+}
+
+inline bool valid_legacy_credential(const char* credential) {
+    return credential && strnlen(credential, 49) == 48;
+}
 
 inline constexpr char kModuleEntrySymbol[] = MAPLESU_MODULE_ENTRY_SYMBOL;
 inline constexpr char kModuleIdentitySymbol[] = MAPLESU_MODULE_IDENTITY_SYMBOL;

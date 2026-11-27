@@ -12,7 +12,7 @@ class UltraKernelAbiTest {
         assumeTrue(boot.isFile)
         val kernel = UltraKernelPlan.readKernel(boot)
         val symbols = UltraKernelKallsymsTable.decode(kernel)
-        val plan = UltraKernelSpecGenerator().generate(kernel, UltraKernelPlanFixtures.freshCredential())
+        val plan = UltraKernelSpecGenerator().generate(kernel)
         val adapter = plan.records.singleOrNull { it.role == "module_alloc-adapter" }
         assertNotNull("execmem_alloc(type, size) needs an ABI adapter", adapter)
         adapter!!
@@ -77,14 +77,13 @@ class UltraKernelAbiTest {
     fun `6_1 cred fields follow the syscall accessors rather than the 6_6 layout`() {
         val boot = File("../Boot_Research/哈/boot.img")
         assumeTrue(boot.isFile)
-        val plan = UltraKernelSpecGenerator().generate(boot, UltraKernelPlanFixtures.freshCredential())
-        val gate = plan.records.single { it.role == "die+0x0" }
-        assertEquals("reply occupies SUID and SGID, preserving EUID",
-            UltraKernelA64.ldAuto("str", 0, 17, 12, 8),
-            UltraKernelA64.le32Bits(gate.replacement, UltraKernelBodies.EXECVE_GATE_BYTES - 28))
-        assertEquals("root test must read EUID rather than EGID",
-            UltraKernelA64.ldAuto("ldr", 13, 17, 20, 4),
-            UltraKernelA64.le32Bits(gate.replacement, UltraKernelBodies.EXECVE_GATE_BYTES - 20))
+        val plan = UltraKernelSpecGenerator().generate(boot)
+        assertEquals("reply starts at SUID", 12, plan.layout.offset(UltraKernelStructOffsets.SUID))
+        assertEquals("reply ends at SGID", 16, plan.layout.offset(UltraKernelStructOffsets.SGID))
+        assertEquals("EUID remains separate from the reply", 20, plan.layout.offset(UltraKernelStructOffsets.CRED_EUID))
+        for (field in listOf(UltraKernelStructOffsets.SUID, UltraKernelStructOffsets.SGID, UltraKernelStructOffsets.CRED_EUID)) {
+            assertEquals("native credential field width", 4, plan.layout.fields.getValue(field).widthBytes)
+        }
         val exec = plan.records.single { it.role == "__drm_printfn_coredump+0x0" }
         assertEquals(UltraKernelA64.addImm(17, 17, 12), UltraKernelA64.le32Bits(exec.replacement, 4))
     }
@@ -95,7 +94,7 @@ class UltraKernelAbiTest {
         assumeTrue(boot.isFile)
         val kernel = UltraKernelPlan.readKernel(boot)
         val symbols = UltraKernelKallsymsTable.decode(kernel)
-        val plan = UltraKernelSpecGenerator().generate(kernel, UltraKernelPlanFixtures.freshCredential())
+        val plan = UltraKernelSpecGenerator().generate(kernel)
         val guide = plan.records.single { it.role == "__drm_puts_coredump+0x0" }
         val calls = (0 until guide.length step 4).mapNotNull { offset ->
             val word = UltraKernelA64.le32Bits(guide.replacement, offset)

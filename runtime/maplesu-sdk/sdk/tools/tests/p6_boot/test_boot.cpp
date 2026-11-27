@@ -12,9 +12,7 @@
 #include <unistd.h>
 
 namespace fs = std::filesystem;
-extern "C" const char maplesu_helper_root_key_token[4096] =
-    "0123456789abcdef0123456789abcdef0123456789abcdef";
-static const char* self = "/data/0123456789abcdef/init";
+static const char* self = "/data/fedcba9876543210/init";
 static int checks;
 static void check(bool ok, const char* name) {
     ++checks;
@@ -72,7 +70,7 @@ static int boot_id(char* out, helper_u32, helper_u32* length) {
 }
 static int execute(const char* path, char* const args[], char* const env[]) {
     boot_fixture::event("exec");
-    if (!boot_fixture::root_held()) return HELPER_E_ACCES;
+    if (strcmp(path, "/system/bin/sh") == 0 && !boot_fixture::root_held()) return HELPER_E_ACCES;
     for (int fd = 3; fd < 128; ++fd) {
         char name[64], target[HELPER_PATH_MAX]{};
         snprintf(name, sizeof(name), "/proc/self/fd/%d", fd);
@@ -92,8 +90,8 @@ static void log_line(const char* text) { std::cerr << text << '\n'; }
 static void put(const std::string& path, const std::string& data) { std::ofstream(path) << data; }
 static std::string get(const std::string& path) { std::ifstream f(path); return {std::istreambuf_iterator<char>(f), {}}; }
 namespace maplesu::bootstrap {
-module::SdkVersion sdk_version() { return {5, 2, 0}; }
-KModErr initialize_core(helper_context&) {
+module::SdkVersion sdk_version() { return {5, 2, 1}; }
+KModErr initialize_core(helper_context&, std::optional<storage::WorkerScope>&) {
     boot_fixture::event("core");
     std::ofstream("/tmp/native-init", std::ios::app) << "core\n";
     return KModErr::OK;
@@ -104,8 +102,9 @@ KModErr initialize_modules(helper_context& context) {
     std::ofstream("/tmp/native-init", std::ios::app) << "modules\n";
     return KModErr::OK;
 }
-KModErr initialize(helper_context& context) { initialize_core(context); return initialize_modules(context); }
-KModErr acquire_root(const char*) { return KModErr::OK; }
+KModErr initialize(helper_context& context, std::optional<storage::WorkerScope>& worker) {
+    initialize_core(context, worker); return initialize_modules(context);
+}
 int load_single(helper_context&, const char*) { return 0; }
 }
 int main() {
@@ -126,7 +125,7 @@ int main() {
     check(helper_run_boot(&ops, 3, args, nullptr) == 17, "event preserves dispatcher exit code");
     check(get(std::string(self) + HELPER_SUFFIX_SAFE_FLAG) == "2", "script nonzero does not turn SDK bootstrap into protection");
     check(get("/tmp/native-init") == "core\npost-fs-data\nmodules\n", "actual early dispatcher completes before native modules");
-    check(get("/tmp/helper-mode") == "true|50200|lkm|boot", "early dispatcher receives actual persisted boot mode and SDK facts");
+    check(get("/tmp/helper-mode") == "true|50201|lkm|boot", "early dispatcher receives actual persisted boot mode and SDK facts");
     put(dispatcher, "#!/bin/sh\nprintf '%s\\n' \"$1\" >> /tmp/helper-events\nexit 0\n");
     args[2] = const_cast<char*>("service");
     check(helper_run_boot(&ops, 3, args, nullptr) == 0, "late event reaches persistent dispatcher");
@@ -147,7 +146,7 @@ int main() {
     check(get(std::string(self) + HELPER_SUFFIX_SAFE_FLAG) == "2", "publication failure preserves successful SDK session");
 
     // Exercise production WorkerScope on the forked helper and shell processes.
-    // No Key path matches this installed name; the held-executable READ seam
+    // The held-executable READ seam supplies the installed namespace and
     // admits the explicit EarlyHelper mode before either child is created.
     self = "/data/fedcba9876543210/init";
     fs::create_directories(fs::path(self).parent_path());
@@ -157,7 +156,7 @@ int main() {
     args[0] = const_cast<char*>(self);
     args[2] = const_cast<char*>("post-fs-data");
     boot_fixture::reset();
-    check(helper_run_boot(&ops, 3, args, nullptr) == 0, "EarlyHelper real boot worker succeeds");
+    check(helper_run_boot(&ops, 3, args, nullptr) == 0, "EarlyHelper real boot worker succeeds without a baked credential");
     auto flow = boot_fixture::events();
     check(flow.find("vendor-read:") < flow.find("select-helper:"), "installation READ precedes explicit helper mode");
     check(flow.find("helper-open:") < flow.find("root:") && flow.find("root:") < flow.find("lock-open:"),
@@ -197,7 +196,7 @@ int main() {
           "boot worker ROOT failure prevents lock and initialization");
 
     // Real original-target exec keeps option-like argv and the exact env vector.
-    self = "/data/0123456789abcdef/init";
+    self = "/data/fedcba9876543210/init";
     boot_fixture::reset();
     const char* original = "/system/bin/original-fixture";
     put(original, "#!/bin/sh\nprintf '%s\\n' \"$0\" \"$#\" \"$1\" \"$2\" \"$P6_SENTINEL\" > /tmp/original-vector\nexit 23\n");

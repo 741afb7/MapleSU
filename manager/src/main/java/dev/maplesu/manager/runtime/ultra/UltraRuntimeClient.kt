@@ -5,31 +5,36 @@ import android.util.Log
 import dev.maplesu.manager.runtime.ultra.bridge.NativeBridge
 import dev.maplesu.manager.ultra.model.MapleSuModInstalledItem
 import dev.maplesu.manager.ultra.model.MapleSuModRunState
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import dev.maplesu.manager.runtime.PageReadDeadline
 import java.net.URLDecoder
-import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import org.json.JSONObject
 
-class UltraRuntimeClient(
-    private val rootKeyProvider: () -> String? = { null },
-) {
+/** A maintenance Root channel bound to the caller lifetime, with no transport replay. */
+internal fun interface RootScriptRunner {
+    fun run(script: String): SuExecResult?
+}
+
+class UltraRuntimeClient() {
     private var rootCommands: RootScriptRunner? = null
     private var identityCurrent: () -> Boolean = { true }
+    private var legacyCredential: UltraLegacyCredential? = null
+    internal val legacyCredentialFingerprint: String? get() = legacyCredential?.fingerprint
 
-    /** Upgrade maintenance may reuse a root channel after verifying the SDK key. */
-    internal constructor(rootKeyProvider: () -> String?, rootCommands: RootScriptRunner) : this(rootKeyProvider) {
+    /** Maintenance may reuse a root channel bound to the same caller lifetime. */
+    internal constructor(rootCommands: RootScriptRunner) : this() {
         this.rootCommands = rootCommands
     }
 
-    internal fun scoped(expectedKey: String?, isCurrent: () -> Boolean): UltraRuntimeClient =
-        UltraRuntimeClient {
-            expectedKey?.takeIf { isCurrent() && key() == it }
-        }.also {
+    internal fun scoped(isCurrent: () -> Boolean): UltraRuntimeClient =
+        UltraRuntimeClient().also {
             it.rootCommands = rootCommands
-            it.identityCurrent = { identityCurrent() && isCurrent() && key() == expectedKey }
+            it.legacyCredential = legacyCredential
+            it.identityCurrent = { identityCurrent() && isCurrent() }
         }
+
+    internal fun withLegacyCredential(credential: UltraLegacyCredential): UltraRuntimeClient =
+        scoped { true }.also { it.legacyCredential = credential }
 
     /** Read-only readiness snapshot. Each field has its own evidence source. */
     data class Capabilities(
@@ -95,12 +100,10 @@ class UltraRuntimeClient(
             NativeReceipt.parse(block())
                 ?: NativeReceipt.bridgeFailure(operation, "MAPLESU_BRIDGE_UNPARSEABLE", "answer was not a receipt")
         } catch (error: Throwable) {
-            if (operation == "read_installed_helper") {
-                if (error is CancellationException) throw error
-                if (error is InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw CancellationException("IDENTITY_READBACK_INTERRUPTED")
-                }
+            if (error is CancellationException) throw error
+            if (error is InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw CancellationException("SDK_CALL_INTERRUPTED").apply { initCause(error) }
             }
             NativeReceipt.bridgeFailure(operation, "MAPLESU_BRIDGE_EXCEPTION", UltraSdkLogging.redact(error.toString()))
         }
@@ -110,13 +113,8 @@ class UltraRuntimeClient(
     fun decodeText(value: String?): String? =
         value?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
 
-    private fun key(): String? = rootKeyProvider()?.takeIf {
-        UltraKernelCredential.isValid(it) && UltraKernelCredential.of(it).sdkMetadataValid
-    }
-
-    internal fun logPolicyScope(): String? = key()?.let {
-        MessageDigest.getInstance("SHA-256").digest(it.toByteArray(Charsets.US_ASCII))
-            .joinToString("") { byte -> "%02x".format(byte.toInt() and 255) }
+    internal fun logPolicyScope(): String? = queryManagerOwnerIdentity().identity?.let {
+        "${it.fullUid}:${it.epoch}:${it.hostInstance}"
     }
 
     // --- Environment and version -----------------------------------------------------
@@ -132,7 +130,7 @@ class UltraRuntimeClient(
 
     fun environmentState(): NativeReceipt {
         val receipt = callWithIdentity("get_maplesu_environment_state") {
-            NativeBridge.getEnvironmentState(it)
+            NativeBridge.getEnvironmentState()
         }
         if (receipt.succeeded) {
             val state = receipt.string("state")
@@ -149,13 +147,13 @@ class UltraRuntimeClient(
     }
 
     fun installedEnvironmentVersion(): NativeReceipt = callWithIdentity("get_installed_maplesu_environment_version") {
-        NativeBridge.getInstalledEnvironmentVersion(it)
+        NativeBridge.getInstalledEnvironmentVersion()
     }
 
     fun installEnvironment(mode: String, exploit: String): NativeReceipt {
         UltraSdkLogging.invalidate()
         val receipt = callWithIdentity("install_maplesu_environment") {
-            NativeBridge.installEnvironment(it, mode, exploit)
+            NativeBridge.installEnvironment(mode, exploit)
         }
         if (receipt.succeeded) synchronized(lock) { generation += 1 }
         return receipt
@@ -163,12 +161,8 @@ class UltraRuntimeClient(
 
     fun uninstallEnvironment(): NativeReceipt {
         UltraSdkLogging.invalidate()
-        val receipt = callWithIdentity("uninstall_maplesu_environment") { credential ->
-            // Only the old credential transport owns the legacy recovery broker.
-            if (credential != null) UltraIdentityRecovery.suspend(this)
-            if (identityCurrent() && key() == credential) NativeBridge.uninstallEnvironment(credential)
-            else NativeReceipt.bridgeFailure("uninstall_maplesu_environment", "SDK_CREDENTIAL_SCOPE_CHANGED",
-                "The SDK caller identity changed before submission.").raw
+        val receipt = callWithIdentity("uninstall_maplesu_environment") {
+            NativeBridge.uninstallEnvironment()
         }
         if (receipt.succeeded) synchronized(lock) { generation += 1 }
         return receipt
@@ -178,11 +172,6 @@ class UltraRuntimeClient(
 
     fun systemStatus(): NativeReceipt = localCall("get_system_status") { NativeBridge.getSystemStatusJson() }
 
-    /** The native caller identity check needs no key; its reply still needs live uid-0 proof. */
-    internal fun claimManagerIdentity(): String? = parseManagerIdentityCandidate(
-        localCall("claim_manager_identity") { NativeBridge.claimManagerIdentity() },
-    )
-
     fun queryManagerOwnerIdentity(): ManagerOwnerIdentityResult = parseManagerOwnerIdentity(
         localCall("query_manager_owner_identity") { NativeBridge.queryManagerOwnerIdentity() },
     )
@@ -191,48 +180,51 @@ class UltraRuntimeClient(
         localCall("probe_manager_owner_root") { NativeBridge.probeManagerOwnerRoot() },
     )
 
-    /** Reads structural credential candidates from supplied kernel bytes; grants no capability. */
-    internal fun imageCredentials(kernel: ByteArray): List<String> {
-        val receipt = localCall("recover_image_credentials") { NativeBridge.recoverImageCredentials(kernel) }
-        val values = if (receipt.succeeded) receipt.array("credentials") else null
-        return if (values == null) emptyList() else (0 until values.length())
-            .mapNotNull { values.optString(it).takeIf { value ->
-                UltraKernelCredential.isValid(value) && UltraKernelCredential.of(value).sdkMetadataValid
-            } }.distinct()
+    internal fun claimManagerIdentity(): UltraLegacyCredential? {
+        val receipt = localCall("claim_manager_identity") { NativeBridge.claimManagerIdentity() }
+        if (!receipt.succeeded || receipt.bool("liveRootVerified") != false) return null
+        return receipt.string("candidate")?.let(UltraLegacyCredential::fromKernelClaim)
     }
 
-    fun testRoot(): NativeReceipt {
-        val credential = key() ?: return probeManagerOwnerRoot().receipt
-        return parseRootStatusReport(call("get_root_status_report") {
-            credential.takeIf { key() == it }?.let(NativeBridge::testRoot)
-        })
-    }
+    fun testRoot(): NativeReceipt = parseRootStatusReport(callWithIdentity("get_root_status_report") {
+        NativeBridge.testRoot()
+    })
 
-    fun runRootCommand(command: String): NativeReceipt = callWithIdentity("run_root_cmd") { credential ->
+    fun runRootCommand(command: String): NativeReceipt = callWithIdentity("run_root_cmd") {
         val runner = rootCommands
         // A submitted script is never replayed through another transport.
-        if (credential != null && runner != null) NativeReceipt.rootCommand(runner.run(command)).raw
-        else NativeBridge.runRootCmd(credential, command)
+        if (runner != null) NativeReceipt.rootCommand(runner.run(command)).raw
+        else NativeBridge.runRootCmd(command)
     }
 
-    private fun callWithIdentity(operation: String, block: (String?) -> String?): NativeReceipt {
-        val supplied = rootKeyProvider()
-        val credential = key()
-        if (supplied != null && credential == null) return NativeReceipt.bridgeFailure(
-            operation, "MAPLESU_ULTRA_ROOT_KEY_ABSENT", "The SDK caller credential is invalid.",
-        )
+    private fun callWithIdentity(operation: String, block: () -> String?): NativeReceipt {
         val submit = {
-            if (identityCurrent() && rootKeyProvider() == supplied && key() == credential) block(credential)
-            else NativeReceipt.bridgeFailure(
-                operation, "SDK_CREDENTIAL_SCOPE_CHANGED", "The SDK caller identity changed before submission.",
+            if (!identityCurrent()) NativeReceipt.bridgeFailure(
+                operation, "SDK_IDENTITY_SCOPE_CHANGED", "The SDK caller identity changed before submission.",
             ).raw
+            else {
+                val credential = legacyCredential
+                if (credential == null || operation == "read_installed_helper") block()
+                else NativeBridge.invokeWithLegacyCredential(operation, credential.value) { block() }
+            }
         }
-        // This transport owns a separate native child/slot and watchdog. It must
-        // not hold the live SDK admission lock while waiting for helper readback.
         return if (operation == "read_installed_helper") localCall(operation, submit) else call(operation, submit)
     }
 
-    internal fun readInstalledHelper(helperPath: String?, keySlotOffset: Long?, timeoutMillis: Int = 300): NativeReceipt {
+    internal fun captureModuleEnvironment(): Array<String> {
+        var facts: Array<String>? = null
+        val receipt = callWithIdentity("capture_module_environment") {
+            facts = NativeBridge.captureModuleEnvironment()
+            JSONObject().put("schemaVersion", 1).put("backend", BACKEND)
+                .put("operation", "capture_module_environment").put("ok", facts != null)
+                .put("sdkError", if (facts != null) "OK" else "MAPLESU_MODULE_ENVIRONMENT_MISSING")
+                .put("sdkErrorCode", if (facts != null) 0 else -1004).toString()
+        }
+        if (!receipt.succeeded) throw java.io.IOException("MODULE_ENVIRONMENT_CAPTURE_FAILED:${receipt.sdkError}:${receipt.sdkErrorCode}")
+        return requireNotNull(facts)
+    }
+
+    internal fun readInstalledHelper(helperPath: String?, timeoutMillis: Int = 300): NativeReceipt {
         val operation = "read_installed_helper"
         if (Thread.currentThread().isInterrupted) return NativeReceipt.bridgeFailure(
             operation, "MAPLESU_SDK_INTERRUPTED", "The request was cancelled before helper readback.")
@@ -244,8 +236,7 @@ class UltraRuntimeClient(
                 Thread.currentThread().isInterrupted -> NativeReceipt.bridgeFailure(
                     operation, "MAPLESU_SDK_INTERRUPTED", "The request was cancelled before helper readback.").raw
                 remaining != null && remaining <= 0 -> busy(operation).raw
-                else -> NativeBridge.readInstalledHelper(it, helperPath,
-                    keySlotOffset?.takeIf { offset -> offset > 0 } ?: 0L,
+                else -> NativeBridge.readInstalledHelper(helperPath,
                     remaining?.coerceAtMost(timeoutMillis.toLong())?.toInt() ?: timeoutMillis)
             }
         }
@@ -253,68 +244,68 @@ class UltraRuntimeClient(
 
     fun modulePolicySettings(requested: Int = -1): NativeReceipt =
         callWithIdentity(if (requested < 0) "get_module_policy_settings" else "set_module_policy_settings") {
-            NativeBridge.modulePolicySettings(it, requested)
+            NativeBridge.modulePolicySettings(requested)
         }
 
     internal fun publishPolicyBackend(sha256: String, verifiedBytes: ByteArray): NativeReceipt =
         callWithIdentity("publish_policy_backend") {
-            NativeBridge.publishPolicyBackend(it, sha256, verifiedBytes)
+            NativeBridge.publishPolicyBackend(sha256, verifiedBytes)
         }
 
     fun restartZygote64(): NativeReceipt = callWithIdentity("restart_zygote64") {
-        NativeBridge.restartZygote64(it)
+        NativeBridge.restartZygote64()
     }
 
     fun testBasics(item: String): NativeReceipt = callWithIdentity("test_maplesu_basics") {
-        NativeBridge.testBasics(it, item)
+        NativeBridge.testBasics(item)
     }
 
     fun testDefaultModule(name: String): NativeReceipt = callWithIdentity("test_maplesu_default_module") {
-        NativeBridge.testDefaultModule(it, name)
+        NativeBridge.testDefaultModule(name)
     }
 
     fun setLogEnabled(enabled: Boolean): NativeReceipt = callWithIdentity("set_maplesu_log_enabled") {
-        NativeBridge.setLogEnabled(it, enabled)
+        NativeBridge.setLogEnabled(enabled)
     }
 
     fun isLogEnabled(): NativeReceipt = callWithIdentity("is_maplesu_log_enabled") {
-        NativeBridge.isLogEnabled(it)
+        NativeBridge.isLogEnabled()
     }
 
     fun readLog(): NativeReceipt = callWithIdentity("read_maplesu_log") {
-        NativeBridge.readLog(it)
+        NativeBridge.readLog()
     }
 
     fun clearLog(): NativeReceipt = callWithIdentity("clear_maplesu_log") {
-        NativeBridge.clearLog(it)
+        NativeBridge.clearLog()
     }
 
 
     fun setAdbForcedDisabled(disabled: Boolean): NativeReceipt = callWithIdentity("set_adb_forced_disabled") {
-        NativeBridge.setAdbForcedDisabled(it, disabled)
+        NativeBridge.setAdbForcedDisabled(disabled)
     }
 
     fun isAdbForcedDisabled(): NativeReceipt = callWithIdentity("is_adb_forced_disabled") {
-        NativeBridge.isAdbForcedDisabled(it)
+        NativeBridge.isAdbForcedDisabled()
     }
 
     fun oneplusWriteStage1(): NativeReceipt = callWithIdentity("oneplus_bypass_stage1_and_2") {
-        NativeBridge.oneplusBypassWriteStage1(it)
+        NativeBridge.oneplusBypassWriteStage1()
     }
 
     fun oneplusIsWorkNormal(): NativeReceipt = callWithIdentity("oneplus_bypass_is_work_normal") {
-        NativeBridge.oneplusBypassIsWorkNormal(it)
+        NativeBridge.oneplusBypassIsWorkNormal()
     }
 
     // --- Parasite (H4) ---------------------------------------------------------------
 
     fun parasitePrecheck(targetPidCmdline: String): NativeReceipt = callWithIdentity("parasite_precheck_app") {
-        NativeBridge.parasitePrecheckApp(it, targetPidCmdline)
+        NativeBridge.parasitePrecheckApp(targetPidCmdline)
     }
 
     fun parasiteImplantApp(targetPidCmdline: String, soPath: String): NativeReceipt =
         callWithIdentity("parasite_implant_app") {
-            NativeBridge.parasiteImplantApp(it, targetPidCmdline, soPath)
+            NativeBridge.parasiteImplantApp(targetPidCmdline, soPath)
         }
 
     fun parasiteImplantSuEnv(
@@ -322,33 +313,33 @@ class UltraRuntimeClient(
         soPath: String,
         suDir: String,
     ): NativeReceipt = callWithIdentity("parasite_implant_su_env") {
-        NativeBridge.parasiteImplantSuEnv(it, targetPidCmdline, soPath, suDir)
+        NativeBridge.parasiteImplantSuEnv(targetPidCmdline, soPath, suDir)
     }
 
     // --- Application authorization (SDK touchpoints only) ----------------------------
 
     fun addSuAuth(packageName: String): NativeReceipt = callWithIdentity("add_su_auth_list") {
-        NativeBridge.addSuAuth(it, packageName)
+        NativeBridge.addSuAuth(packageName)
     }
 
     internal fun refreshSuAuthList(): NativeReceipt = callWithIdentity("refresh_su_auth_list") {
-        NativeBridge.refreshSuAuthList(it)
+        NativeBridge.refreshSuAuthList()
     }
 
     fun removeSuAuth(packageName: String): NativeReceipt = callWithIdentity("remove_su_auth_list") {
-        NativeBridge.removeSuAuth(it, packageName)
+        NativeBridge.removeSuAuth(packageName)
     }
 
     fun suAuthList(): NativeReceipt = callWithIdentity("get_su_auth_list") {
-        NativeBridge.getSuAuthList(it)
+        NativeBridge.getSuAuthList()
     }
 
     fun setSuUidProfile(uid: Int, packageName: String, allow: Boolean): NativeReceipt = callWithIdentity("set_su_uid_profile") {
-        NativeBridge.setSuUidProfile(it, uid, packageName, allow)
+        NativeBridge.setSuUidProfile(uid, packageName, allow)
     }
 
     fun suUidProfiles(): SuUidProfilesSnapshot = parseSuUidProfiles(callWithIdentity("get_su_uid_profiles") {
-        NativeBridge.getSuUidProfiles(it)
+        NativeBridge.getSuUidProfiles()
     })
 
     data class SuUidProfilesSnapshot(val receipt: NativeReceipt, val profiles: List<SuUidProfile>) {
@@ -356,7 +347,7 @@ class UltraRuntimeClient(
     }
 
     fun clearSuAuthList(): NativeReceipt = callWithIdentity("clear_su_auth_list") {
-        NativeBridge.clearSuAuthList(it)
+        NativeBridge.clearSuAuthList()
     }
 
     /**
@@ -389,36 +380,36 @@ class UltraRuntimeClient(
     // --- Module lifecycle ------------------------------------------------------------
 
     fun moduleList(): NativeReceipt = callWithIdentity("get_all_modules_list") {
-        NativeBridge.getModuleList(it)
+        NativeBridge.getModuleList()
     }
 
     fun parseModuleDescriptor(zipPath: String): NativeReceipt = callWithIdentity("parse_module_desc_from_zip_file") {
-        NativeBridge.parseModuleDescriptor(it, zipPath)
+        NativeBridge.parseModuleDescriptor(zipPath)
     }
 
     fun installModule(zipPath: String, devRunOnce: Boolean): NativeReceipt =
         callWithIdentity(if (devRunOnce) "install_module_dev_run_once" else "install_module") {
-            NativeBridge.installModule(it, zipPath, devRunOnce)
+            NativeBridge.installModule(zipPath, devRunOnce)
         }
 
     fun uninstallModule(id32: String): NativeReceipt = callWithIdentity("uninstall_module") {
-        NativeBridge.uninstallModule(it, id32)
+        NativeBridge.uninstallModule(id32)
     }
 
     fun moduleControlCapabilities(): NativeReceipt = callWithIdentity("get_module_control_capabilities") {
-        NativeBridge.getModuleControlCapabilities(it)
+        NativeBridge.getModuleControlCapabilities()
     }
 
     fun moduleControl(id32: String): NativeReceipt = callWithIdentity("get_module_control") {
-        NativeBridge.getModuleControl(it, id32)
+        NativeBridge.getModuleControl(id32)
     }
 
     fun setModuleEnabled(id32: String, enabled: Boolean): NativeReceipt = callWithIdentity("set_module_enabled") {
-        NativeBridge.setModuleEnabled(it, id32, enabled)
+        NativeBridge.setModuleEnabled(id32, enabled)
     }
 
     fun openModuleWebUi(id32: String): NativeReceipt = callWithIdentity("start_module_web_ui_server_async") {
-        NativeBridge.openModuleWebUi(it, id32)
+        NativeBridge.openModuleWebUi(id32)
     }
 
     /**
@@ -476,10 +467,7 @@ class UltraRuntimeClient(
 
     /** One consolidated snapshot; signed owner facts stay independent of readiness. */
     fun capabilities(): Capabilities {
-        val observedKey = key()
-        val ownerIdentity = if (observedKey == null) {
-            queryManagerOwnerIdentity().identity
-        } else null
+        val ownerIdentity = queryManagerOwnerIdentity().identity
         val version = sdkVersion()
         val state = environmentState()
         val environmentVersion = if (state.succeeded && state.string("state") != "NotInstalled") {
@@ -509,7 +497,7 @@ class UltraRuntimeClient(
                 val control = moduleControlCapabilities()
                 control.succeeded && control.bool("supportsEnableToggle") == true
             } else false,
-            managerOwnerIdentity = ownerIdentity?.takeIf { key() == observedKey },
+            managerOwnerIdentity = ownerIdentity?.takeIf { identityCurrent() },
         )
     }
 
@@ -543,13 +531,6 @@ internal fun parseSuAuthSnapshot(receipt: NativeReceipt): UltraRuntimeClient.SuA
     return UltraRuntimeClient.SuAuthSnapshot(receipt, packages)
 }
 
-/** A native claim is a candidate, never an activation or environment-presence receipt. */
-internal fun parseManagerIdentityCandidate(receipt: NativeReceipt): String? =
-    receipt.takeIf { it.succeeded && it.operation == "claim_manager_identity" &&
-        it.bool("liveRootVerified") == false }?.string("candidate")?.takeIf {
-        UltraKernelCredential.isValid(it) && UltraKernelCredential.of(it).sdkMetadataValid
-    }
-
 /** Owner facts require the fixed native JSON types, independent of legacy receipt coercion. */
 internal fun parseManagerOwnerIdentity(receipt: NativeReceipt): UltraRuntimeClient.ManagerOwnerIdentityResult {
     fun invalid() = UltraRuntimeClient.ManagerOwnerIdentityResult(receipt, null)
@@ -581,7 +562,7 @@ internal fun parseManagerOwnerIdentity(receipt: NativeReceipt): UltraRuntimeClie
 }
 
 
-/** Full-UID records are adopted only after the native live-table and delivery proof. */
+/** Full-UID records describe stored decisions; native SU delivery is a separate result. */
 internal fun parseSuUidProfiles(receipt: NativeReceipt): UltraRuntimeClient.SuUidProfilesSnapshot {
     fun invalid() = UltraRuntimeClient.SuUidProfilesSnapshot(NativeReceipt.bridgeFailure(
         "get_su_uid_profiles", "MAPLESU_ULTRA_SU_UID_INVALID_SNAPSHOT", null), emptyList())
@@ -589,7 +570,7 @@ internal fun parseSuUidProfiles(receipt: NativeReceipt): UltraRuntimeClient.SuUi
     val rows = receipt.array("profiles") ?: return invalid()
     val count = receipt.data?.opt("count") as? Number ?: return invalid()
     if (count.toDouble() != rows.length().toDouble() || receipt.string("encoding") != "url" ||
-        receipt.data?.opt("deliveryVerified") != true) return invalid()
+        receipt.data?.opt("decisionsVerified") != true) return invalid()
     val profiles = ArrayList<SuUidProfile>(rows.length())
     val seen = HashSet<Int>()
     for (index in 0 until rows.length()) {

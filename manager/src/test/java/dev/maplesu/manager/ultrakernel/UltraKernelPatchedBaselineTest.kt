@@ -19,15 +19,18 @@ class UltraKernelPatchedBaselineTest {
             val notices = mutableListOf<String>()
             val selected = requireNotNull(flow.selectForRelease(flow.releaseOf(sample)))
                 .let { it.copy(usable = it.usable.filter { asset -> asset.id == "k22" }) }
-            val prepared = flow.prepare(sample, selected, { null }, notices::add)
+            val prepared = flow.prepare(sample, selected, notices::add)
             val candidate = requireNotNull(prepared.candidate)
             assertFalse(prepared.alreadyInstalled)
             assertEquals("c07fd486b563c370d2294f580be02fb5b24feaf4966932d3111d6a61b219f243",
                 candidate.baseBootSha256)
-            assertEquals(selected.primary.expectedKernelSha256, candidate.kernelSha256)
+            assertTrue(prepared.generated)
+            val generated = prepared.variant as UltraKernelGeneratedAsset
+            assertNull(generated.plan.credential)
+            assertEquals(generated.plan.derived!!.patchedKernelSha256, candidate.kernelSha256)
             assertNotEquals(before, candidate.bootSha256)
             assertEquals(before, UltraKernelSpec.sha256(sample))
-            assertTrue(notices.any { it.contains("旧版 Ultra") })
+            assertTrue(notices.any { it.contains("已识别当前 Ultra") })
         } finally { workspace.deleteRecursively() }
     }
 

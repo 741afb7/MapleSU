@@ -13,7 +13,7 @@ frozen archive: the four ``maplesu_*_install.o`` members embed them as byte arra
     compile  every program.json TU  ->  build/payload/<name>/obj/*.o
     link     PIE aarch64 executable ->  build/payload/<name>/<name>
     check    ELF identity, dynamic import/export surface vs the pinned reference,
-             installer feature-token presence
+             keyless installer contract
     publish  build/out/assets/<asset>.bin + build/out/assets/PAYLOADS.json
 
 Program trees
@@ -33,7 +33,6 @@ Each program is described by a ``program.json`` next to its sources::
       "cflags": ["-std=c++17"],
       "ldflags": ["-static-libstdc++", "-Wl,--gc-sections"],
       "libs": ["dl", "m"],
-      "feature_token": "8ba9d457...",        # string the installer rewrites
     }
 
 The boot helper is built by ``build_helper.py`` through the SDK's ``build.py``
@@ -375,31 +374,9 @@ def build_program(spec: dict, tc: S.Toolchain, out_dir: Path, log_dir: Path,
     except Exception as exc:                                # noqa: BLE001
         problems.append(f"ELF validation raised: {exc}")
 
-    # ---- installer feature token ------------------------------------------
-    # The installer rewrites a 4096-byte token (128 key characters + NUL
-    # padding) in one pass, so the image must contain that exact padded block
-    # exactly once, and it must be the only place the key characters appear.
-    token = spec.get("feature_token")
-    if token:
-        raw = token.encode("utf-8")
-        padded = raw + b"\x00" * (4096 - len(raw))
-        occurrences = blob.count(padded)
-        loose = blob.count(raw)
-        result["feature_token"] = {
-            "length": len(raw),
-            "padded_length": len(padded),
-            "sha256": sha256_bytes(raw),
-            "padded_occurrences": occurrences,
-            "loose_occurrences": loose,
-        }
-        if len(raw) >= 4096:
-            problems.append("installer feature token is not shorter than 4096 bytes")
-        elif occurrences != 1:
-            problems.append(f"installer feature token occurs {occurrences} times "
-                            "(the installer builds expect exactly one 4096-byte block)")
-        elif loose != 1:
-            problems.append(f"key characters occur {loose} times in the image "
-                            "(only the replacement block may carry them)")
+    # Source programs use verified process identity and public deployment paths.
+    if spec.get("feature_token"):
+        problems.append("source payload must not declare an installer credential token")
 
     result["problems"] = problems
     if problems:

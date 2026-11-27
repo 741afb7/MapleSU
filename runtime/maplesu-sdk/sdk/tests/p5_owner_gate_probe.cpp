@@ -13,6 +13,9 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <cstdlib>
+#undef assert
+#define assert(condition) do { if (!(condition)) { std::cerr << "assertion failed: " #condition << " at line " << __LINE__ << '\n'; std::exit(3); } } while (false)
 namespace kernel_module {
 struct HookContext { uint64_t entry; uint32_t original; uint64_t trampoline,size; uint8_t enabled; uint64_t disable_flag; };
 void arm64_before_hook_start(asmjit::a64::Assembler*);
@@ -60,13 +63,21 @@ void dump(uint64_t address,uint32_t count) {
 }
 }
 namespace kernel_module {
-uint64_t maplesu_request_auth_state(){return fixture::legacy?0:1;}
-KModErr maplesu_kernel_metadata_v2(maplesu_metadata_v2&,uint64_t& address,bool& supported){assert(fixture::legacy);address=fixture::base+0xa00000;supported=true;return KModErr::OK;}
+uint64_t maplesu_request_auth_state(){return fixture::legacy?4:1;}
+KModErr maplesu_kernel_metadata_v2(maplesu_metadata_v2&,uint64_t& address,bool& supported){
+ assert(fixture::legacy);address=fixture::base+0xa00000;supported=fixture::scenario!="select-unsupported";
+ if(fixture::scenario=="select-metadata-failure")return KModErr::ERR_MODULE_TEST_CHANNEL;
+ if(fixture::scenario=="select-overflow")address=UINT64_MAX;
+ return KModErr::OK;
+}
 KModErr maplesu_request_v2_read(uint64_t address,void* output,uint32_t bytes){
  assert(fixture::legacy);
  if(address==fixture::base+0xa00000+sizeof(maplesu_metadata_v2)){
   assert(bytes==sizeof(maplesu_legacy_hook_metadata_private));
-  const maplesu_legacy_hook_metadata_private tail{MAPLESU_LEGACY_HOOK_METADATA_MAGIC,MAPLESU_LEGACY_HOOK_SCHEMA,sizeof(tail),0x10000,0x20000};
+  if(fixture::scenario=="select-read-failure")return KModErr::ERR_MODULE_NOT_KADDR;
+  maplesu_legacy_hook_metadata_private tail{MAPLESU_LEGACY_HOOK_METADATA_MAGIC,MAPLESU_LEGACY_HOOK_SCHEMA,sizeof(tail),0x10000,0x20000};
+  if(fixture::scenario=="select-boot")tail={};
+  if(fixture::scenario=="select-corrupt")tail.magic^=1;
   std::memcpy(output,&tail,bytes);return KModErr::OK;
  }
  return read_kernel_mem(address,output,bytes);
@@ -172,6 +183,17 @@ KModErr maplesu_request_owner_close(){
 int main(int argc,char** argv){
  using namespace fixture;scenario=argc>1?argv[1]:"before-continue";
  if(scenario.rfind("legacy-",0)==0){legacy=true;scenario.erase(0,7);}
+ if(scenario.rfind("select-",0)==0){
+  bool selected=true;
+  const auto error=maplesu_hook_legacy_boot_selected(selected);
+  auto expected=KModErr::OK;
+  if(legacy&&scenario=="select-metadata-failure")expected=KModErr::ERR_MODULE_TEST_CHANNEL;
+  if(legacy&&(scenario=="select-overflow"||scenario=="select-read-failure"))expected=KModErr::ERR_MODULE_NOT_KADDR;
+  assert(error==expected&&selected==(legacy&&scenario=="select-boot"));
+  assert(!reserves&&!prepares&&!publishes&&!writes);
+  std::cout<<"PASS "<<scenario<<" selected="<<selected<<" error="<<to_num(error)<<"\n";
+  return 0;
+ }
  reply(MAPLESU_REQUEST_SESSION_OPEN);word(entry,0xd503201f);word(entry+4,0x91000400);word(entry+8,0xd65f03c0);
  uint32_t pac=0;
  if(scenario.find("pac")!=std::string::npos){
@@ -235,7 +257,10 @@ int main(int argc,char** argv){
   HookContext absent{};assert(!maplesu_get_pending_hook(&absent));
  }else{
   assert(error==KModErr::OK&&handle&&handle->enabled&&prepares==1&&publishes==1&&!closes&&!frees);
-  if(shared){
+  if(scenario=="before-switch-protocol-uninstall"){
+   legacy=!legacy;
+   assert(uninstall_kernel_hook(handle)==KModErr::ERR_MODULE_ROOT_KEY&&!disables&&!retires&&published);
+  }else if(shared){
    assert(uninstall_kernel_hook(handle)==KModErr::OK&&retired&&retires==1&&disables==1);
   }else if(scenario=="after-close-uninstall"||scenario=="before-close-uninstall"){
    assert(maplesu_hook_close()==KModErr::OK&&published&&staging.size()==2u);
@@ -305,4 +330,11 @@ KModErr execute_kernel_asm_func(const std::vector<uint8_t>& code,uint64_t& resul
  std::cout<<"response ";for(uint8_t b:std::vector<uint8_t>((uint8_t*)&exchange,(uint8_t*)&exchange+sizeof(exchange)))std::cout<<std::setw(2)<<std::setfill('0')<<unsigned(b);std::cout<<"\n";
  return error;
 }
+}
+
+namespace maplesu::storage {
+KModErr current_kernel_directory(std::string&) { assert(false); return KModErr::ERR_MODULE_ASM; }
+}
+namespace kernel_module {
+KModErr request_kernel_alloc_mem(uint32_t,uint64_t&) { assert(false); return KModErr::ERR_MODULE_ASM; }
 }

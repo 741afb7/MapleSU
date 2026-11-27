@@ -6,6 +6,8 @@
 #include "../../maplesu_core/module_webui_host.h"
 #include "../../payload/webui_loader/src/startup_receipt.h"
 #include "maplesu_storage_worker_private.h"
+#include "module_base_kernel_request.h"
+#include "loader_compatibility.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +15,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -32,18 +35,17 @@ using maplesu::payload::webui::StartupReceipt;
 using StartupClock = std::chrono::steady_clock;
 
 // Resolve paths only while this real worker owns the authenticated storage scope.
-static KModErr prepare_loader(const char* root_key, const char* module_id32, bool owner,
+static KModErr prepare_loader(const char* module_id32,
                              std::string& loader_path, DeploymentDirectory& directory,
-                             bool& log_enabled) {
+                             bool& log_enabled, bool& send_credential) {
     storage::WorkerScope worker(module_id32);
     RETURN_IF_ERROR(worker.root());
-    if (worker.owner_mode() != owner) return KModErr::ERR_MODULE_ROOT_KEY;
 
     std::string system_directory;
     RETURN_IF_ERROR(storage::current_system_directory(system_directory));
     const auto modules = std::filesystem::path(system_directory) / "modules";
     loader_path = (modules / "webui_loader").string();
-    if (owner) {
+    {
         storage::StorageContext context;
         RETURN_IF_ERROR(storage::current_context(context));
         std::memcpy(directory.name, context.locator.kernel_component, sizeof(directory.name));
@@ -54,6 +56,17 @@ static KModErr prepare_loader(const char* root_key, const char* module_id32, boo
     std::error_code exists_error;
     if (!std::filesystem::exists(std::filesystem::path(loader_path), exists_error))
         return KModErr::ERR_MODULE_WEB_UI_LOADER_NOT_EXIST;
+    const char* credential = kernel_module::current_module_root_key();
+    if (credential && *credential) {
+        std::ifstream loader(loader_path, std::ios::binary);
+        if (!loader) return KModErr::ERR_MODULE_WEB_UI_LOADER_NOT_EXIST;
+        std::string image((std::istreambuf_iterator<char>(loader)), std::istreambuf_iterator<char>());
+        if (loader.bad()) return KModErr::ERR_MODULE_WEB_UI_LOADER_NOT_EXIST;
+        const bool compatible = select_legacy_handoff(image, credential, send_credential);
+        volatile char* bytes = image.data();
+        for (size_t i = 0; i < image.size(); ++i) bytes[i] = 0;
+        if (!compatible) return KModErr::ERR_MODULE_ROOT_KEY;
+    }
     const std::string module_elf_path = (modules / module_id32 / module_id32).string();
     std::ifstream module_elf(module_elf_path.c_str(), std::ios::binary);
     if (!module_elf) return KModErr::ERR_MODULE_OPEN_DIR;
@@ -67,7 +80,7 @@ static KModErr prepare_loader(const char* root_key, const char* module_id32, boo
     module::Descriptor descriptor{};
     RETURN_IF_ERROR(module::parse_metadata(elf_bytes, descriptor));
     if (!descriptor.web_ui) return KModErr::ERR_MODULE_WEB_UI_SERVER_NOT_EXIST;
-    log_enabled = compat::webui_log_enabled(owner ? nullptr : root_key);
+    log_enabled = compat::webui_log_enabled();
     return worker.close_checked();
 }
 
@@ -121,21 +134,13 @@ static bool inherit_descriptor(int descriptor) {
     return flags >= 0 && ::fcntl(descriptor, F_SETFD, flags & ~FD_CLOEXEC) >= 0;
 }
 
-static KModErr start_module_web_ui_server(const char* root_key, const char* mod_id32,
+static KModErr start_module_web_ui_server(const char* mod_id32,
                                           int& out_port, std::string* out_module_dir) {
-    const uint64_t auth = kernel_module::maplesu_request_auth_state();
-    if (!kernel_module::maplesu_request_auth_usable(auth)) return KModErr::ERR_MODULE_ROOT_KEY;
-    const bool owner = !kernel_module::maplesu_request_auth_legacy(auth);
-    if (!owner) {
-        if (root_key == nullptr) return KModErr::ERR_MODULE_ROOT_KEY;
-        const size_t root_key_len = strnlen(root_key, 1024);
-        if (root_key_len < 16 || root_key_len >= 1024) return KModErr::ERR_MODULE_ROOT_KEY;
-    }
     if (mod_id32 == nullptr ||
         strnlen(mod_id32, sizeof(module::Descriptor::id32)) >= sizeof(module::Descriptor::id32) ||
         !module_paths::valid_id(mod_id32)) return KModErr::ERR_MODULE_PARAM;
-    if (!owner) compat::set_webui_root_key(root_key);
 
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     CpuPinGuardAuto cpu_pin_guard(false);
     const int32_t caller_pid = static_cast<int32_t>(getpid());
     srand(static_cast<unsigned int>(time(nullptr)));
@@ -148,12 +153,13 @@ static KModErr start_module_web_ui_server(const char* root_key, const char* mod_
             std::string loader_path;
             DeploymentDirectory directory;
             bool log_enabled = false;
-            err = prepare_loader(root_key, mod_id32, owner, loader_path, directory, log_enabled);
+            bool send_credential = false;
+            err = prepare_loader(mod_id32, loader_path, directory, log_enabled, send_credential);
             // prepare_loader has retired the storage scope and worker session.
             compat::fork_base_info::safe_close(pipe.fd_parent_to_child_read);
-            if (is_ok(err) && owner) {
+            if (is_ok(err)) {
                 // fork_pipe_child_process closed the original child's write end.
-                // This anonymous pipe carries only a path fact across our own exec.
+                // The optional historical credential has its own versioned record.
                 int handoff[2] = {-1, -1};
                 if (::pipe2(handoff, O_CLOEXEC) != 0) {
                     system_error = errno;
@@ -164,6 +170,20 @@ static KModErr start_module_web_ui_server(const char* root_key, const char* mod_
                     if (!maplesu::payload::webui::write_deployment_directory(handoff[1], directory)) {
                         system_error = errno;
                         err = KModErr::ERR_READ_CHILD_DATA;
+                    }
+                    if (is_ok(err) && send_credential) {
+                        maplesu::payload::webui::LegacyCredential credential;
+                        const char* configured = kernel_module::current_module_root_key();
+                        if (!maplesu::compat::native_module::valid_legacy_credential(configured)) {
+                            err = KModErr::ERR_MODULE_ROOT_KEY;
+                        } else {
+                            std::memcpy(credential.value, configured, sizeof(credential.value));
+                            if (!maplesu::payload::webui::write_legacy_credential(handoff[1], credential)) {
+                                system_error = errno;
+                                err = KModErr::ERR_READ_CHILD_DATA;
+                            }
+                        }
+                        maplesu::payload::webui::clear_legacy_credential(credential);
                     }
                     compat::fork_base_info::safe_close(pipe.fd_parent_to_child_write);
                     if (is_ok(err) && !inherit_descriptor(pipe.fd_parent_to_child_read)) {
@@ -185,8 +205,9 @@ static KModErr start_module_web_ui_server(const char* root_key, const char* mod_
                     loader_path.c_str(), mod_id32, port_text.c_str(), caller_pid_text.c_str(),
                     log_enabled ? "1" : "0", maplesu::payload::webui::kReadyArgument,
                     ready_fd_text.c_str(), out_module_dir == nullptr ? "browser" : "manager",
-                    owner ? maplesu::payload::webui::kOwnerDirectoryArgument : nullptr,
-                    owner ? directory_fd_text.c_str() : nullptr, nullptr,
+                    send_credential ? maplesu::payload::webui::kLegacyDirectoryArgument
+                                    : maplesu::payload::webui::kOwnerDirectoryArgument,
+                    directory_fd_text.c_str(), nullptr,
                 };
                 execve(loader_path.c_str(), const_cast<char* const*>(loader_argv), environ);
                 system_error = errno;
@@ -213,14 +234,13 @@ static KModErr start_module_web_ui_server(const char* root_key, const char* mod_
             err = KModErr::ERR_READ_CHILD_ERRCODE;
         } else {
             err = static_cast<KModErr>(receipt.error);
-            if (is_ok(err) && owner &&
+            if (is_ok(err) &&
                 (!read_startup_data(pipe.fd_child_to_parent_read, &directory, sizeof(directory), deadline) ||
                  !maplesu::payload::webui::valid_directory(directory)))
                 err = KModErr::ERR_READ_CHILD_DATA;
         }
         if (is_ok(err) && out_module_dir != nullptr) {
-            std::string name = owner ? std::string(directory.name, sizeof(directory.name)) :
-                                       std::string(root_key, 16);
+            std::string name(directory.name, sizeof(directory.name));
             name.push_back(name[0]);
             module_directory = "/data/" + name + "/modules/" + mod_id32 + "/";
         }
@@ -246,24 +266,24 @@ static KModErr start_module_web_ui_server(const char* root_key, const char* mod_
 
 namespace maplesu::sdk::features::web_ui {
 
-KModErr start_module_web_ui_server_async(const char* root_key, const char* mod_id32,
+KModErr start_module_web_ui_server_async(const char* mod_id32,
                                          int& out_port) {
-    return ::maplesu::webui::start_module_web_ui_server(root_key, mod_id32, out_port, nullptr);
+    return ::maplesu::webui::start_module_web_ui_server(mod_id32, out_port, nullptr);
 }
 
-KModErr start_module_web_ui_server_for_manager(const char* root_key, const char* mod_id32,
+KModErr start_module_web_ui_server_for_manager(const char* mod_id32,
                                               int& out_port, std::string& out_module_dir) {
-    return ::maplesu::webui::start_module_web_ui_server(root_key, mod_id32, out_port, &out_module_dir);
+    return ::maplesu::webui::start_module_web_ui_server(mod_id32, out_port, &out_module_dir);
 }
 
 }  // namespace maplesu::sdk::features::web_ui
 
 namespace skroot_env::features::web_ui {
 
-KModErr start_module_web_ui_server_async(const char* root_key, const char* mod_id32,
+KModErr start_module_web_ui_server_async(const char* mod_id32,
                                          int& out_port) {
     return maplesu::sdk::features::web_ui::start_module_web_ui_server_async(
-        root_key, mod_id32, out_port);
+        mod_id32, out_port);
 }
 
 }  // namespace skroot_env::features::web_ui

@@ -18,6 +18,28 @@ class UltraEnvironmentUninstallerTest {
         assertEquals(listOf("persist", "sdk"), events)
     }
 
+    @Test fun committedRemovalInvalidatesTheCarrierObservationBeforeSdkTeardown() {
+        val before = UltraEnvironmentUpgrade.installedKernelRevision.value
+        UltraEnvironmentUninstaller.uninstall(false,
+            restoreStock = { error("temporary removal must retain boot") },
+            persistRemoval = { assertEquals(before, UltraEnvironmentUpgrade.installedKernelRevision.value) },
+            removeSdk = {
+                assertEquals(before + 1, UltraEnvironmentUpgrade.installedKernelRevision.value)
+                receipt(true)
+            })
+        assertEquals(before + 1, UltraEnvironmentUpgrade.installedKernelRevision.value)
+    }
+
+    @Test fun failedStockRestorationDoesNotInvalidateTheCarrierObservation() {
+        val before = UltraEnvironmentUpgrade.installedKernelRevision.value
+        val result = UltraEnvironmentUninstaller.uninstall(true,
+            restoreStock = { UltraEnvironmentUninstaller.Restoration(false, false) },
+            persistRemoval = { error("failed restoration must preserve the installed environment") },
+            removeSdk = { error("failed restoration must preserve the installed environment") })
+        assertFalse(result.ok)
+        assertEquals(before, UltraEnvironmentUpgrade.installedKernelRevision.value)
+    }
+
     @Test fun permanentRemovalRestoresImagesAndRebootsWithoutDependingOnSdkRemoval() {
         val events = mutableListOf<String>()
         val result = UltraEnvironmentUninstaller.uninstall(true,

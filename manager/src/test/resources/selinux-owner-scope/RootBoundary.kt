@@ -4,7 +4,10 @@ import dev.maplesu.manager.runtime.ultra.SELinuxBoundary
 
 class HookRootExecutor {
     companion object { fun production(context: Any) = HookRootExecutor() }
-    fun available() = SELinuxBoundary.hook
+    fun available(): Boolean {
+        SELinuxBoundary.hookChecks.incrementAndGet()
+        return SELinuxBoundary.hook
+    }
     fun run(command: String): Result {
         SELinuxBoundary.hookCalls++
         return Result(true, "Enforcing")

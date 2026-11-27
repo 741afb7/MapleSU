@@ -8,9 +8,11 @@ import dev.maplesu.manager.ksu.KsuRootCommandRunner
 import dev.maplesu.manager.ultrakernel.*
 import dev.maplesu.manager.workmode.WorkMode
 import dev.maplesu.manager.workmode.switch.CandidateInput
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Locale
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -29,32 +31,30 @@ class RecoveredDeploymentLineageTest {
         val f = fixture()
         val record = namespace('A')
         val receipts = temporary.newFolder()
-        val raw = bytes("kernel")
+        val raw = kernel()
         val plan = UltraKernelPlan.fromRecords("6.6.1-fixture", listOf(
-            UltraKernelPlan.PatchRecord("credential", 1024, ByteArray(48), credential.copySecret()),
-            UltraKernelPlan.PatchRecord("path", 2048, ByteArray(UltraKernelCredential.INIT_PATH_FIELD),
-                credential.initPathField(UltraKernelCredential.INIT_PATH_FIELD)),
+            UltraKernelPlan.PatchRecord("fixture", 1024, ByteArray(4), byteArrayOf(1, 2, 3, 4)),
             UltraKernelPlan.PatchRecord("manager_claim:deployment_namespace", 3072, ByteArray(24), record.record())),
-            credential, baseKernelSha256 = UltraKernelSpec.sha256(raw)).let { it.withDerived(it.apply(raw).derived) }
-        val text = plan.specText(plan.credential)
-        val asset = UltraKernelGeneratedAsset.of(plan, f.artifact.targetBoot.length(), 0, text)
-        val compact = UltraKernelBuilder(receipts).generate(f.artifact.targetBoot, asset, UltraKernelSpec.parse(text)).image
+            baseKernelSha256 = UltraKernelSpec.sha256(raw)).let { it.withDerived(it.apply(raw).derived) }
+        val text = plan.specText()
+        val asset = UltraKernelGeneratedAsset.of(plan, f.targetBoot.length(), 0, text)
+        val compact = UltraKernelBuilder(receipts).generate(f.targetBoot, asset, UltraKernelSpec.parse(text)).image
         // Recovery consumes a fixed partition PRE, not the compact producer export.
         val installed = fullSizeSwitchCandidate(compact, File(temporary.newFolder(), "boot.img"),
-            f.artifact.targetBoot.length())
+            f.targetBoot.length())
         val before = installed.readBytes()
         val snapshot = InstallerSnapshot("6.6.1-fixture", "fixture", "_a", "Enforcing", mapOf("boot" to
             BootPartitionSnapshot("boot", "", "", installed.length(), UltraKernelSpec.sha256(installed))))
-        val resolved = StockOriginalResolver(assets, receipts, listOf(f.artifact.targetBoot))
+        val resolved = StockOriginalResolver(assets, receipts, listOf(f.targetBoot))
             .resolve(snapshot, mapOf("boot" to installed), temporary.newFolder())
         assertArrayEquals(raw, UltraKernelPlan.readKernel(resolved.originals.getValue("boot")))
-        assertArrayEquals(f.artifact.targetBoot.readBytes(), resolved.originals.getValue("boot").readBytes())
-        val recovered = ModeSwitchSourceRecovery(assets, receipts, listOf(f.artifact.targetBoot), "unused",
+        assertArrayEquals(f.targetBoot.readBytes(), resolved.originals.getValue("boot").readBytes())
+        val recovered = ModeSwitchSourceRecovery(assets, receipts, listOf(f.targetBoot), "unused",
             KsuRootCommandRunner { _, _ -> error("unexpected ksud") }).recover(
                 WorkMode.LITE, "boot", installed, temporary.newFolder(), true)
         assertTrue(recovered.detail, recovered.ok)
         assertArrayEquals(raw, UltraKernelPlan.readKernel(requireNotNull(recovered.image)))
-        assertArrayEquals(f.artifact.targetBoot.readBytes(), requireNotNull(recovered.image).readBytes())
+        assertArrayEquals(f.targetBoot.readBytes(), requireNotNull(recovered.image).readBytes())
         val lineage = runBlocking {
             val input = CandidateInput("transaction", WorkMode.LITE, "init_boot", f.source,
                 UltraKernelSpec.sha256(f.source), temporary.newFolder(), "", "6.6.1-fixture")
@@ -125,16 +125,18 @@ class RecoveredDeploymentLineageTest {
         assertEquals(1, firstError.suppressed.size)
     }
 
-    @Test fun knownLineageHasAnExplicitUnsupportedErrorWhileAnOwnedSourceWinsOverTheHint() {
+    @Test fun knownLineageHasAnExplicitUnsupportedErrorAndAnOwnedSourceRejectsAConflictingHint() {
         val f = fixture()
         val record = namespace('E')
         val installed = build(f.source, f.artifact, record)
         assertArrayEquals(record.record(), UltraInitBootProducer.readDeploymentNamespace(
-            build(installed, f.artifact, namespace('F'))))
+            build(installed, f.artifact, record)))
+        val conflict = runCatching { build(installed, f.artifact, namespace('F')) }.exceptionOrNull()
+        assertEquals("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_CONFLICT", conflict?.message)
         val legacy = fixture(support = false)
         val work = temporary.newFolder()
         val failure = runCatching { UltraKernelFlow(work, assets).prepareTarget(legacy.source,
-            credential, null, legacy.artifact, record) }.exceptionOrNull()
+            null, legacy.artifact, record) }.exceptionOrNull()
         assertEquals("ULTRA_KERNEL_DEPLOYMENT_SUPPORT_MISSING", failure?.message)
         assertTrue(work.listFiles().orEmpty().isEmpty())
     }
@@ -142,7 +144,7 @@ class RecoveredDeploymentLineageTest {
     private fun build(source: File, artifact: UltraInitBootProducer.Artifact,
                       record: UltraKernelDeploymentNamespace?): File =
         requireNotNull(UltraKernelFlow(temporary.newFolder(), assets)
-            .prepareTarget(source, credential, null, artifact, record).candidate).image
+            .prepareTarget(source, null, artifact, record).candidate).image
 
     private fun namespace(name: Char) = UltraKernelDeploymentNamespace.decode(
         ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN).putInt(0x4e44534d)
@@ -175,45 +177,118 @@ class RecoveredDeploymentLineageTest {
         override suspend fun exportLog(switchId: String, destination: File): File? = error("unexpected")
     }
 
-    private data class Fixture(val source: File, val artifact: UltraInitBootProducer.Artifact)
+    private data class Fixture(val source: File, val targetBoot: File, val artifact: UltraInitBootProducer.Artifact)
 
     private fun fixture(support: Boolean = true): Fixture {
         val directory = temporary.newFolder()
-        val kernel = bytes("kernel")
-        val module = bytes("parameterModule", 32)
-        if (support) {
-            val header = ByteBuffer.wrap(module).order(ByteOrder.LITTLE_ENDIAN)
-            val section = header.getLong(40).toInt() + 5 * header.getShort(58).toInt()
-            val at = header.getLong(section + 24).toInt()
-            val count = header.getLong(section + 32).toInt()
-            val parameter = "parmtype=deployment_namespace:string\u0000".toByteArray(Charsets.US_ASCII)
-            parameter.copyInto(module, at + count)
-            header.putLong(section + 32, (count + parameter.size).toLong())
-        }
-        val files = mapOf("target.img" to bytes("image", kernel, ByteArray(0)),
-            "init" to bytes("handoff"), "bridge.ko" to module)
+        val kernel = kernel()
+        val files = mapOf("target.img" to image(kernel, ByteArray(0)),
+            "init" to handoff(), "bridge.ko" to module(support))
         files.forEach { (name, content) -> File(directory, name).writeBytes(content) }
         val manifest = File(directory, "manifest.json")
         manifest.writeText(buildJsonObject {
-            put("schemaVersion", 1); put("kernelRelease", "6.6.1-fixture")
-            put("kernelSha256", UltraKernelSpec.sha256(kernel))
-            put("credentialMode", "module-parameter"); put("metadataDisplacement", 4064)
-            for ((field, path) in mapOf("targetBoot" to "target.img", "handoff" to "init", "bridge" to "bridge.ko")) {
+            put("schemaVersion", if (support) 2 else 1); put("kernelRelease", "6.6.1-fixture")
+            if (support) {
+                put("kind", "kmi-component"); put("kmi", "android15-6.6"); put("architecture", "arm64")
+                put("pageSize", 4096); put("cfiMode", "none"); put("credentialMode", "keyless")
+                put("metadataDisplacement", 4064); put("runtimeFactsAbi", "maplesu-runtime-facts/1")
+                put("sourceGenerationSha256", UltraKernelSpec.sha256(kernel))
+            } else {
+                put("kernelSha256", UltraKernelSpec.sha256(kernel)); put("credentialMode", "embedded")
+                put("credentialSha256", UltraKernelSpec.sha256(credential.copySecret()))
+                put("targetBoot", "target.img"); put("targetBootSha256", UltraKernelSpec.sha256(files.getValue("target.img")))
+            }
+            for ((field, path) in mapOf("handoff" to "init", "bridge" to "bridge.ko")) {
                 put(field, path); put(field + "Sha256", UltraKernelSpec.sha256(files.getValue(path)))
             }
         }.toString())
         return Fixture(File(directory, "source.img").apply {
-            writeBytes(bytes("image", ByteArray(0), bytes("stock", false, false)))
-        }, UltraInitBootProducer.readArtifact(manifest))
+            writeBytes(image(ByteArray(0), stock()))
+        }, File(directory, "target.img"), UltraInitBootProducer.readArtifact(manifest))
     }
 
-    private fun bytes(name: String, vararg args: Any): ByteArray {
-        val types = args.map { when (it) {
-            is Boolean -> java.lang.Boolean.TYPE
-            is Int -> java.lang.Integer.TYPE
-            else -> it.javaClass
-        } }.toTypedArray()
-        return Class.forName("dev.maplesu.image.UltraInitBootProducerTest").getDeclaredMethod(name, *types)
-            .apply { isAccessible = true }.invoke(null, *args) as ByteArray
+    // Local byte fixtures keep this Manager suite independent of image-core's test classpath.
+    private fun stock(): ByteArray = ByteArrayOutputStream().apply {
+        fun entry(name: String, mode: Int, data: ByteArray = ByteArray(0)) {
+            val path = name.toByteArray(Charsets.US_ASCII)
+            write("070701".toByteArray(Charsets.US_ASCII))
+            for (value in intArrayOf(19, mode, 0, 0, 1, 1699999999, data.size,
+                    0, 0, 0, 0, path.size + 1, 0)) {
+                write(String.format(Locale.ROOT, "%08x", value).toByteArray(Charsets.US_ASCII))
+            }
+            write(path); write(0)
+            while (size() and 3 != 0) write(0x71)
+            write(data)
+            while (size() and 3 != 0) write(0x53)
+        }
+        entry("dev", 0x41ed)
+        entry("init", 0x81e8, "original-init".toByteArray(Charsets.US_ASCII))
+        entry("vendor-file", 0x81a1, byteArrayOf(1, 0, -1, 7))
+        entry("unrelated-marker", 0x81a4, "inert-third-party-marker".toByteArray(Charsets.US_ASCII))
+        entry("dev", 0x41c0)
+        entry("TRAILER!!!", 0)
+        write(ByteArray(17))
+    }.toByteArray()
+
+    private fun image(kernel: ByteArray, ramdisk: ByteArray): ByteArray {
+        fun align(value: Int) = (value + 4095) and -4096
+        val ramdiskAt = align(4096 + kernel.size)
+        return ByteArray(maxOf(align(ramdiskAt + ramdisk.size) + 8192, 131072)).apply {
+            ByteBuffer.wrap(this).order(ByteOrder.LITTLE_ENDIAN).apply {
+                put("ANDROID!".toByteArray(Charsets.US_ASCII))
+                putInt(8, kernel.size); putInt(12, ramdisk.size); putInt(20, 1584); putInt(40, 4)
+            }
+            kernel.copyInto(this, 4096)
+            ramdisk.copyInto(this, ramdiskAt)
+        }
+    }
+
+    private fun kernel(): ByteArray = ByteArray(4096).apply {
+        ByteBuffer.wrap(this).order(ByteOrder.LITTLE_ENDIAN).putLong(24, 2)
+        "ARMd".toByteArray(Charsets.US_ASCII).copyInto(this, 56)
+        "Linux version 6.6.1-fixture (byte fixture)\n".toByteArray(Charsets.US_ASCII).copyInto(this, 128)
+    }
+
+    private fun handoff(): ByteArray = ByteArray(256).apply {
+        ByteBuffer.wrap(this).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put(byteArrayOf(127, 69, 76, 70, 2, 1, 1))
+            putShort(16, 2); putShort(18, 183); putInt(20, 1); putLong(24, 0x10080)
+            putLong(32, 64); putShort(52, 64); putShort(54, 56); putShort(56, 1)
+            putInt(64, 1); putInt(68, 5); putLong(72, 0); putLong(80, 0x10000)
+            putLong(96, 256); putLong(104, 256); putLong(112, 65536)
+        }
+    }
+
+    private fun module(support: Boolean): ByteArray {
+        val names = "\u0000.shstrtab\u0000.text\u0000.symtab\u0000.gnu.linkonce.this_module\u0000.modinfo\u0000.strtab\u0000"
+        val symbols = "\u0000msu_sdk_call_prefix\u0000msu_sdk_call_blr\u0000msu_sdk_call_template\u0000"
+        val info = ("vermagic=6.6.1-fixture SMP\u0000maplesu_runtime_facts=1\u0000" +
+            if (support) "parmtype=deployment_namespace:string\u0000" else "").toByteArray(Charsets.US_ASCII)
+        return ByteArray(1060).apply {
+            val h = ByteBuffer.wrap(this).order(ByteOrder.LITTLE_ENDIAN)
+            h.put(byteArrayOf(127, 69, 76, 70, 2, 1, 1))
+            h.putShort(16, 1); h.putShort(18, 183); h.putInt(20, 1); h.putLong(40, 64)
+            h.putShort(52, 64); h.putShort(58, 64); h.putShort(60, 7); h.putShort(62, 1)
+            val sections = arrayOf("", ".shstrtab", ".text", ".symtab", ".gnu.linkonce.this_module", ".modinfo", ".strtab")
+            val offsets = intArrayOf(0, 512, 1024, 704, 800, 832, 640)
+            val sizes = intArrayOf(0, names.length, 36, 96, 24, info.size, symbols.length)
+            for (index in 1 until sections.size) {
+                val at = 64 + index * 64
+                h.putInt(at, names.indexOf(sections[index]))
+                h.putInt(at + 4, if (index == 1 || index == 6) 3 else if (index == 3) 2 else 1)
+                h.putLong(at + 8, if (index == 2) 6 else 0)
+                h.putLong(at + 24, offsets[index].toLong()); h.putLong(at + 32, sizes[index].toLong())
+            }
+            h.putInt(64 + 3 * 64 + 40, 6); h.putLong(64 + 3 * 64 + 56, 24)
+            for ((index, name) in listOf("msu_sdk_call_prefix", "msu_sdk_call_blr", "msu_sdk_call_template").withIndex()) {
+                val at = 704 + (index + 1) * 24
+                h.putInt(at, symbols.indexOf(name)); h.putShort(at + 6, 2)
+                h.putLong(at + 8, when (index) { 0 -> 0; 1 -> 32; else -> 4 })
+            }
+            names.toByteArray(Charsets.US_ASCII).copyInto(this, 512)
+            symbols.toByteArray(Charsets.US_ASCII).copyInto(this, 640)
+            info.copyInto(this, 832)
+            h.putInt(1056, 0xd63f0140.toInt()) // Synthetic BLR x10; these bytes are never executed.
+        }
     }
 }

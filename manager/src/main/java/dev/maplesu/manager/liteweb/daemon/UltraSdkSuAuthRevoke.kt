@@ -1,13 +1,9 @@
 package dev.maplesu.manager.liteweb.daemon
 
-import dev.maplesu.manager.litehidden.RecoveryIdentity
 import dev.maplesu.manager.liteweb.LiteWebUnhideCodes
-import dev.maplesu.manager.runtime.ultra.UltraRecoveryKey
-import dev.maplesu.manager.runtime.ultra.UltraBootSdkRecovery
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import java.io.File
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.zip.ZipFile
@@ -33,47 +29,12 @@ class UltraSdkSuAuthRevoke(
             )
         }
         return runCatching {
-            val client = sdk.client
-            if (sdk.source == "boot-session") {
-                val revoked = DaemonBootSuperuserAuthority.production(shell, recoveryRoot, managerPackage, client)
-                    ?.setAllowed(hostPackage, false) == true
-                if (!revoked) return@runCatching DaemonRevokeResult(
-                    false, LiteWebUnhideCodes.SU_AUTH_REVOKE_FAILED, "authority_sync_pending",
-                )
-            }
-            // Historical/restored hosts may already be absent. Verify that fact before
-            // issuing another removal, so retries do not depend on SDK delete semantics.
-            val before = client.suAuthSnapshot()
-            if (before.receipt.succeeded) {
-                val absent = SuAuthReadbackPolicy.verify(hostPackage, before.packages,
-                    before.receipt.array("packages") != null, before.count, sdk.source)
-                if (absent.ok) return@runCatching absent
-            }
-            val removal = client.removeSuAuth(hostPackage)
-            if (!removal.succeeded) {
-                return@runCatching DaemonRevokeResult(
-                    false,
-                    LiteWebUnhideCodes.SU_AUTH_REVOKE_FAILED,
-                    "sdk=${removal.sdkError}",
-                )
-            }
-            val snapshot = client.suAuthSnapshot()
-            if (!snapshot.receipt.succeeded) {
-                return@runCatching DaemonRevokeResult(
-                    false,
-                    LiteWebUnhideCodes.SU_AUTH_REVOKE_FAILED,
-                    "readback=${snapshot.receipt.sdkError}",
-                )
-            }
-            // 回读判定单独成纯函数（[SuAuthReadbackPolicy]）：回执缺 packages 数组 / 宿主仍在列表里，
-            // 都必须是**显式失败**，绝不能把「读不到」当「已撤销」（真机 D1 的假成功防线）。
-            SuAuthReadbackPolicy.verify(
-                hostPackage = hostPackage,
-                packages = snapshot.packages,
-                listReadable = snapshot.receipt.array("packages") != null,
-                remaining = snapshot.count,
-                source = sdk.source,
-            )
+            // The durable revoke and its full-UID mirror/readback are one existing
+            // authority flow. A user-0 package projection cannot verify other users.
+            val revoked = DaemonBootSuperuserAuthority.production(shell, recoveryRoot, managerPackage, sdk.client)
+                ?.setAllowed(hostPackage, false) == true
+            if (revoked) DaemonRevokeResult(true, detail = "authority=revoked;mirror=verified;id=${sdk.source}")
+            else DaemonRevokeResult(false, LiteWebUnhideCodes.SU_AUTH_REVOKE_FAILED, "authority_sync_pending")
         }.getOrElse {
             DaemonRevokeResult(false, LiteWebUnhideCodes.SU_AUTH_REVOKE_FAILED, it.javaClass.simpleName)
         }
@@ -85,7 +46,7 @@ sealed interface DaemonUltraSdkResult {
     data class Unavailable(val code: String, val detail: String) : DaemonUltraSdkResult
 }
 
-/** Shared in-process SDK entry for runtime facts and superuser operations. No credential leaves it. */
+/** Shared keyless SDK entry. Authority is checked against the current task on every operation. */
 class DaemonUltraSdkAccess(
     private val shell: DaemonShell,
     private val recoveryRoot: String = "/data/adb/maplesu/recovery",
@@ -100,52 +61,19 @@ class DaemonUltraSdkAccess(
 
     @Synchronized
     fun open(): DaemonUltraSdkResult {
-        val sessionFile = File(recoveryRoot, UltraBootSdkRecovery.FILE_NAME)
-        if (Files.exists(sessionFile.toPath(), LinkOption.NOFOLLOW_LINKS)) return openBootSession(sessionFile)
-        val material = runCatching { File(recoveryRoot, ROOT_KEY_NAME).readText(Charsets.UTF_8) }.getOrNull()
-        val key = when (val resolved = readRootKey()) {
-            is DaemonRecoveryKey.Outcome.Ok -> resolved
-            is DaemonRecoveryKey.Outcome.Missing -> return invalidate(resolved.detail)
-        }
-        ready?.takeIf { readyMaterial == material }?.let { return it }
-        val library = ensureSdkLibrary() ?: return unavailable("sdk_library_unavailable")
-        if (!runCatching { loadSdk(library) }.getOrDefault(false)) return unavailable("sdk_library_not_loadable")
-        return runCatching {
-            DaemonUltraSdkResult.Ready(UltraRuntimeClient(rootKeyProvider = {
-                key.key.takeIf {
-                    !Files.exists(sessionFile.toPath(), LinkOption.NOFOLLOW_LINKS) &&
-                        runCatching { File(recoveryRoot, ROOT_KEY_NAME).readText(Charsets.UTF_8) }.getOrNull() == material
-                }
-            }), key.source).also { ready = it; readyMaterial = material }
-        }.getOrElse { unavailable("sdk_client_unavailable") }
-    }
-
-    /** An existing session file owns recovery. Expired/corrupt material never selects an old permanent key. */
-    private fun openBootSession(file: File): DaemonUltraSdkResult {
-        val material = readBootMaterial(file) ?: return invalidate("sdk_session_unreadable")
-        val session = UltraBootSdkRecovery.open(material, bootId(), managerPackage)
-            ?: return invalidate("sdk_session_expired_or_invalid")
-        ready?.takeIf { readyMaterial == material }?.let { return it }
+        val currentBoot = bootId()?.takeIf { it.isNotBlank() }
+            ?: return invalidate("boot_id_unavailable")
+        ready?.takeIf { readyMaterial == currentBoot }?.let { return it }
         val library = ensureSdkLibrary() ?: return invalidate("sdk_library_unavailable")
         if (!runCatching { loadSdk(library) }.getOrDefault(false)) return invalidate("sdk_library_not_loadable")
-        val client = UltraRuntimeClient(rootKeyProvider = {
-            session.key.takeIf { session.current(bootId()) && readBootMaterial(file) == material }
-        })
-        return DaemonUltraSdkResult.Ready(client, "boot-session").also { ready = it; readyMaterial = material }
+        val client = UltraRuntimeClient().scoped { bootId() == currentBoot }
+        val channel = client.testBasics("Channel")
+        if (!channel.succeeded) return invalidate("sdk_channel:${channel.sdkError}")
+        return DaemonUltraSdkResult.Ready(client, "current-task").also {
+            ready = it
+            readyMaterial = currentBoot
+        }
     }
-
-    private fun readBootMaterial(file: File): String? = runCatching {
-        if (Files.isSymbolicLink(file.toPath()) || !file.isFile || file.length() !in 1..8192) return null
-        val root = File(recoveryRoot)
-        if (Files.isSymbolicLink(root.toPath())) return null
-        val quote: (String) -> String = { "'" + it.replace("'", "'\\''") + "'" }
-        val checked = shell.run("[ ! -L ${quote(root.absolutePath)} ] && " +
-            "[ ! -L ${quote(file.absolutePath)} ] && " +
-            "[ \"\$(stat -c '%a %u %g' ${quote(root.absolutePath)})\" = '700 0 0' ] && " +
-            "[ \"\$(stat -c '%a %u %g' ${quote(file.absolutePath)})\" = '600 0 0' ] && echo SDK_SESSION_PRIVATE")
-        if (checked.code != 0 || checked.output.trim() != "SDK_SESSION_PRIVATE") return null
-        file.readText(Charsets.UTF_8).takeIf { it.length <= 8192 }
-    }.getOrNull()
 
     private fun invalidate(detail: String): DaemonUltraSdkResult {
         ready = null
@@ -158,39 +86,6 @@ class DaemonUltraSdkAccess(
         return DaemonUltraSdkResult.Unavailable("SU_AUTH_BACKEND_UNAVAILABLE", detail)
     }
 
-    /**
-     * rootKey 备份 + 身份材料 → 明文 key（只在内存；解不开 → 结构化失败，不猜）。
-     *
-     * 身份来源顺序（真机 D1 的修法）：
-     *  1. **App 激活时落盘的 `recovery/identity.json`**（App 作用域的 `Settings.Secure.ANDROID_ID`）；
-     *  2. 读不到/格式不对才回退 `settings get secure android_id`（系统值，Android 8+ 与 App 作用域
-     *     值不同，因此只对「老版本激活过、没写 identity」的现场有意义）。
-     */
-    private fun readRootKey(): DaemonRecoveryKey.Outcome {
-        val payload = runCatching {
-            File(recoveryRoot, ROOT_KEY_NAME).readText(Charsets.UTF_8)
-        }.getOrNull()
-        return DaemonRecoveryKey.resolve(
-            payload = payload,
-            identity = readIdentity(),
-            systemAndroidId = readAndroidId(),
-            managerPackage = managerPackage,
-        )
-    }
-
-    /** 读 App 激活时落盘的身份材料（0600 root-only）；读不到/格式不合规 → null（触发回退）。 */
-    private fun readIdentity(): RecoveryIdentity? = runCatching {
-        RecoveryIdentity.parse(File(recoveryRoot, IDENTITY_NAME).readText(Charsets.UTF_8))
-    }.getOrNull()
-
-    private fun readAndroidId(): String? {
-        val result = runCatching { shell.run("/system/bin/settings get secure android_id 2>/dev/null") }
-            .getOrNull() ?: return null
-        if (result.code != 0) return null
-        return result.output.trim()
-            .takeIf { it.isNotEmpty() && it != "null" && it.length <= 64 && it.all { c -> c.isLetterOrDigit() } }
-    }
-
     internal fun ensureSdkLibrary(classpathApks: List<String> = currentClasspathApks()): String? {
         val dir = File(recoveryRoot, "native")
         val target = File(dir, SDK_LIBRARY)
@@ -198,9 +93,8 @@ class DaemonUltraSdkAccess(
         val candidates = (classpathApks.mapNotNull { path ->
             File(path).takeIf { it.isAbsolute && it.extension == "apk" && it.isFile && it.canRead() }
         } + listOfNotNull(apk.takeIf { it.isFile && it.canRead() })).distinctBy { it.absolutePath }
-        // Legacy recovery may have retained only its extracted SDK. An available APK
-        // is authoritative: extraction failure must never silently select that cache.
-        if (candidates.isEmpty()) return target.takeIf { it.isFile && it.length() > 0 }?.absolutePath
+        // Each process loads SDK bytes from its current packaged source.
+        if (candidates.isEmpty()) return null
         for (candidate in candidates) {
             extractSdkLibrary(candidate, dir, target)?.let { return it }
         }
@@ -274,10 +168,7 @@ class DaemonUltraSdkAccess(
     }
 
     private companion object {
-        /** 管理器包名（`UltraRecoveryKey` 的 KDF 用它；改包名需要同步迁移备份）。 */
         const val APK_NAME = "manager.apk"
-        const val ROOT_KEY_NAME = "rootkey"
-        const val IDENTITY_NAME = "identity.json"
         const val SDK_LIBRARY = "libmaplesu_ultra_bridge.so"
         const val LIB_PREFIX = "lib/arm64-v8a/"
         const val MAX_LIB_BYTES: Long = 16L * 1024 * 1024
@@ -297,75 +188,6 @@ object UltraSdkLibrary {
             Class.forName(BRIDGE_CLASS, true, UltraSdkLibrary::class.java.classLoader)
             true
         }.getOrDefault(false)
-    }
-}
-
-/**
- * 从「rootkey 密文 + 身份材料」解出明文 key 的**纯逻辑**（不碰文件、不执行 shell，主机可测）。
- *
- * <p>为什么需要它：rootkey 的 AES-256-GCM 密钥 = `SHA-256("maplesu-ultra-recovery-v1|<androidId>|<pkg>")`，
- * 而 `<androidId>` 必须是 **App 作用域**的 `Settings.Secure.ANDROID_ID`。daemon 用
- * `settings get secure android_id` 只能拿到**系统值**（Android 8+ 两者不同）⇒ 永远解不开
- * （真机 D1：`rootkey_or_androidid_unavailable`）。因此顺序固定为：
- *
- *  1. `identity.json` 里的 `androidId`（App 落盘的身份材料）+ 管理器包名；
- *  2. 若 identity 里的包名与当前管理器包名不同，再用 identity 的包名试一次（改包名现场）；
- *  3. 前两步都失败才回退系统 androidId（与旧实现等价）。
- *
- * <p>失败一律返回 [Outcome.Missing]，detail 是**机器码**：不含 androidId、不含 key、不含密文。
- */
-internal object DaemonRecoveryKey {
-
-    const val SOURCE_IDENTITY = "identity"
-    const val SOURCE_SYSTEM = "system"
-
-    const val WHY_ROOTKEY_ABSENT = "rootkey_absent"
-    const val WHY_ROOTKEY_NOT_OURS = "rootkey_not_ours"
-    const val WHY_NO_ANDROID_ID = "androidid_unavailable"
-    const val WHY_UNDECRYPTABLE = "rootkey_undecryptable"
-
-    sealed interface Outcome {
-        data class Ok(val key: String, val source: String) : Outcome
-
-        data class Missing(val detail: String) : Outcome
-    }
-
-    fun resolve(
-        payload: String?,
-        identity: RecoveryIdentity?,
-        systemAndroidId: String?,
-        managerPackage: String,
-    ): Outcome {
-        if (payload.isNullOrBlank()) return Outcome.Missing(WHY_ROOTKEY_ABSENT)
-        // 「存在但不是我们的格式」与「解不开」必须分开：前者是文件被换/被截断，后者是身份不符。
-        if (!UltraRecoveryKey.looksLikeRecoveryPayload(payload)) return Outcome.Missing(WHY_ROOTKEY_NOT_OURS)
-
-        val system = systemAndroidId?.trim()?.takeIf { it.isNotEmpty() }
-        val candidates = ArrayList<Pair<String, String>>(3)
-        if (identity != null) {
-            candidates += identity.androidId to managerPackage
-            if (identity.packageName != managerPackage) {
-                candidates += identity.androidId to identity.packageName
-            }
-        }
-        if (system != null) candidates += system to managerPackage
-
-        for ((androidId, packageName) in candidates.distinct()) {
-            val key = runCatching { UltraRecoveryKey.open(payload, androidId, packageName) }.getOrNull()
-            if (key != null) {
-                val source = if (identity != null && androidId == identity.androidId) {
-                    SOURCE_IDENTITY
-                } else {
-                    SOURCE_SYSTEM
-                }
-                return Outcome.Ok(key, source)
-            }
-        }
-        if (candidates.isEmpty()) return Outcome.Missing(WHY_NO_ANDROID_ID)
-        // identity / system 各自「有没有」要能在真机上区分（不打印值本身）。
-        return Outcome.Missing(
-            "$WHY_UNDECRYPTABLE;identity=${if (identity != null) 1 else 0};system=${if (system != null) 1 else 0}",
-        )
     }
 }
 

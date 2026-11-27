@@ -156,7 +156,7 @@ public class AdmissionFixture {
             modules[kmi] = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
         products = []
         for name in package.REQUIRED:
-            if "ghostlock" in name:
+            if name == "libmaplesu_ghostlock_provider.so":
                 continue
             path = self.directory / name
             path.write_bytes(b"fixture-" + name.encode())
@@ -176,6 +176,14 @@ public class AdmissionFixture {
         self.assertEqual(set(report["dirtyfragModules"]), set(first["koImages"]))
         for kmi, record in report["dirtyfragModules"].items():
             self.assertEqual(record["sha256"], first["koImages"][kmi]["sha256"])
+
+    def test_packaging_source_epoch_is_stable_across_repeated_runs(self):
+        report = self.report()
+        with patch.dict(package.os.environ, {"SOURCE_DATE_EPOCH": "1700000000"}):
+            first = self.package(report)
+            second = self.package(report)
+        self.assertEqual("2023-11-14T22:13:20+00:00", first["generatedAtUtc"])
+        self.assertEqual(first, second)
 
     def test_packaging_rejects_module_drift(self):
         report = self.report()

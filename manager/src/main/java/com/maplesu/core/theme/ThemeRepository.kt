@@ -8,6 +8,9 @@ import android.provider.MediaStore
 import com.maplesu.core.ui.util.AppearancePreferences
 import com.maplesu.core.ui.util.NavIcons
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -25,16 +28,46 @@ class ThemeRepository(context: Context, private val preferences: android.content
     private val root get() = File(context.filesDir, "themes").apply { mkdirs() }
     private val journal get() = File(root, "transaction.json")
 
-    suspend fun prepare(uri: Uri): PreparedTheme = withContext(Dispatchers.IO) {
-        val stage = File(root, "staging/${UUID.randomUUID()}")
+    suspend fun prepare(uri: Uri, metadata: ThemeMetadata? = null): PreparedTheme {
+        var stage: File? = null
         try {
-            val (raw, files) = requireNotNull(context.contentResolver.openInputStream(uri)) { "Theme stream unavailable" }
-                .use { FptContainer.read(it, File(stage, "assets")) }
-            val (normalized, warnings) = ThemeDocument.normalize(raw, files)
-            durableWrite(File(stage, "original.json"), raw.toString())
-            durableWrite(File(stage, "applied.json"), normalized.toString())
-            PreparedTheme(stage.absolutePath, ThemeMetadata.read(raw), warnings + ThemeAssetValidation.warnings(files))
-        } catch (e: Throwable) { stage.deleteRecursively(); throw e }
+            return withContext(Dispatchers.IO) {
+                val candidate = File(root, "staging/${UUID.randomUUID()}").also { stage = it }
+                val task = currentCoroutineContext()
+                val (raw, files) = requireNotNull(context.contentResolver.openInputStream(uri)) { "Theme stream unavailable" }
+                    .use { source ->
+                        val input = object : java.io.FilterInputStream(source) {
+                            override fun read(): Int { task.ensureActive(); return super.read() }
+                            override fun read(bytes: ByteArray, offset: Int, count: Int): Int { task.ensureActive(); return super.read(bytes, offset, count) }
+                        }
+                        ThemePackageReader.read(input, File(candidate, "assets"))
+                    }
+                if (raw.has("sukisu.original")) {
+                    if (metadata != null) metadata.write(raw)
+                    else if (!raw.has("meta_name")) ThemeMetadata(name = "SukiSU theme").write(raw)
+                    // Keep the current MapleSU arrangement; a Nova layout is not a MapleSU layout ID.
+                    val current = ThemeRuntime.document(context, prefs)
+                    current.keys().asSequence().filter { it in setOf("homeLayoutStyle", "statsTopLayout") }.forEach { raw.put(it, current.get(it)) }
+                    // Validate both light/dark overlays before showing an import preview.
+                    SukisuThemeDocument.select(raw, false); SukisuThemeDocument.select(raw, true)
+                }
+                val (normalized, warnings) = ThemeDocument.normalize(raw, files)
+                durableWrite(File(candidate, "original.json"), raw.toString())
+                durableWrite(File(candidate, "applied.json"), normalized.toString())
+                PreparedTheme(candidate.absolutePath, ThemeMetadata.read(raw), warnings + ThemeAssetValidation.warnings(files))
+            }
+        } catch (e: Throwable) {
+            // Also covers prompt cancellation when the completed IO result is discarded.
+            withContext(NonCancellable + Dispatchers.IO) {
+                try { stage?.let { check(!it.exists() || it.deleteRecursively()) { "Theme staging cleanup failed" } } }
+                catch (cleanup: Exception) {
+                    e.addSuppressed(cleanup)
+                    android.util.Log.e("ThemeRepository", "Cancelled theme preparation cleanup failed", cleanup)
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            throw e
+        }
     }
 
     suspend fun apply(prepared: PreparedTheme, identity: String = ""): Unit = withContext(Dispatchers.IO) {
@@ -58,9 +91,10 @@ class ThemeRepository(context: Context, private val preferences: android.content
         }
     }
 
-    fun discard(prepared: PreparedTheme) {
+    suspend fun discard(prepared: PreparedTheme): Unit = withContext(Dispatchers.IO) {
         val stage = File(prepared.path)
-        if (stage.canonicalFile.parentFile == File(root, "staging").canonicalFile) stage.deleteRecursively()
+        if (stage.canonicalFile.parentFile == File(root, "staging").canonicalFile)
+            check(!stage.exists() || stage.deleteRecursively()) { "Theme preview cleanup failed" }
     }
 
     suspend fun recover(): Unit = withContext(Dispatchers.IO) { writes.withLock { recoverLocked(); collectGenerations() } }
@@ -181,6 +215,7 @@ class ThemeRepository(context: Context, private val preferences: android.content
             recoverLocked()
             val j = ThemeRuntime.document(context, prefs)
             changes.forEach { (k, v) -> j.put(k, v) }
+            SukisuThemeDocument.recordEdits(j, changes)
             // Surface registry keys win over aliases. An edit must update both, not leave a stale
             // canonical value overriding the visible control after importing a registry-era theme.
             changes.forEach { (key,value) -> ThemeAliases.canonical[key]?.let { j.put(it,value) } }
@@ -250,6 +285,13 @@ class ThemeRepository(context: Context, private val preferences: android.content
                 selected
                 }
                 changes.forEach { (k,v) -> config.put(k,v) }
+                if (config.has("sukisu.original")) {
+                    val mappings = config.optJSONObject("sukisu.resourceOverrides") ?: JSONObject()
+                    // Replace only this slot; other adaptive artwork still follows its own mode.
+                    mappings.put(base, finalResource?.name ?: JSONObject.NULL)
+                    config.put("sukisu.resourceOverrides", mappings)
+                    SukisuThemeDocument.recordEdits(config, changes)
+                }
                 changes.forEach { (k,v) -> ThemeAliases.canonical[k]?.let { config.put(it,v) } }
                 if (base == "theme_music") config.put("musicFilename",finalResource?.name.orEmpty())
                 if (base == "theme_sound") config.put("soundEffectFilename",finalResource?.name.orEmpty())
@@ -326,7 +368,7 @@ class ThemeRepository(context: Context, private val preferences: android.content
             val nav = JSONObject(json.optJSONObject("navIcons")?.toString() ?: "{}")
             ThemeDocument.destinations.forEach { (key, slot) ->
                 val icon = NavIcons.currentFile(context, slot, prefs)
-                if (icon != null) { val name = "nav_icon_$key.${icon.extension}"; files[name] = icon; nav.put(key, name) }
+                if (icon != null) { val name = "nav_icon_$key.${icon.extension.ifBlank { ThemeAssetValidation.extension(icon, "png") }}"; files[name] = icon; nav.put(key, name) }
                 else if (prefs.contains("theme_nav_override_$slot")) nav.remove(key)
             }
             val manualNav = ThemeDocument.destinations.values.any { prefs.contains("theme_nav_override_$it") }

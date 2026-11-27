@@ -10,7 +10,6 @@ import com.topjohnwu.superuser.Shell
 import dev.maplesu.manager.installer.InstallerRootSourceRegistry
 import dev.maplesu.manager.ksu.KsuBackends
 import dev.maplesu.manager.runtime.MapleSuCommandExecutor
-import dev.maplesu.manager.runtime.MapleSuCredentialStore
 import dev.maplesu.manager.runtime.RootManagement
 import dev.maplesu.manager.workmode.ModeRuntime
 import org.json.JSONArray
@@ -153,11 +152,6 @@ class NormalTakeoverAndroidTest {
             .put("path", ksudLibrary.absolutePath)
             .put("present", ksudLibrary.isFile))
 
-        val credential = runCatching { MapleSuCredentialStore(context).load() }
-        document.put("credentialPaired", credential.getOrNull() != null)
-        put(document, "credentialError", credential.exceptionOrNull()?.let { describe(it) })
-        runCatching { credential.getOrNull()?.fill(0) }
-
         val channel = runCatching { InstallerRootSourceRegistry.require() }
         document.put("ksuNativeChannelRegistered", channel.isSuccess)
         put(document, "ksuNativeChannelError", channel.exceptionOrNull()?.let { describe(it) })
@@ -176,17 +170,18 @@ class NormalTakeoverAndroidTest {
         return document
     }
 
-    /**
-     * Negative arm: the same transport with a well-formed but unpaired credential must not
-     * produce UID 0. It is a diagnostic (the credential gate is the product's only gate),
-     * not a pass criterion for the takeover.
-     */
+    /** A separate denied-owner fixture is required; its absence is recorded as NOT_RUN. */
     private fun negative(): JSONObject {
         val document = JSONObject()
-        val wrong = ByteArray(48) { 'A'.code.toByte() }
+        if (InstrumentationRegistry.getArguments().getString("verifyMapleSuDenied") != "true") {
+            return document.put("attempted", false).put("status", "NOT_RUN")
+                .put("reason", "ULTRA_DENIED_OWNER_FIXTURE_REQUIRED")
+        }
+        document.put("attempted", true)
         var process: Process? = null
         try {
-            process = MapleSuCommandExecutor(context).start(wrong, listOf("/system/bin/id", "-u"))
+            process = MapleSuCommandExecutor(context).start(listOf("/system/bin/id", "-u"))
+            process.outputStream.close()
             val exited = process.waitFor(8, TimeUnit.SECONDS)
             document.put("exited", exited)
             document.put("code", if (exited) process.exitValue() else -1)
@@ -200,31 +195,18 @@ class NormalTakeoverAndroidTest {
             runCatching { process?.outputStream?.close() }
             runCatching { process?.inputStream?.close() }
             runCatching { process?.errorStream?.close() }
-            wrong.fill(0)
         }
-        document.put("refused", document.optInt("code", -1) != 0 ||
-            document.optString("out").trim() != "0")
+        document.put("denied", document.optInt("code", -1) == 69 && document.optString("out").isEmpty())
         return document
     }
 
     private fun transportProbe(): JSONObject {
         val document = JSONObject()
-        val key = try {
-            MapleSuCredentialStore(context).load()
-        } catch (error: Throwable) {
-            document.put("attempted", false)
-            put(document, "reason", describe(error))
-            return document
-        }
-        if (key == null) {
-            document.put("attempted", false)
-            put(document, "reason", "MAPLESU_CREDENTIAL_NOT_PAIRED")
-            return document
-        }
         document.put("attempted", true)
         var process: Process? = null
         try {
-            process = MapleSuCommandExecutor(context).start(key, listOf("/system/bin/id", "-u"))
+            process = MapleSuCommandExecutor(context).start(listOf("/system/bin/id", "-u"))
+            process.outputStream.close()
             val exited = process.waitFor(10, TimeUnit.SECONDS)
             document.put("exited", exited)
             document.put("code", if (exited) process.exitValue() else -1)
@@ -234,7 +216,6 @@ class NormalTakeoverAndroidTest {
             document.put("code", -1)
             put(document, "exception", describe(error))
         } finally {
-            key.fill(0)
             runCatching { process?.destroyForcibly() }
             runCatching { process?.outputStream?.close() }
             runCatching { process?.inputStream?.close() }
@@ -300,11 +281,10 @@ class NormalTakeoverAndroidTest {
             val ksuNow = document.optJSONObject("preconditions")?.optJSONObject("ksu")
             val ksuChannel = wiringNow?.optBoolean("ksuNativeChannelRegistered") == true
             val prefix = if (ksuChannel) "NORMAL_TAKEOVER_ROOT_COMMAND_FAILED" else "NORMAL_TAKEOVER_NOT_WIRED"
-            prefix + ":ENTRY_IS_MAPLESU_CREDENTIAL" +
+            prefix + ":ENTRY_ROOT_CHANNEL" +
                 ",entry=" + ENTRY +
                 ",ksuNativeChannel=" + (wiringNow?.optString("ksuNativeChannelError")
                     ?.takeIf { it.isNotEmpty() } ?: "registered") +
-                ",credentialPaired=" + wiringNow?.optBoolean("credentialPaired") +
                 ",ksuDriverVersion=" + ksuNow?.opt("driverVersion") +
                 ",ksuModulePresent=" + ksuNow?.optBoolean("sysModuleKernelsu") +
                 ",previousRootBackend=" + (wiringNow?.optJSONObject("previousAttempt")
@@ -336,9 +316,10 @@ class NormalTakeoverAndroidTest {
         assertEquals("id: entry exit code (" + identity.describe() + ")", 0, identity.code ?: -1)
         assertTrue("id: output did not contain uid=0 (" + identity.describe() + ")",
             identity.out.contains("uid=0"))
-        /* The negative arm must keep refusing; it is not allowed to become the success path. */
-        assertTrue("an unpaired credential produced UID 0: " + document.optJSONObject("negative"),
-            document.optJSONObject("negative")?.optBoolean("refused") == true)
+        val denied = document.optJSONObject("negative")
+        if (denied?.optBoolean("attempted") == true) {
+            assertTrue("Denied owner did not return admission code 69: $denied", denied.optBoolean("denied"))
+        }
     }
 
     private companion object {
@@ -346,7 +327,7 @@ class NormalTakeoverAndroidTest {
         const val ENTRY_ALIAS_SHELL = "com.maplesu.core.ui.util.KsuCli.SHELL"
         const val ENTRY_ALIAS_GET = "com.maplesu.core.ui.util.getRootShell"
         const val TRANSPORT =
-            "nativeLibraryDir/libmaplesu_runtime.so --maplesu-stdin -> kernel_root::get_root(credential)"
+            "RootManagement selected KSU/SDK task channel; direct diagnostic: libmaplesu_runtime.so --ultra -> SDK get_root()"
         const val RUNTIME_NAME = "libmaplesu_runtime.so"
         const val KSUD_LIBRARY = "libksud_ksu.so"
         const val EVIDENCE_NAME = "normal-takeover.json"

@@ -22,7 +22,6 @@
 
 #include "kernel_module_kit_umbrella.h"
 
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(void);
 
 namespace maplesu::sdk {
 
@@ -62,16 +61,14 @@ static bool is_dir_empty_noatime(const char* dir_path) {
 
 }  // namespace file_utils
 
-// maplesu::sdk::get_kernel_file_dir_name
-//   = std::string(__get_current_module_root_key_...()).substr(0, 16)
+#include "maplesu_storage_private.h"
 namespace maplesu::sdk {
-
 static std::string get_kernel_file_dir_name() {
-    std::string root_key(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
-    return root_key.substr(0, 16);
+    maplesu::storage::StorageContext context;
+    if (is_failed(maplesu::storage::current_context(context))) return {};
+    return context.locator.kernel_component;
 }
-
-}  // namespace maplesu::sdk
+}
 
 // dir_time_utils：按“分钟”级别比较目录时间戳。
 //   struct DirTimesMinute = 3 x int64（atime/mtime/ctime 的 tv_sec/60）

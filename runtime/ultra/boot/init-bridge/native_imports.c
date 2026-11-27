@@ -50,11 +50,14 @@ IMPORT_VOID(security_cred_getsecid, (const struct cred *cred, u32 *secid), (cred
 IMPORT_RETURN(int, security_secctx_to_secid, (const char *context, u32 length, u32 *secid),
     (context, length, secid))
 IMPORT_VOID(set_groups, (struct cred *cred, struct group_info *groups), (cred, groups))
-IMPORT_VOID(sha256, (const u8 *bytes, unsigned int length, u8 *digest), (bytes, length, digest))
+typedef typeof(__builtin_choose_expr(
+    __builtin_types_compatible_p(typeof(&sha256), void (*)(const u8 *, size_t, u8 *)),
+    (size_t)0, (unsigned int)0)) msu_native_sha256_length_t;
+IMPORT_VOID(sha256, (const u8 *bytes, msu_native_sha256_length_t length, u8 *digest), (bytes, length, digest))
 /* Module-local forwarding leaves policy/source member names untouched.
  * Native lookup searches vmlinux before modules; init also rejects this entry
  * if no native SHA256 exists, so a module fallback never recurses here. */
-void sha256(const u8 *bytes, unsigned int length, u8 *digest)
+void sha256(const u8 *bytes, msu_native_sha256_length_t length, u8 *digest)
 {
     msu_native_sha256(bytes, length, digest);
 }
@@ -109,7 +112,7 @@ IMPORT_RETURN(int, task_work_add, (struct task_struct *task,
     struct callback_head *work, enum task_work_notify_mode mode), (task, work, mode))
 #endif
 #ifdef MSU_SU_NONROOT_NATIVE
-IMPORT_RETURN(int, path_mount, (const char *dev_name, struct path *path,
+IMPORT_RETURN(int, path_mount, (const char *dev_name, MSU_PATH_MOUNT_PATH_QUALIFIER struct path *path,
     const char *type_page, unsigned long flags, void *data_page),
     (dev_name, path, type_page, flags, data_page))
 IMPORT_RETURN(int, path_umount, (struct path *path, int flags), (path, flags))

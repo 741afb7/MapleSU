@@ -121,7 +121,7 @@ object DetectionRules {
                 reasons = listOf("ULTRA_SIGNED_OWNER_ROOT_NOT_VERIFIED")
             }
 
-            root?.aAuthorizationTable == true ||
+            lite.installedCarrierVerified || root?.aAuthorizationTable == true ||
                 root?.aInstallerRecord == true ||
                 root?.aPublishedDirectory == true ||
                 (lite.credentialPresent && lite.handshakeOk == false) -> {

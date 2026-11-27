@@ -65,6 +65,7 @@ class UltraRuntimeClientReadinessTest {
             operation = "get_maplesu_environment_state",
             ok = true,
             sdkError = "OK",
+            sdkErrorCode = 0,
             state = "Running",
         )
         assertTrue(ok.succeeded)

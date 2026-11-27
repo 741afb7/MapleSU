@@ -368,6 +368,9 @@ KModErr hook_publication_prepare(const RequestPublicationMember* members, uint32
 }
 
 KModErr hook_publication_operation(uint32_t command, const RequestPublication& publication) {
+    if (command != MAPLESU_REQUEST_PUBLICATION_PUBLISH &&
+        command != MAPLESU_REQUEST_PUBLICATION_DISABLE &&
+        command != MAPLESU_REQUEST_PUBLICATION_RETIRE) return KModErr::ERR_MODULE_PARAM;
     if (maplesu_request_owner_mode()) {
         if (command == MAPLESU_REQUEST_PUBLICATION_PUBLISH)
             return maplesu_request_owner_publication_publish(publication);

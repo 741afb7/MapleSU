@@ -42,6 +42,9 @@ internal object ThemeDocument {
     fun normalize(original: JSONObject, files: Map<String, File>): Pair<JSONObject, List<String>> {
         val j = JSONObject(original.toString())
         val warnings = mutableListOf<String>()
+        original.optJSONArray("sukisu.warnings")?.let { values ->
+            for (i in 0 until values.length()) warnings += values.getString(i)
+        }
         defaults.forEach { (k, v) -> if (!j.has(k)) j.put(k, v) }
         // A package owns its navigation artwork even when it supplies none. Otherwise a
         // configuration-only import would silently revive icons from before that import.
@@ -89,7 +92,7 @@ internal object ThemeDocument {
     fun preferenceValues(j: JSONObject, directory: File): Map<String, Any> {
         val files = directory.listFiles()?.associateBy { it.name }.orEmpty()
         val video = ThemeResourcePolicy.select("video_background", files)?.takeIf { j.optBoolean("isBackgroundEnabled") && j.optBoolean("isVideoBackgroundEnabled") }
-        val image = ThemeResourcePolicy.select("background", files)?.takeIf { j.optBoolean("isBackgroundEnabled") }
+        val image = ThemeResourcePolicy.select("background", files, j)?.takeIf { j.optBoolean("isBackgroundEnabled") }
         val wall = video ?: image
         val mode = if (j.optBoolean("nightModeFollowSys", true)) 0 else if (j.optBoolean("nightModeEnabled", true)) 2 else 1
         val style = j.optString("colorStyle", "TONAL_SPOT").lowercase().split('_').joinToString("") { it.replaceFirstChar(Char::uppercase) }
@@ -109,5 +112,5 @@ internal object ThemeDocument {
 
     // FinaSU keeps the accent stable across pages: multi-background mode always uses Home.
     fun seedImage(j: JSONObject, files: Map<String, File>): File? = if (!j.optBoolean("isBackgroundEnabled")) null
-        else ThemeResourcePolicy.select(if (j.optBoolean("isMultiBackgroundEnabled")) "background_home" else "background",files)
+        else ThemeResourcePolicy.select(if (j.optBoolean("isMultiBackgroundEnabled")) "background_home" else "background",files,j)
 }

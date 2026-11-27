@@ -1452,6 +1452,32 @@ class ParasiteBackendTest {
     }
 
     @Test
+    fun sameHostCanActivateAndDeactivateForThreeIndependentRounds() {
+        val root = FakeRoot().apply { hasBackupDir = false }
+        val state = FakeState(false)
+        val auth = FakeSuAuth()
+        val hosts = FakeHostFacts(HostFactsLookup.Ok(facts()))
+        val b = backend(ultraRoot = root, state = state, suAuth = auth, hostFacts = hosts)
+        repeat(3) { round ->
+            val activated = activate(b)
+            assertTrue("round=$round code=${activated.code}", activated.success)
+            assertTrue(host in auth.granted)
+            // Reflect the successful production backup in the root fixture's inventory.
+            root.hasBackupDir = true
+            root.staleBackup = true
+            val restored = deactivate(b)
+            assertTrue("round=$round code=${restored.code}", restored.success)
+            assertTrue(restored.hostSoRestored && restored.suAuthRevoked && restored.daemonStopped)
+            assertFalse(root.hasBackupDir || root.staleBackup)
+            assertNull(root.cleanupReceipt)
+            assertFalse(host in auth.granted)
+            assertEquals(false, state.value)
+        }
+        assertEquals(3, auth.revokes.size)
+        assertEquals("each activation must reload host facts", 3, hosts.calls)
+    }
+
+    @Test
     fun deactivateWithAlreadyAbsentHostGrantCompletesAfterLibraryRestoration() {
         val root = FakeRoot()
         val state = FakeState(value = true)

@@ -1,6 +1,7 @@
 // The canonical keyed image is root-only. Authorized UIDs execute separate
 // copies inside root-owned, UID-group traversal directories.
 #include "module_err_def.h"
+#include "maplesu_storage_private.h"
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -40,41 +41,9 @@ KModErr prepare_inode(int fd, bool directory) {
 }
 }
 
-extern "C" KModErr maplesu_prepare_su_exec(const char* key) {
-    if (!key || strnlen(key, 49) != 48) return KModErr::ERR_MODULE_PARAM;
-    for (size_t i = 0; i < 48; ++i) {
-        const char c = key[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')))
-            return KModErr::ERR_MODULE_PARAM;
-    }
-    // Pinned SDK get_system_file_dir_name(): key[0:16] + key[0]. The exec
-    // hook targets this copy. Leave the separate kernel-private directory alone.
-    const std::string name = std::string(key, 16) + key[0];
-    Fd data{open("/data", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
-    if (data.value < 0) return KModErr::ERR_MODULE_OPEN_FILE;
-    Fd directory{openat(data.value, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
-    if (directory.value < 0) return KModErr::ERR_MODULE_OPEN_FILE;
-    auto error = prepare_inode(directory.value, true);
+extern "C" KModErr maplesu_prepare_su_exec() {
+    std::string directory;
+    const auto error = maplesu::storage::current_system_directory(directory);
     if (is_failed(error)) return error;
-    if (mkdirat(directory.value, "u-00000000", 0700) != 0 && errno != EEXIST)
-        return KModErr::ERR_MODULE_OPEN_DIR;
-    Fd private_directory{openat(directory.value, "u-00000000", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
-    struct stat st{};
-    if (private_directory.value < 0 || fstat(private_directory.value, &st) != 0 ||
-        st.st_uid != 0 || st.st_gid != 0 || (st.st_mode & 07777) != 0700)
-        return KModErr::ERR_MODULE_OPEN_DIR;
-    if (!has_context(private_directory.value) &&
-        fsetxattr(private_directory.value, "security.selinux", system_context, sizeof(system_context), 0) != 0)
-        return KModErr::ERR_SET_FILE_SELINUX;
-    Fd legacy{openat(directory.value, "su", O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)};
-    if (legacy.value >= 0) {
-        error = prepare_inode(legacy.value, false);
-        if (is_failed(error)) return error;
-        if (renameat(directory.value, "su", private_directory.value, "su") != 0 ||
-            fsync(private_directory.value) != 0 || fsync(directory.value) != 0)
-            return KModErr::ERR_MODULE_WRITE_FILE;
-    } else if (errno != ENOENT) return KModErr::ERR_MODULE_OPEN_FILE;
-    Fd helper{openat(private_directory.value, "su", O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)};
-    if (helper.value < 0) return KModErr::ERR_MODULE_OPEN_FILE;
-    return prepare_inode(helper.value, false);
+    return maplesu_prepare_su_exec_directory(directory.c_str());
 }

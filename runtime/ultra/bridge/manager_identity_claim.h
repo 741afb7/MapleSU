@@ -7,7 +7,6 @@
 #include <unistd.h>
 
 namespace maplesu {
-
 struct ManagerClaimReply {
     alignas(8) char bytes[MSU_MANAGER_CLAIM_KEY_BYTES]{};
     ~ManagerClaimReply() {
@@ -16,9 +15,8 @@ struct ManagerClaimReply {
     }
 };
 
-/* A response is only a candidate. The caller must verify actual SDK uid 0
- * before persisting it or activating the environment. No environment or key
- * is required to make this request; kernel identity verification owns access. */
+/* The kernel verifies installation identity. This reply remains a candidate
+ * until a separate live SDK Root transaction verifies uid 0. */
 template <typename Execute>
 inline std::string manager_identity_candidate_with(Execute&& execute) {
     ManagerClaimReply reply;
@@ -39,5 +37,4 @@ inline std::string manager_identity_candidate() {
         syscall(SYS_execve, name, arguments, environment);
     });
 }
-
 } // namespace maplesu

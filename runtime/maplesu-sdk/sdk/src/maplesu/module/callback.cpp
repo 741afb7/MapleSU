@@ -1,9 +1,11 @@
 
 //
 #include "../compat/module_callback_legacy_abi.h"
+#include "../compat/module_runtime_legacy_abi.h"
 #include "process_context.h"
 #include "maplesu_storage_private.h"
 #include "maplesu_module_environment_private.h"
+#include "module_base_kernel_request.h"
 
 #include <algorithm>
 #include <chrono>
@@ -24,7 +26,6 @@
 #include <sys/prctl.h>
 #include <vector>
 
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
 
 class RedirectStdToFile {
 public:
@@ -253,8 +254,9 @@ static KModErr invoke_install(const std::string& module_id32, std::string& out_r
         return KModErr::ERR_MODULE_DLOPEN;
     }
     auto inject = reinterpret_cast<void (*)()>(dlsym(handle.get(), compat::native_module::kModuleIdentitySymbol));
-    using Install = const char* (*)(const char*, const char*, void (*)(const char*));
-    auto install = reinterpret_cast<Install>(dlsym(handle.get(), compat::native_module::kModuleInstallSymbol));
+    const auto install = compat::native_module::resolve_export(
+        [&handle](const char* symbol) { return dlsym(handle.get(), symbol); },
+        compat::native_module::kModuleInstallSymbol, compat::native_module::kLegacyModuleInstallSymbol);
     if (!install) {
         if (const char* error = dlerror()) fprintf(stderr, "dlsym failed: %s\n", error);
         return KModErr::ERR_MODULE_DLSYM;
@@ -267,8 +269,8 @@ static KModErr invoke_install(const std::string& module_id32, std::string& out_r
     } restore_output{tls_out, tls_out};
     tls_out = &out_reason;
     if (inject) inject();
-    install(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), private_dir.c_str(),
-            [](const char* reason) { if (tls_out) tls_out->assign(reason ? reason : ""); });
+    RETURN_IF_ERROR(compat::invoke_module_install(install, kernel_module::current_module_root_key(),
+        private_dir.c_str(), [](const char* reason) { if (tls_out) tls_out->assign(reason ? reason : ""); }));
     return out_reason.empty() ? KModErr::OK : KModErr::ERR_MODULE_REJECT_INSTALL;
 }
 }
@@ -302,14 +304,15 @@ KModErr invoke_module_on_uninstall(const std::string& module_id32) {
         return KModErr::ERR_MODULE_DLOPEN;
     }
     auto inject = reinterpret_cast<void (*)()>(dlsym(handle.get(), compat::native_module::kModuleIdentitySymbol));
-    auto uninstall = reinterpret_cast<void (*)(const char*, const char*)>(dlsym(handle.get(), compat::native_module::kModuleUninstallSymbol));
+    const auto uninstall = compat::native_module::resolve_export(
+        [&handle](const char* symbol) { return dlsym(handle.get(), symbol); },
+        compat::native_module::kModuleUninstallSymbol, compat::native_module::kLegacyModuleUninstallSymbol);
     if (!uninstall) {
         if (const char* error = dlerror()) fprintf(stderr, "dlsym failed: %s\n", error);
         return KModErr::ERR_MODULE_DLSYM;
     }
     if (inject) inject();
-    uninstall(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), private_dir.c_str());
-    return KModErr::OK;
+    return compat::invoke_module_uninstall(uninstall, kernel_module::current_module_root_key(), private_dir.c_str());
 }
 }
 

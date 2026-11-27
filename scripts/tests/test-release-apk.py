@@ -156,6 +156,105 @@ class ReleaseApkTest(unittest.TestCase):
         self.repack()
         return path
 
+    def add_host_bridge_proof(self, compiled=False):
+        sources_path = self.bundle / 'BUNDLE-SOURCES.json'
+        sources = M.load(sources_path)
+        bridge = sources['inputs']['bridge']
+        old = self.bundle / bridge['bundledAs']
+        body = bytes(value ^ 1 for value in old.read_bytes())
+        old.unlink()
+        del self.entries['assets/ultra-init-bridge/' + bridge['bundledAs']]
+        target = self.save(self.bundle / 'bridge.ko', body)
+        bridge.update(bundledAs='bridge.ko', bundledBytes=len(body), bundledSha256=M.digest(body))
+        self.save(sources_path, json.dumps(sources).encode())
+        layout = dict(present=True, bound=True)
+        hashes = dict(sourceModuleSha256=bridge['sha256'], derivedModuleSha256=M.digest(body))
+        if compiled:
+            layout.update(compilerLayoutIsTargetBtf=False, runtimeOrDeviceAccepted=False,
+                compiledNativeLayout=dict(hashes, method='same-kmi-ddk-compiled-native-tables',
+                    compilerLayoutIsTargetBtf=False, targetKernelSha256=sources['inputs']['kernel_image']['sha256']))
+        else:
+            layout.update(hashes, targetBtfSha256=sources['inputs']['btf']['sha256'])
+        original = self.root / 'original-bundle'
+        self.save(original / 'manifest.json', (self.bundle / 'manifest.json').read_bytes())
+        self.save(original / 'BUNDLE-SOURCES.json', sources_path.read_bytes())
+        proof = self.save(original / 'MODULE-INPUT-CHECK.json', json.dumps(dict(runtimeLayoutBinding=layout)).encode())
+        plan = self.write('catalog-plan.json', json.dumps(dict(schema='maplesu-init-bridge-catalog-plan/1',
+            defaultManifestSha256=M.record(original / 'manifest.json')['sha256'],
+            variants=[dict(bundle=original.as_posix())])).encode())
+        self.execution.update(bridgeCatalogPlan=M.record(plan), bridgeTransformationProof=M.record(proof))
+        self.save(self.execution_path, json.dumps(self.execution).encode())
+        for path in (sources_path, target):
+            self.entries['assets/ultra-init-bridge/' + path.name] = path.read_bytes()
+        self.repack()
+        return proof
+
+    def test_host_only_proof_supports_both_real_layout_schemas(self):
+        for compiled in (False, True):
+            with self.subTest(compiled=compiled):
+                if compiled:
+                    # Reset the bundle before creating the second transformation.
+                    self.setUp()
+                self.add_host_bridge_proof(compiled)
+                with patch.object(M, 'replay_bridge_transformation') as replay:
+                    code, receipt = self.execute()
+                self.assertEqual(code, 0, receipt.get('failure'))
+                replay.assert_called_once()
+                bound = next(row for row in receipt['bridgeInputBindings'] if row['name'] == 'bridge')
+                self.assertTrue(bound['transformationReplayed'])
+                self.assertEqual(len(bound['transformationProofSources']), 3)
+
+    def test_host_proof_from_unselected_bundle_is_rejected(self):
+        proof = self.add_host_bridge_proof(True)
+        other = self.write('other-bundle/MODULE-INPUT-CHECK.json', proof.read_bytes())
+        self.execution['bridgeTransformationProof'] = M.record(other)
+        self.save(self.execution_path, json.dumps(self.execution).encode())
+        self.rejected('INIT_BOOT_BRIDGE_PROOF_SOURCE')
+
+    def test_host_proof_default_variant_drift_is_rejected(self):
+        self.add_host_bridge_proof()
+        path = Path(self.execution['bridgeCatalogPlan']['path'])
+        value = M.load(path)
+        value['defaultManifestSha256'] = 'f' * 64
+        self.save(path, json.dumps(value).encode())
+        self.execution['bridgeCatalogPlan'] = M.record(path)
+        self.save(self.execution_path, json.dumps(self.execution).encode())
+        self.rejected('INIT_BOOT_BRIDGE_PROOF_VARIANT')
+
+    def test_host_proof_original_sources_drift_is_rejected(self):
+        proof = self.add_host_bridge_proof()
+        self.save(proof.parent / 'BUNDLE-SOURCES.json', b'{}')
+        self.rejected('SOURCE_IDENTITY_MISMATCH')
+
+    def test_host_proof_btf_and_nested_compiled_hash_drift_are_rejected(self):
+        for compiled in (False, True):
+            with self.subTest(compiled=compiled):
+                if compiled:
+                    self.setUp()
+                proof = self.add_host_bridge_proof(compiled)
+                value = M.load(proof)
+                layout = value['runtimeLayoutBinding']
+                if compiled:
+                    layout['compiledNativeLayout']['sourceModuleSha256'] = 'f' * 64
+                else:
+                    layout['targetBtfSha256'] = 'f' * 64
+                self.save(proof, json.dumps(value).encode())
+                self.execution['bridgeTransformationProof'] = M.record(proof)
+                self.save(self.execution_path, json.dumps(self.execution).encode())
+                self.rejected('TRANSFORMATION_PROOF')
+
+    def test_host_proof_change_during_replay_is_rejected(self):
+        proof = self.add_host_bridge_proof(True)
+        with patch.object(M, 'replay_bridge_transformation', side_effect=lambda *args: proof.write_bytes(b'{}')):
+            self.rejected('INIT_BOOT_BRIDGE_TRANSFORMATION_PROOF_CHANGED')
+
+    def test_host_proof_bundled_module_drift_is_rejected(self):
+        self.add_host_bridge_proof(True)
+        self.save(self.bundle / 'bridge.ko', b'changed derived module')
+        self.entries['assets/ultra-init-bridge/bridge.ko'] = (self.bundle / 'bridge.ko').read_bytes()
+        self.repack()
+        self.rejected('SOURCE_IDENTITY_MISMATCH')
+
     def test_claim_release_version_matches_the_actual_sdk(self):
         M.verify_claim_release_version(dict(appVersion='5.2.1', versionCode=50201), self.release)
         for manifest in ({}, dict(appVersion='5.2.0', versionCode=50200),
@@ -240,6 +339,20 @@ class ReleaseApkTest(unittest.TestCase):
         self.assertEqual(len(receipt['bridgeInputBindings']), 10)
         self.assertEqual(len(receipt['embeddedPayloads']), 4)
         self.assertEqual(self.tools.call_count, 2)
+
+    def test_exact_target_without_btf_uses_only_its_recorded_inputs(self):
+        self.execution['bridgeInputs'] = [row for row in self.execution['bridgeInputs'] if row['name'] != 'btf']
+        self.save(self.execution_path, json.dumps(self.execution).encode())
+        sources = M.load(self.bundle / 'BUNDLE-SOURCES.json')
+        sources['inputs'].pop('btf')
+        self.save(self.bundle / 'BUNDLE-SOURCES.json', json.dumps(sources).encode())
+        (self.bundle / 'btf.fixture').unlink()
+        self.entries.pop('assets/ultra-init-bridge/btf.fixture')
+        self.entries['assets/ultra-init-bridge/BUNDLE-SOURCES.json'] = (self.bundle / 'BUNDLE-SOURCES.json').read_bytes()
+        self.repack()
+        code, receipt = self.execute()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(receipt['bridgeInputBindings']), 9)
 
     def test_both_real_apksigner_prefixes_and_windows_newlines(self):
         for prefix in ('Signer #1', 'V2 Signer:'):

@@ -196,7 +196,7 @@ class ModeBootstrapPipelineTest {
             dev.maplesu.manager.runtime.ultra.UltraStartupWarmup.Input(
                 activeMode = null, detectionSettled = true,
                 ksuResponded = detection.trace.firstOrNull { it.id == "S1" }?.ok,
-                pendingInstallCredential = true, suspended = false, quiescing = false,
+                pendingInstall = true, suspended = false, quiescing = false,
                 switchPending = false, conflictingRoot = false,
             ),
             setupEnvironment = { calls += "setup" },

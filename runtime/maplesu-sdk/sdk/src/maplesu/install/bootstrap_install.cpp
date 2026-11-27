@@ -10,10 +10,6 @@
 #include "lifecycle.h"
 #include "maplesu_sdk/maplesu_installer.h"
 
-#include <algorithm>
-#include <cstring>
-#include <memory>
-#include <new>
 #include <string>
 
 namespace maplesu::compat {
@@ -46,39 +42,14 @@ using compat::kPayloadsReal;
 
 using core::err_t;
 
-const char autorun_bootstrap_static_inline_root_key[core::kFeatureTokenSize] =
-    "5d31494d2e18e3fdef2afaf740b0febc19229cb292f57ebc3bc1c96c6d70b709"
-    "8d2dc1f356b733e8c999e6ac85bdca24c8c74f03ae7d5b2a402e96804576e925";
-
 static_assert(sizeof(autorun_bootstrap_file_data) == kAutorunBootstrapPayloadSize || !kPayloadsReal,
               "autorun_bootstrap_file_data must be the payload size pinned in ASSETS.json");
 
 std::string get_autorun_bootstrap_path() { return environment::kernel_file_path("init"); }
 
-err_t publish_bootstrap(const std::string& path, const char* key) {
-    std::unique_ptr<char[]> payload(new (std::nothrow) char[sizeof(autorun_bootstrap_file_data)]);
-    if (!payload) return core::kErrPayloadAlloc;
-    memcpy(payload.get(), autorun_bootstrap_file_data, sizeof(autorun_bootstrap_file_data));
-    std::unique_ptr<char[]> replacement(new (std::nothrow) char[core::kFeatureTokenSize]);
-    if (!replacement) return core::kErrTokenBufAlloc;
-    memset(replacement.get(), 0, core::kFeatureTokenSize);
-    const std::size_t copy_len = key ? std::min<std::size_t>(core::kFeatureTokenSize - 1,
-                                                    std::strlen(key) + 1) : core::kFeatureTokenSize;
-    if (key) strncpy(replacement.get(), key, copy_len);
-    bool found = false;
-    if (sizeof(autorun_bootstrap_file_data) >= core::kFeatureTokenSize) {
-        for (std::size_t i = 0; i <= sizeof(autorun_bootstrap_file_data) - core::kFeatureTokenSize;
-             ++i) {
-            if (memcmp(payload.get() + i, autorun_bootstrap_static_inline_root_key,
-                       core::kFeatureTokenSize) == 0) {
-                memcpy(payload.get() + i, replacement.get(), copy_len);
-                found = true;
-            }
-        }
-    }
-    if (!found) return core::kErrTokenBufAlloc;
+err_t publish_bootstrap(const std::string& path) {
     return static_cast<err_t>(maplesu_publish_executable(
-        path.c_str(), payload.get(), sizeof(autorun_bootstrap_file_data), core::kSelinuxKernel));
+        path.c_str(), autorun_bootstrap_file_data, sizeof(autorun_bootstrap_file_data), core::kSelinuxKernel));
 }
 
 KModErr bootstrap() {
@@ -88,13 +59,7 @@ KModErr bootstrap() {
     const std::string path = get_autorun_bootstrap_path();
     if (path.empty()) return static_cast<KModErr>(core::kErrModuleParam);
 
-    const char* key = nullptr;
-    if (!kernel_module::maplesu_request_owner_mode()) {
-        key = environment::current_module_root_key();
-        if (key == nullptr || key[0] == '\0') return static_cast<KModErr>(core::kErrModuleParam);
-    }
-
-    const err_t publish_err = publish_bootstrap(path, key);
+    const err_t publish_err = publish_bootstrap(path);
     if (publish_err != core::kOk) return static_cast<KModErr>(publish_err);
     if (!platform::set_file_selinux_access_mode(path.c_str(), core::kSelinuxKernel))
         return KModErr::ERR_SET_FILE_SELINUX;
@@ -108,17 +73,19 @@ KModErr prepare_bootstrap_state() {
     const std::string state_files[] = {path + ".running.lock", path + ".boot_session.work",
                                       path + ".log", path + ".log.last", path + ".log.crash",
                                       path + ".boot_session.completed"};
-    for (unsigned i = 0; i < 6; ++i) {
-        if (!platform::create_empty_file(state_files[i].c_str()))
-            return static_cast<KModErr>(core::kErrCreateEmptyFile);
-    }
     constexpr char initial_log[] = "[FATAL] autorun_bootstrap: NEVER EXECUTED";
-    if (!platform::write_file_direct(state_files[2].c_str(),
-                                     reinterpret_cast<const unsigned char*>(initial_log),
-                                     sizeof(initial_log) - 1))
-        return static_cast<KModErr>(core::kErrWriteFile);
-    for (const std::string& file : state_files) {
-        if (!platform::set_file_selinux_access_mode(file.c_str(), core::kSelinuxKernel))
+    for (unsigned i = 0; i < 6; ++i) {
+        if (i >= 2 && i <= 4) {
+            const KModErr error = platform::preserve_or_initialize_log(
+                state_files[i].c_str(), i == 2 ? initial_log : "");
+            if (error != KModErr::OK) return error;
+        } else if (!platform::create_empty_file(state_files[i].c_str())) {
+            return static_cast<KModErr>(core::kErrCreateEmptyFile);
+        }
+    }
+    for (unsigned i = 0; i < 6; ++i) {
+        if (i >= 2 && i <= 4) continue;
+        if (!platform::set_file_selinux_access_mode(state_files[i].c_str(), core::kSelinuxKernel))
             return KModErr::ERR_SET_FILE_SELINUX;
     }
     const KModErr duplicate_err = sdk::unsafe_reset_autorun_bootstrap_duplicate_boot_session_flag();

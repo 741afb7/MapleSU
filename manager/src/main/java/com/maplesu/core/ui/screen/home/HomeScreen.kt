@@ -90,8 +90,23 @@ fun HomePager(
         entryFacts.workModeSwitch
     }
 
+    val installedKernelRevision by dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade
+        .installedKernelRevision.collectAsStateWithLifecycle()
+    val ultraObservation by dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.observations
+        .collectAsStateWithLifecycle(initialValue =
+            dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.currentSnapshot(context))
+    val currentUltra = remember(ultraObservation, installedKernelRevision, uiState) {
+        dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.currentSnapshot(context)
+    }
+    val installedKernelKnown = installedKernelRevision.let {
+        dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelKnown(context)
+    }
+    val verifiedUltraInstallation = dev.maplesu.manager.workmode.ModeRuntime.active ==
+        dev.maplesu.manager.workmode.WorkMode.LITE || installedKernelKnown || currentUltra.kernelRootVerified ||
+        currentUltra.state == dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.State.Running ||
+        currentUltra.state == dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.State.Fault
     val brandFacts = homeUltraBrandFacts(workModeSwitch, liteHiddenMasking, hiddenConfirming,
-        displayState.environmentMode)
+        displayState.environmentMode, environmentInstalled = verifiedUltraInstallation)
     val aboutShowsModes = !suppressEntries && !hidesModeInfo(brandFacts)
     val ultraVisible = shouldShowUltraBrand(brandFacts)
     // 主卡与顶部字样复用同一个结果；不修改原检测，也不把安装事实当成 root 能力。
@@ -104,6 +119,12 @@ fun HomePager(
         upgradeAllowed = workModeSwitch.blocked == HomeWorkModeSwitchBlock.NONE,
         foreground = isCurrentPage,
     )
+    val switchPending by dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.pendingFlow.collectAsStateWithLifecycle()
+    val showInstalledKernelUpdate = com.maplesu.core.ui.screen.settings.installedUltraUpgradeVisible(
+        dev.maplesu.manager.workmode.ModeRuntime.active, installedKernelKnown,
+        dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelUpdateRequired(context),
+        suppressEntries, switchPending,
+    )
     val ultra = rememberUltraWordmarkState(
         visible = ultraVisible,
         foreground = isCurrentPage && navigator.current() in listOf(Route.Main, Route.Home),
@@ -113,7 +134,7 @@ fun HomePager(
         onInstallClick = { navigator.push(Route.Install) },
         onOpenUrl = uriHandler::openUri,
         onJailbreakClick = { showJailbreakSelection = true },
-        onEnvironmentRetry = viewModel::refresh,
+        onEnvironmentRetry = viewModel::checkEnvironmentManually,
         onManageModules = { navigator.push(Route.Module) },
         onFeedbackClick = { openFeedbackInBrowser(context) },
     )
@@ -154,6 +175,7 @@ fun HomePager(
             ultra = ultra,
             aboutShowsModes = aboutShowsModes,
             ultraEnvironment = ultraEnvironment.takeIf { ultraVisible },
+            showInstalledKernelUpdate = showInstalledKernelUpdate,
             actions = actions,
             bottomInnerPadding = bottomInnerPadding,
             workModeEntry = workModeEntry,
@@ -166,6 +188,7 @@ fun HomePager(
             ultra = ultra,
             aboutShowsModes = aboutShowsModes,
             ultraEnvironment = ultraEnvironment.takeIf { ultraVisible },
+            showInstalledKernelUpdate = showInstalledKernelUpdate,
             actions = actions,
             bottomInnerPadding = bottomInnerPadding,
             workModeEntry = workModeEntry,

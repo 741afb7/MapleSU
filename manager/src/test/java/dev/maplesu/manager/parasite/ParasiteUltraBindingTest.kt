@@ -5,38 +5,37 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import dev.maplesu.manager.runtime.ultra.ParasiteRuntimeAvailability
+import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
 
-/** H4 P1：Ultra bridge 回执解析 + UltraLinkedParasiteSdkPort 真实接线（四码保留）。 */
+/** Ultra bridge 回执解析 + UltraLinkedParasiteSdkPort 免 Key 接线。 */
 class ParasiteUltraBindingTest {
-    private val rootKey = ByteArray(48) { 'k'.code.toByte() }
-
     private class FakeNative : ParasiteNativeCall {
         var precheckReceipt: String? = null
         var implantReceipt: String? = null
         var suEnvReceipt: String? = null
         val calls = mutableListOf<String>()
-        var lastKey: String? = null
+        var lastTarget: String? = null
 
-        override fun precheck(rootKey: String, targetPidCmdline: String): String? {
+        override fun precheck(targetPidCmdline: String): String? {
             calls += "precheck"
-            lastKey = rootKey
+            lastTarget = targetPidCmdline
             return precheckReceipt
         }
 
-        override fun implantApp(rootKey: String, targetPidCmdline: String, soPath: String): String? {
+        override fun implantApp(targetPidCmdline: String, soPath: String): String? {
             calls += "implantApp"
-            lastKey = rootKey
+            lastTarget = targetPidCmdline
             return implantReceipt
         }
 
         override fun implantSuEnv(
-            rootKey: String,
             targetPidCmdline: String,
             soPath: String,
             suDir: String,
         ): String? {
             calls += "implantSuEnv"
-            lastKey = rootKey
+            lastTarget = targetPidCmdline
             return suEnvReceipt
         }
     }
@@ -55,10 +54,8 @@ class ParasiteUltraBindingTest {
     private fun port(
         native: FakeNative,
         availability: UltraAvailability = UltraAvailability.RUNNING,
-        keyProvider: () -> ByteArray? = { rootKey },
     ) = UltraLinkedParasiteSdkPort(
         api = ParasiteUltraApiAdapter(native),
-        rootKeyProvider = keyProvider,
         availabilityProvider = { availability },
     )
 
@@ -84,7 +81,7 @@ class ParasiteUltraBindingTest {
         )
         assertEquals(AppDynlibStatus.RUNNING, dynlibs[0].status)
         assertEquals(AppDynlibStatus.NOT_RUNNING, dynlibs[1].status)
-        assertEquals(48, native.lastKey!!.length)
+        assertEquals("com.example.host", native.lastTarget)
     }
 
     @Test
@@ -121,12 +118,15 @@ class ParasiteUltraBindingTest {
     }
 
     @Test
-    fun missingRootKeyNeverCallsNativeAndReportsNoRootKey() {
-        val native = FakeNative()
-        val result = port(native, keyProvider = { null }).precheck("com.example.host")
+    fun nativeIdentityFailureRemainsStructuredWithoutCredentialFallback() {
+        val native = FakeNative().apply {
+            precheckReceipt = receipt("parasite_precheck_app", ok = false, sdkError = "ERR_OWNER_IDENTITY")
+        }
+        val result = port(native).precheck("com.example.host")
         assertTrue(result is ParasiteSdkResult.Failed)
-        assertEquals(ParasiteCodes.ULTRA_ROOT_KEY_UNAVAILABLE, (result as ParasiteSdkResult.Failed).code)
-        assertTrue(native.calls.isEmpty())
+        assertEquals(ParasiteCodes.ULTRA_UNAVAILABLE, (result as ParasiteSdkResult.Failed).code)
+        assertEquals("ERR_OWNER_IDENTITY", result.detail)
+        assertEquals(listOf("precheck"), native.calls)
     }
 
     @Test
@@ -149,11 +149,10 @@ class ParasiteUltraBindingTest {
     }
 
     @Test
-    fun quiescingBlocksAllUltraCallsBeforeKeyOrNative() {
+    fun quiescingBlocksAllUltraCallsBeforeNative() {
         val native = FakeNative()
         val blocked = UltraLinkedParasiteSdkPort(
             api = ParasiteUltraApiAdapter(native),
-            rootKeyProvider = { error("key read during quiescence") },
             availabilityProvider = { UltraAvailability.RUNNING },
             quiescing = { true },
         )
@@ -219,19 +218,15 @@ class ParasiteUltraBindingTest {
 
     @Test
     fun probeStateMapsToPortAvailability() {
-        // 纯映射：UltraEnvironmentProbe.State → UltraAvailability（保持四码语义）。
-        assertEquals(UltraAvailability.RUNNING, probeStateMapping("Running"))
-        assertEquals(UltraAvailability.NO_ROOT_KEY, probeStateMapping("NoKey"))
-        assertEquals(UltraAvailability.NOT_RUNNING, probeStateMapping("NotInstalled"))
-        assertEquals(UltraAvailability.UNLINKED, probeStateMapping("Unknown"))
-        assertFalse(probeStateMapping("Running") == UltraAvailability.UNLINKED)
-    }
-
-    /** 避免在本测试类直接引用 Android 依赖：只断言映射表语义与生产实现同构。 */
-    private fun probeStateMapping(state: String): UltraAvailability = when (state) {
-        "Running" -> UltraAvailability.RUNNING
-        "NoKey" -> UltraAvailability.NO_ROOT_KEY
-        "NotInstalled", "Fault" -> UltraAvailability.NOT_RUNNING
-        else -> UltraAvailability.UNLINKED
+        assertEquals(UltraAvailability.RUNNING,
+            ParasiteRuntimeAvailability.fromUltraState(UltraEnvironmentProbe.State.Running))
+        assertEquals(UltraAvailability.NOT_RUNNING,
+            ParasiteRuntimeAvailability.fromUltraState(UltraEnvironmentProbe.State.NotInstalled))
+        assertEquals(UltraAvailability.NOT_RUNNING,
+            ParasiteRuntimeAvailability.fromUltraState(UltraEnvironmentProbe.State.Fault))
+        assertEquals(UltraAvailability.UNLINKED,
+            ParasiteRuntimeAvailability.fromUltraState(UltraEnvironmentProbe.State.Unknown))
+        assertEquals(UltraAvailability.UNLINKED,
+            ParasiteRuntimeAvailability.fromUltraState(UltraEnvironmentProbe.State.NoKey))
     }
 }

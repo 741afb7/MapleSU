@@ -3,6 +3,7 @@
 import argparse
 import ast
 import gzip
+import lzma
 import hashlib
 import json
 from pathlib import Path
@@ -23,8 +24,9 @@ CODE = compile(ast.Module(body=[node for node in TREE.body
     if isinstance(node, ast.FunctionDef) and node.name in FUNCTIONS], type_ignores=[]),
     str(ARGS.builder), "exec")
 MAIN = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name == "main")
-BEFORE = next(node.value for node in MAIN.body if isinstance(node, ast.Assign) and
-    any(isinstance(target, ast.Name) and target.id == "before" for target in node.targets))
+BEFORE = next(node.value for node in ast.walk(MAIN) if isinstance(node, ast.Assign) and
+    any(isinstance(target, ast.Name) and target.id == "before" for target in node.targets) and
+    isinstance(node.value, ast.DictComp) and isinstance(node.value.generators[0].iter, ast.List))
 UNCHANGED = next(node.value for node in MAIN.body if isinstance(node, ast.Assign) and
     any(isinstance(target, ast.Name) and target.id == "unchanged" for target in node.targets))
 ROUTES = ast.parse((ROOT / "scripts/policy_claim_routes.py").read_text(encoding="utf-8-sig"))
@@ -40,7 +42,7 @@ class ClaimReleaseVersionTests(unittest.TestCase):
         self.assets, self.out = self.root / "assets", self.root / "out"
         self.assets.mkdir()
         self.out.mkdir()
-        self.env = dict(ROOT=self.root, Path=Path, re=re, gzip=gzip, hashlib=hashlib,
+        self.env = dict(ROOT=self.root, Path=Path, re=re, gzip=gzip, lzma=lzma, hashlib=hashlib,
                         json=json, RAW_FAMILIES=RAW_FAMILIES)
         exec(CODE, self.env)
         self.write_gradle('versionName = "5.2.1"\nversionCode = 50201\n')
@@ -160,15 +162,17 @@ class ClaimReleaseVersionTests(unittest.TestCase):
                 self.assertEqual(chunk["sha256"], hashlib.sha256(data).hexdigest())
                 chunks.append(data)
             compressed = b"".join(chunks)
-            decoded = gzip.decompress(compressed)
+            decoded = lzma.decompress(compressed)
             self.assertEqual(decoded, (self.out / family / "runtime-payload-metadata.full.json").read_bytes())
             self.assertEqual(json.loads(decoded), row["payload"])
             self.assertEqual(payload["bytes"], row["payload"]["bytes"])
             self.assertEqual(payload["sha256"], row["payload"]["sha256"])
             self.assertEqual(payload["decodedBytes"], len(decoded))
             self.assertEqual(payload["decodedSha256"], hashlib.sha256(decoded).hexdigest())
-            self.assertEqual(payload["gzipBytes"], len(compressed))
-            self.assertEqual(payload["gzipSha256"], hashlib.sha256(compressed).hexdigest())
+            self.assertEqual(payload["metadataEncoding"], "xz-chunks-v1")
+            self.assertTrue(all(c["path"].endswith(".json.xz.part") for c in payload["chunks"]))
+            self.assertEqual(payload["xzBytes"], len(compressed))
+            self.assertEqual(payload["xzSha256"], hashlib.sha256(compressed).hexdigest())
 
     def test_packaging_receipt_identifies_actual_manifest(self):
         manifest, _, _ = self.publish()
@@ -195,7 +199,7 @@ class ClaimReleaseVersionTests(unittest.TestCase):
         self.assertEqual(payload["support"]["bootstrap"], dict(bytes=3,
             sha256="bootstrap-sha", path="android15-6.6/bootstrap.bin"))
         compressed = b"".join((self.assets / c["path"]).read_bytes() for c in payload["chunks"])
-        self.assertEqual(json.loads(gzip.decompress(compressed))["support"], payload["support"])
+        self.assertEqual(json.loads(lzma.decompress(compressed))["support"], payload["support"])
 
     def test_invalid_version_does_not_publish_manifest(self):
         self.write_gradle('versionName = "5.2.1"\nversionCode = 0\n')

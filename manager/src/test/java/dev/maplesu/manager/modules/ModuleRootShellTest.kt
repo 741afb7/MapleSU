@@ -136,7 +136,7 @@ class ModuleRootShellTest {
     @Test
     fun rootExecRunnerUsesRouterAndSucceeds() {
         val root = FakeRoot()
-        RootExec.installForTest(RootExecutionRouter(null, root, modeProvider = { WorkMode.LITE }))
+        RootExec.installForTest(RootExecutionRouter(ultraEnv = root, modeProvider = { WorkMode.LITE }))
         val result = RootExecModuleScriptRunner.run("echo routed")
         assertTrue(result.isSuccess)
         assertEquals("routed-out", result.out)
@@ -151,7 +151,12 @@ class ModuleRootShellTest {
                 override fun available() = true
                 override fun run(script: String) = RootExecResult(backend, 0, "stdout", "stderr warning")
             }
-            RootExec.installForTest(RootExecutionRouter(root, null, modeProvider = { null }))
+            RootExec.installForTest(RootExecutionRouter(
+                ultraEnv = root.takeIf { backend == RootBackend.ULTRA_ENV },
+                modeProvider = { if (backend == RootBackend.KSU) WorkMode.KSU else WorkMode.LITE },
+                ksuProvider = { root.takeIf { backend == RootBackend.KSU } },
+                hook = root.takeIf { backend == RootBackend.HOOK },
+            ))
             val result = RootExecModuleScriptRunner.run("module-command")
             assertEquals(0, result.code)
             assertEquals("stdout", result.out)
@@ -190,7 +195,7 @@ class ModuleRootShellTest {
             available = true,
             result = RootExecResult(RootBackend.ULTRA_ENV, 9, "denied", "ULTRA_ROOT_FAILED"),
         )
-        RootExec.installForTest(RootExecutionRouter(null, root, modeProvider = { WorkMode.LITE }))
+        RootExec.installForTest(RootExecutionRouter(ultraEnv = root, modeProvider = { WorkMode.LITE }))
         val result = RootExecModuleScriptRunner.run("id")
         assertFalse(result.isSuccess)
         assertEquals(9, result.code)

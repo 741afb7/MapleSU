@@ -1,22 +1,17 @@
-#include "rootkit_command.h"
-#include "rootkit_parasite_app.h"
-#include "rootkit_process64_inject.h"
-#include "rootkit_process_cmdline_utils.h"
+#include "maplesu_parasite.h"
 #include "su_protocol.h"
-#include "compat/command_inputs.h"
+#include "ultra_admission.h"
+#include "path_injection.h"
 
-#include <array>
 #include <cerrno>
-#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <map>
+#include <limits>
 #include <poll.h>
 #include <sched.h>
-#include <set>
 #include <string>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -29,201 +24,61 @@ int fail(int code, const char* reason) {
     return code;
 }
 
-bool read_exact(void* data, size_t size) {
-    auto* out = static_cast<unsigned char*>(data);
-    while (size) {
-        const ssize_t count = read(STDIN_FILENO, out, size);
-        if (count < 0 && errno == EINTR) continue;
-        if (count <= 0) return false;
-        out += count;
-        size -= static_cast<size_t>(count);
+int admit_root() {
+    const int result = maplesu_ultra_acquire_root();
+    if (!result && getuid() == 0 && geteuid() == 0) return 0;
+    std::fprintf(stderr, "maplesu-runtime: Ultra admission rejected code=%d\n", result);
+    return 69;
+}
+
+bool parse_full_uid(const char* text, uid_t& uid) {
+    if (!text || !*text) return false;
+    uid_t value = 0;
+    for (const char* at = text; *at; ++at) {
+        if (*at < '0' || *at > '9') return false;
+        const uid_t digit = static_cast<uid_t>(*at - '0');
+        if (value > (std::numeric_limits<uid_t>::max() - digit) / 10) return false;
+        value = value * 10 + digit;
     }
+    if (value < 10000) return false;
+    uid = value;
     return true;
 }
 
-bool read_key(std::array<char, 49>& key) {
-    // Bounded frame: four-byte big-endian length, then 48 alphanumeric bytes.
-    // Remaining stdin belongs to the command. No key is accepted via argv/env.
-    std::array<unsigned char, 4> size{};
-    if (!read_exact(size.data(), size.size()) ||
-        size != std::array<unsigned char, 4>{0, 0, 0, 48}) return false;
-    if (!read_exact(key.data(), 48)) return false;
-    for (size_t i = 0; i < 48; ++i) {
-        const char c = key[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              (c >= '0' && c <= '9'))) return false;
-    }
-    return true;
-}
-
-void clear_key(std::array<char, 49>& key) {
-    // Clear this wrapper's buffer; upstream also creates a temporary std::string.
-    volatile char* out = key.data();
-    for (size_t i = 0; i < key.size(); ++i) out[i] = 0;
-}
-
-/*
- * Persistent `su` PATH wiring for one authorised application.
- *
- * <p>This is the upstream Lite primitive, not a reimplementation: the imported static
- * library patches one of the target's own JNI libraries to gain a DT_NEEDED entry for a
- * side library it writes next to it, and that side library prepends the published `su`
- * directory to PATH in a constructor. Only processes of that one application therefore
- * resolve a bare `su`; every other application is untouched.
- *
- * <p>The credential arrives on stdin in the same 4+48 frame the rest of this binary
- * uses, is never placed in argv or the environment, and is cleared before returning.
- * Authorisation is decided by the caller (Manager) before this runs; this process only
- * performs the implant it was told to perform.
- */
+// Explicit requests from the authorization owner use the current SDK. No
+// credential protocol or application probing runs before current-task admission.
 int wire_precheck(const char* target_cmdline) {
-    std::array<char, 49> key{};
-    if (!read_key(key)) return fail(65, "credential frame required");
-    std::map<std::string, kernel_root::AppDynlibStatus> libraries;
-    const KRootErr status =
-        kernel_root::parasite_precheck_app(key.data(), target_cmdline, libraries);
-    clear_key(key);
-    if (!is_ok(status)) {
-        std::fprintf(stderr, "maplesu-runtime: precheck rejected code=%d\n",
-            static_cast<int>(status));
+    const auto status = kernel_root::parasite_precheck_app_with_cb(target_cmdline,
+        [](const char* path, kernel_root::AppDynlibStatus state) {
+            std::printf("%d %s\n", static_cast<int>(state), path);
+        });
+    if (status != kernel_root::PARASITE_OK) {
+        std::fprintf(stderr, "maplesu-runtime: precheck rejected code=%lld\n",
+            static_cast<long long>(status));
         return 66;
     }
-    for (const auto& [path, state] : libraries)
-        std::printf("%d %s\n", static_cast<int>(state), path.c_str());
     return 0;
 }
 
 int wire_implant(const char* target_cmdline, const char* library, const char* su_directory) {
-    std::array<char, 49> key{};
-    if (!read_key(key)) return fail(65, "credential frame required");
-    const KRootErr status = kernel_root::parasite_implant_su_env(
-        key.data(), target_cmdline, library, su_directory);
-    clear_key(key);
-    if (!is_ok(status)) {
-        std::fprintf(stderr, "maplesu-runtime: implant rejected code=%d\n",
-            static_cast<int>(status));
+    const auto status = kernel_root::parasite_implant_su_env(target_cmdline, library, su_directory);
+    if (status != kernel_root::PARASITE_OK) {
+        std::fprintf(stderr, "maplesu-runtime: implant rejected code=%lld\n",
+            static_cast<long long>(status));
         return 67;
     }
     std::printf("WIRED:%s\n", library);
     return 0;
 }
 
-/*
- * H4：对已运行的目标进程植入"普通 App 寄生 so"（`parasite_implant_app`）。
- *
- * 与 wire_implant 相同：凭证从 stdin 的 4+48 帧读取，绝不进 argv/env，返回前清零；
- * 成功 stdout `IMPLANTED:<so 绝对路径>`，被 SDK 拒绝时 stderr 诊断 + exit 68。
- * 该子命令与 `--wire-su-precheck` / `--wire-su-env` 一起只服务 Lite(A) 运行端。
- */
 int wire_implant_app(const char* target_cmdline, const char* library) {
-    std::array<char, 49> key{};
-    if (!read_key(key)) return fail(65, "credential frame required");
-    const KRootErr status = kernel_root::parasite_implant_app(
-        key.data(), target_cmdline, library);
-    clear_key(key);
-    if (!is_ok(status)) {
-        std::fprintf(stderr, "maplesu-runtime: implant app rejected code=%d\n",
-            static_cast<int>(status));
+    const auto status = kernel_root::parasite_implant_app(target_cmdline, library);
+    if (status != kernel_root::PARASITE_OK) {
+        std::fprintf(stderr, "maplesu-runtime: implant app rejected code=%lld\n",
+            static_cast<long long>(status));
         return 68;
     }
     std::printf("IMPLANTED:%s\n", library);
-    return 0;
-}
-
-/** Monotonic milliseconds, used to bound waiting. */
-long long monotonic_ms() {
-    // Bounded waiting only; wall clock jumps must not shorten a wait.
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-/*
- * Every process of one package.
- *
- * <p>The upstream lookup compares the whole first command-line argument, so it only ever
- * finds the main process: a private process is `package:name`, a different string. Reading
- * the map once and matching the prefix here is what lets a single call cover every process
- * the package runs - a WebUI, a `:remote` service, a sandboxed child - while the exact
- * match stays a subset of it.
- */
-std::set<pid_t> package_processes(const char* key, const char* package) {
-    std::map<pid_t, std::string> all;
-    std::set<pid_t> found;
-    if (is_failed(kernel_root::get_all_cmdline_process(key, all, false))) return found;
-    const std::string name(package);
-    for (const auto& [pid, cmdline] : all) {
-        if (cmdline == name) {
-            found.insert(pid);
-        } else if (cmdline.size() > name.size() && cmdline.compare(0, name.size(), name) == 0 &&
-                   cmdline[name.size()] == ':') {
-            found.insert(pid);
-        }
-    }
-    return found;
-}
-
-int inject_path(const char* target_cmdline, const char* directory, int wait_ms) {
-    std::array<char, 49> key{};
-    if (!read_key(key)) return fail(65, "credential frame required");
-    std::set<pid_t> targets;
-    const long long deadline = monotonic_ms() + wait_ms;
-    // A process that was only just asked for does not exist yet. Waiting here instead of
-    // failing turns "the grant arrived one second too early" into a success.
-    while (true) {
-        targets = package_processes(key.data(), target_cmdline);
-        if (!targets.empty() || monotonic_ms() >= deadline) break;
-        usleep(100 * 1000);
-    }
-    if (targets.empty()) {
-        clear_key(key);
-        std::fprintf(stderr, "maplesu-runtime: no process for %s\n", target_cmdline);
-        return 68;
-    }
-    // The three upstream offset strategies, in order: the first normally works, the others
-    // cover a build where the libc file under the APEX cannot be read (OnlyReadSelfMem) or
-    // where the target maps a libc instance this process does not share (OnlyReadFile).
-    static constexpr kernel_root::ApiOffsetReadMode modes[] = {
-        kernel_root::ApiOffsetReadMode::ReadAll,
-        kernel_root::ApiOffsetReadMode::OnlyReadSelfMem,
-        kernel_root::ApiOffsetReadMode::OnlyReadFile,
-    };
-    static const char* const mode_names[] = {"read-all", "self-mem", "libc-file"};
-    int injected = 0;
-    int last = 0;
-    int mode_used[3] = {0, 0, 0};
-    for (const pid_t pid : targets) {
-        KRootErr status = KRootErr::ERR_INJECT_PROC64_ENV;
-        int used = -1;
-        // One retry: a process that has just forked out of zygote can refuse while its
-        // linker is still setting up, and the same call succeeds a moment later.
-        for (int attempt = 0; attempt < 2 && used < 0; ++attempt) {
-            for (int index = 0; index < 3; ++index) {
-                status = kernel_root::inject_process_env64_PATH_wrapper(
-                    key.data(), static_cast<int>(pid), directory, modes[index]);
-                if (is_ok(status)) {
-                    used = index;
-                    break;
-                }
-            }
-            if (used < 0 && attempt == 0) usleep(60 * 1000);
-        }
-        if (used >= 0) {
-            ++injected;
-            ++mode_used[used];
-            std::printf("TARGET:%d:%s\n", static_cast<int>(pid), mode_names[used]);
-        } else {
-            last = static_cast<int>(status);
-            std::fprintf(stderr, "maplesu-runtime: pid %d rejected code=%d\n",
-                static_cast<int>(pid), last);
-        }
-    }
-    clear_key(key);
-    if (injected == 0) {
-        std::fprintf(stderr, "maplesu-runtime: injection rejected code=%d\n", last);
-        return 69;
-    }
-    std::printf("INJECTED:%d\n", injected);
-    std::printf("MODES:%d:%d:%d\n", mode_used[0], mode_used[1], mode_used[2]);
     return 0;
 }
 
@@ -310,45 +165,41 @@ int supervised_exec(int control, char** command) {
 } // namespace
 
 int main(int argc, char** argv) {
-    // Authorised-application wiring. Not an execution mode: it creates no root
-    // session and serves no caller. The credential arrives on stdin, and the Manager
-    // only reaches these paths after its own grant check.
-    if (argc == 3 && std::strcmp(argv[1], "--wire-su-precheck") == 0)
-        return wire_precheck(argv[2]);
-    if (argc == 4 && std::strcmp(argv[1], "--implant-app") == 0)
-        return wire_implant_app(argv[2], argv[3]);
-    if (argc >= 4 && std::strcmp(argv[1], "--inject-path") == 0) {
-        // Optional fourth argument: how long to wait for the process to exist.
-        int wait_ms = argc >= 5 ? std::atoi(argv[4]) : 3000;
-        if (wait_ms < 0) wait_ms = 0;
-        return inject_path(argv[2], argv[3], wait_ms);
+    // The Manager reaches these explicit operations after its fullUID grant check.
+    // Authenticate before touching another application's processes or files.
+    if (argc == 3 && std::strcmp(argv[1], "--wire-su-precheck") == 0) {
+        const int admitted = admit_root();
+        return admitted ? admitted : wire_precheck(argv[2]);
     }
-    if (argc == 5 && std::strcmp(argv[1], "--wire-su-env") == 0)
-        return wire_implant(argv[2], argv[3], argv[4]);
-    // Direct admission: the caller already holds the delivered credential, so no
-    // resident verifier, Binder endpoint or root service participates. This is the
-    // shape a self-sufficient client uses after the non-resident migration.
-    if (argc >= 4 && std::strcmp(argv[1], "--direct-stdin") == 0 &&
-        std::strcmp(argv[2], "--") == 0 && argv[3][0] == '/') {
-        std::array<char, 49> key{};
-        if (!read_key(key)) return fail(65, "credential frame required");
-        const KRootErr status = kernel_root::get_root(key.data());
-        clear_key(key);
-        if (!is_ok(status)) return fail(70, "credential rejected");
-        if (getuid() != 0 || geteuid() != 0) return fail(70, "credential did not grant root");
-        execv(argv[3], argv + 3);
-        return fail(66, "exec failed");
+    if (argc == 4 && std::strcmp(argv[1], "--implant-app") == 0) {
+        const int admitted = admit_root();
+        return admitted ? admitted : wire_implant_app(argv[2], argv[3]);
+    }
+    if ((argc == 5 || argc == 6) && std::strcmp(argv[1], "--inject-path") == 0) {
+        uid_t full_uid;
+        if (!parse_full_uid(argv[3], full_uid)) return fail(64, "a full application UID is required");
+        const int admitted = admit_root();
+        if (admitted) return admitted;
+        int wait_ms = argc == 6 ? std::atoi(argv[5]) : 3000;
+        if (wait_ms < 0) wait_ms = 0;
+        return maplesu_inject_path(argv[2], full_uid, argv[4], wait_ms);
+    }
+    if (argc == 5 && std::strcmp(argv[1], "--wire-su-env") == 0) {
+        const int admitted = admit_root();
+        return admitted ? admitted : wire_implant(argv[2], argv[3], argv[4]);
     }
     if (argc < 4 || std::strcmp(argv[2], "--") != 0 || argv[3][0] != '/')
-        return fail(64, "usage: --maplesu-stdin|--maplesu-global-stdin|--maplesu-session-stdin|--maplesu-su-stdin|--unprivileged -- /absolute/program [args...]");
-    const bool su = (std::strcmp(argv[1], "--maplesu-su-stdin") == 0 || std::strcmp(argv[1], maplesu::compat::command_inputs::kSuStdin) == 0);
+        return fail(64, "usage: --ultra|--ultra-global|--ultra-session|--ultra-global-session|--ultra-su|--unprivileged -- /absolute/program [args...]");
+    const bool ultra_su = std::strcmp(argv[1], "--ultra-su") == 0;
+    const bool ultra_session = ultra_su || std::strcmp(argv[1], "--ultra-session") == 0 ||
+        std::strcmp(argv[1], "--ultra-global-session") == 0;
+    const bool ultra_global = std::strcmp(argv[1], "--ultra-global") == 0 ||
+        std::strcmp(argv[1], "--ultra-global-session") == 0;
+    const bool ultra = ultra_session || ultra_global || std::strcmp(argv[1], "--ultra") == 0;
     const bool root_su = std::strcmp(argv[1], "--root-su") == 0;
     const bool root_session = std::strcmp(argv[1], "--root-session") == 0;
     const bool root_global_session = std::strcmp(argv[1], "--root-global-session") == 0;
-    const bool session = su || (std::strcmp(argv[1], "--maplesu-session-stdin") == 0 || std::strcmp(argv[1], maplesu::compat::command_inputs::kSessionStdin) == 0);
-    const bool global = (std::strcmp(argv[1], "--maplesu-global-stdin") == 0 || std::strcmp(argv[1], maplesu::compat::command_inputs::kGlobalStdin) == 0);
-    const bool maplesu = session || global || (std::strcmp(argv[1], "--maplesu-stdin") == 0 || std::strcmp(argv[1], maplesu::compat::command_inputs::kStdin) == 0);
-    if (!maplesu && !root_su && !root_session && !root_global_session && std::strcmp(argv[1], "--unprivileged") != 0)
+    if (!ultra && !root_su && !root_session && !root_global_session && std::strcmp(argv[1], "--unprivileged") != 0)
         return fail(64, "unknown execution mode");
     if (root_su || root_session || root_global_session) {
         if (getuid() != 0 || geteuid() != 0) return fail(70, "root session owner required");
@@ -368,42 +219,29 @@ int main(int argc, char** argv) {
         return root_su ? maplesu::su_session(root_control, /*gated=*/true)
                        : supervised_exec(root_control, argv + 3);
     }
-    // A pre-existing root identity would make get_root's UID check inconclusive.
-    if (getuid() == 0 || geteuid() == 0 || getuid() != geteuid() || getgid() != getegid())
-        return fail(70, "requires an ordinary, unchanged caller identity");
-    int control = -1;
-    if (maplesu) {
-        std::array<char, 49> key{};
-        if (!read_key(key)) {
-            clear_key(key);
-            return fail(65, "invalid credential frame");
+    if (ultra) {
+        const int control = ultra_session ? inherited_control() : -1;
+        if (ultra_session && control < 0) return fail(65, "invalid session control connection");
+        const int admitted = admit_root();
+        if (admitted) {
+            if (control >= 0) close(control);
+            return admitted;
         }
-        if (session) {
-            control = inherited_control();
-            if (control < 0) {
-                clear_key(key);
-                return fail(65, "invalid session control connection");
-            }
-        }
-        const auto result = kernel_root::get_root(key.data());
-        clear_key(key);
-        if (result != KRootErr::OK || getuid() != 0 || geteuid() != 0)
-            return fail(69, "MapleSU credential was not accepted");
-        if (global) {
+        if (ultra_global) {
             const int mount_namespace = open("/proc/1/ns/mnt", O_RDONLY | O_CLOEXEC);
             if (mount_namespace < 0) return fail(71, "global mount namespace open failed");
             const int joined = setns(mount_namespace, CLONE_NEWNS);
             close(mount_namespace);
             if (joined != 0) return fail(71, "global mount namespace join failed");
         }
-        // get_root ignores SIGPIPE internally; commands receive normal exec semantics.
-        if (signal(SIGPIPE, SIG_DFL) == SIG_ERR)
-            return fail(71, "signal setup failed");
+        if (signal(SIGPIPE, SIG_DFL) == SIG_ERR) return fail(71, "signal setup failed");
+        if (ultra_su) return maplesu::su_session(control, /*gated=*/false);
+        if (ultra_session) return supervised_exec(control, argv + 3);
+        execv(argv[3], argv + 3);
+        return fail(errno == ENOENT ? 127 : 126, "command exec failed");
     }
-    // Legacy internal mode: the caller already proved possession of the credential
-    // frame on stdin, so this session is not the third-party admission path.
-    if (su) return maplesu::su_session(control, /*gated=*/false);
-    if (session) return supervised_exec(control, argv + 3);
+    if (getuid() == 0 || geteuid() == 0 || getuid() != geteuid() || getgid() != getegid())
+        return fail(70, "requires an ordinary, unchanged caller identity");
     // execv preserves argv, cwd, environment, stdio and actual command exit status.
     // No popen, su fallback, shell interpolation, or success response before exec.
     execv(argv[3], argv + 3);

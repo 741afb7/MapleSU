@@ -31,9 +31,6 @@
 #include "maplesu_storage_worker_private.h"
 #include "maplesu_status_query_private.h"
 
-// 安装器在启动时注入 root key（名字里的 hash 后缀不可改）。
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(
-    const char* root_key);
 
 namespace default_modules {
 namespace module_bypass_oplus_secure_guard {
@@ -459,13 +456,10 @@ __attribute__((always_inline)) inline KModErr patch_oplus_guard_boot_state() {
 
 }  // namespace
 
-KModErr oneplus_bypass_stage1_and_2(const char* root_key, void (*report_cb)(const char*)) {
-    const auto auth = kernel_module::maplesu_request_auth_state();
-    if (!kernel_module::maplesu_request_auth_usable(auth) ||
-        (kernel_module::maplesu_request_auth_authenticated(auth) ? root_key != nullptr :
-            (!root_key || strnlen(root_key, 1024) < FOLDER_HEAD_ROOT_KEY_LEN || strnlen(root_key, 1024) == 1024)))
+KModErr oneplus_bypass_stage1_and_2(void (*report_cb)(const char*)) {
+    if (!kernel_module::maplesu_request_auth_usable(kernel_module::maplesu_request_auth_state()))
         return KModErr::ERR_MODULE_ROOT_KEY;
-    if (root_key) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
 
     std::string stage1_report;
     std::string stage2_report;
@@ -518,6 +512,7 @@ KModErr oneplus_bypass_stage1_and_2(const char* root_key, void (*report_cb)(cons
     if (is_failed(err)) {
         return err;
     }
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     {
         maplesu::sdk::fork_pipe_info pipe;
         err = KModErr::ERR_MODULE_TEST_CHANNEL;
@@ -554,13 +549,10 @@ KModErr oneplus_bypass_stage1_and_2(const char* root_key, void (*report_cb)(cons
 
 }
 
-KModErr oneplus_bypass_query_work_normal(const char* root_key, bool& value) {
-    const auto auth = kernel_module::maplesu_request_auth_state();
-    if (!kernel_module::maplesu_request_auth_usable(auth) ||
-        (kernel_module::maplesu_request_auth_authenticated(auth) ? root_key != nullptr :
-            (!root_key || strnlen(root_key, 1024) < FOLDER_HEAD_ROOT_KEY_LEN || strnlen(root_key, 1024) == 1024)))
+KModErr oneplus_bypass_query_work_normal(bool& value) {
+    if (!kernel_module::maplesu_request_auth_usable(kernel_module::maplesu_request_auth_state()))
         return KModErr::ERR_MODULE_ROOT_KEY;
-    if (root_key) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     maplesu::sdk::fork_pipe_info pipe;
     KModErr error = KModErr::ERR_READ_CHILD_ERRCODE;
     if (maplesu::sdk::fork_pipe_child_process(pipe)) {
@@ -589,8 +581,8 @@ KModErr oneplus_bypass_query_work_normal(const char* root_key, bool& value) {
     if (is_ok(error)) value = observed;
     return error;
 }
-bool oneplus_bypass_is_work_normal(const char* root_key) {
+bool oneplus_bypass_is_work_normal() {
     bool value = false;
-    (void)oneplus_bypass_query_work_normal(root_key, value);
+    (void)oneplus_bypass_query_work_normal(value);
     return value;
 }

@@ -7,7 +7,7 @@ import dev.maplesu.manager.workmode.service.AndroidUltraEnvironmentPort
 /**
  * P0：Ultra 环境 × 双模式切换互操作策略（host 纯函数）。
  *
- * 背景：Ultra 环境 Running 时，模式 A 的活跃能力（Ultra 服务/模块/su_auth/`/data/<rootKey16>/`）
+ * 背景：Ultra 环境 Running 时，模式 A 的活跃能力（Ultra 服务/模块/su_auth/`/data/<deployment>/`）
  * 若在切到 B 后继续存活，会违反"两模式互不干扰"；B→A 时又必须保证 Ultra 环境可恢复。
  *
  * 判定（P0-1 第 2 项，2026-11-01 改：**Ultra 环境不再前置阻断切换**）：
@@ -18,8 +18,7 @@ import dev.maplesu.manager.workmode.service.AndroidUltraEnvironmentPort
  *   preflight / 实际执行（回读校验）用真实失败报错。
  * - B(KSU)→A(LITE)：缺 Ultra 资产同样不阻断，改为「走安装/修补流程」的决策
  *   （`PREPARE_ULTRA_RESTORE_BEFORE_SWITCH` + `RESTORE_ULTRA_AFTER_VERIFY`，见 `Allowed.actions`）。
- * - A→B 的 `NO_KEY` 仍阻断：源环境依赖 Ultra 根通道；B→A 的 `NO_KEY` 是首次准备
- *   Ultra 凭据的正常状态，根通道来自已确认的 Normal，由候选生产与重启后验证负责校验。
+ * - 旧 `NO_KEY` 观测按未知处理；实际根通道由 preflight 和重启后验证核实。
  * - 同模式 → `ULTRA_INPUT_INVALID`（输入错误，不是环境限制）。
  *
  * 最小 diff：`MustSuspendUltraFirst` / `MustPrepareUltraRestore` 两个类型**保留**（编译面 0 破坏，
@@ -84,8 +83,8 @@ object UltraEnvSwitchPolicy {
                 // 真正的失败交给 preflight / 实际执行回读暴露。
                 UltraState.FAULT, UltraState.UNKNOWN, UltraState.NOT_INSTALLED ->
                     UltraSwitchDecision.Allowed(emptyList())
-                // NO_KEY：真实硬前提（无 rootKey ⇒ Ultra 根通道不可用）。
-                UltraState.NO_KEY -> noKeyBlock()
+                // Retired observations are unknown; preflight checks the real Root route.
+                UltraState.NO_KEY -> UltraSwitchDecision.Allowed(emptyList())
             }
             WorkMode.KSU -> when (ultraState) {
                 UltraState.RUNNING -> UltraSwitchDecision.Allowed(
@@ -102,14 +101,6 @@ object UltraEnvSwitchPolicy {
         }
     }
 
-    /**
-     * Ultra 源环境的 `NO_KEY` 阻断：没有 Ultra rootKey ⇒ Ultra 没有 Ultra 根通道，
-     * 放行只会让用户点完后拿到一个更差的错误。文案问题见 08 报告（`SwitchFlow.kt:176`
-     * 把 `ULTRA_ENV_NO_KEY` 映射成「Ultra 环境状态未知」，需 P2 补专用字符串）。
-     */
-    private fun noKeyBlock(): UltraSwitchDecision = UltraSwitchDecision.Block(
-        UltraSwitchBlocker(UltraSwitchCodes.ULTRA_ENV_NO_KEY, "ultra rootKey absent"),
-    )
 }
 
 data class UltraSwitchResult(
@@ -130,7 +121,7 @@ data class UltraSwitchResult(
 interface UltraEnvironmentPort {
     fun state(): UltraState
 
-    /** Current boot and key only; persisted pairing and no-key su are not proof. */
+    /** Current boot and live credential proof; cached ownership alone is insufficient. */
     fun kernelRootVerified(): Boolean = false
 
     /** A→B 前暂停/停用 Ultra 环境（含写者静默）；不可用 → 返回明确错误。 */
@@ -144,7 +135,7 @@ interface UltraEnvironmentPort {
  * 执行器：把 [UltraEnvSwitchPolicy] 落到生命周期动作。
  *
  * P0-1 第 2 项后：
- * - `beforeSwitch`：`evaluate` 只可能返回 `Allowed` / `Block(NO_KEY)`，所以**不再调用
+ * - `beforeSwitch`：`evaluate` 只可能返回 `Allowed` / 输入错误的 `Block`，所以**不再调用
  *   `port.suspend()`**。`Must*` 两个分支保留但不可达（生产 `suspend()` 恒失败，
  *   `ProductionUltraEnvironmentPort.kt:37-40`）。
  * - `afterVerified`（wave4 / S-2 起）：**方向感知 + 新鲜探针**，见 [afterVerified]。
@@ -201,8 +192,8 @@ class UltraEnvSwitchCoordinator(
      *   （`NOT_INSTALLED`/`FAULT` 是预期结果）。其余状态 → `OK`；仍 `RUNNING` → 失败
      *   （`ULTRA_ENV_MUST_SUSPEND`，**不**带 `recoveryRequired`：分区已写好、数据没坏，
      *   facade 会给 `Incomplete` 而不是 `RECOVERY_REQUIRED`）。
-     * - `toMode == LITE`（B→A，Normal→Ultra）：当前 Key 根通道已确认即通过；
-     *   `RUNNING` 或 `UNKNOWN`/`NOT_INSTALLED` + 本 boot 的 Key UID0 实测 → `OK`。
+     * - `toMode == LITE`（B→A，Normal→Ultra）：当前安装身份的根通道已确认即通过；
+     *   `RUNNING` 或 `UNKNOWN`/`NOT_INSTALLED` + 本 boot 的 UID0 实测 → `OK`。
      *   helper 就绪仍单独判断；`FAULT`/`NO_KEY`/未验证通道 → 失败（`ULTRA_ENV_STATE_UNKNOWN` +
      *   `recoveryRequired = true`：Ultra 实际没起来，需要人工恢复 Ultra 环境）。
      *

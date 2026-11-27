@@ -653,6 +653,46 @@ prune() {
     fi
   done
 }
+# Reuse the installed hidden-recovery start only for an explicit hidden/pending
+# state. All earlier gates use shell builtins, so ordinary boot adds no process.
+recovery_line() {
+  recovery_value= recovery_extra=
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  {
+    IFS= read -r recovery_value || [ -n "$recovery_value" ] || return 1
+    if IFS= read -r recovery_extra || [ -n "$recovery_extra" ]; then return 1; fi
+  } < "$1"
+}
+protected_recovery_path() {
+  local path=$1 permissions
+  [ ! -L "$path" ] && [ "$(stat -c '%u:%g' "$path")" = 0:0 ] || return 1
+  permissions=$(stat -c '%a' "$path") || return 1
+  case "$permissions" in ''|*[!0-7]*) return 1 ;; esac
+  [ $((0$permissions & 022)) = 0 ]
+}
+resume_hidden_recovery() {
+  local recovery=$working/recovery pending= mode= mode_count=0 line= code=0
+  [ ! -e "$working/ultra-identity/disabled" ] && [ ! -L "$working/ultra-identity/disabled" ] || return 0
+  [ ! -e "$recovery/webui.paused" ] && [ ! -L "$recovery/webui.paused" ] || return 0
+  if recovery_line "$working/lite_hidden" && [ "$recovery_value" = 1 ]; then :
+  elif recovery_line "$recovery/manager-restore.ticket"; then
+    case "$recovery_value" in pending:*) pending=${recovery_value#pending:} ;; *) return 0 ;; esac
+    [ "${#pending}" = 36 ] || return 0
+    case "$pending" in *[!a-f0-9-]*) return 0 ;; esac
+  else return 0; fi
+  [ -f "$recovery/webui.conf" ] && [ ! -L "$recovery/webui.conf" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in workMode=*) mode=${line#workMode=}; mode_count=$((mode_count + 1)) ;; esac
+  done < "$recovery/webui.conf"
+  [ "$mode_count" = 1 ] && [ "$mode" = LITE ] || return 0
+  [ -d "$recovery" ] && [ -f "$recovery/parasite-start.sh" ] &&
+    [ "$(stat -c '%h' "$recovery/parasite-start.sh")" = 1 ] || { record 73 recovery-start; return; }
+  for parent in /data/adb "$working" "$recovery" "$recovery/parasite-start.sh"; do
+    protected_recovery_path "$parent" || { record 73 recovery-start; return; }
+  done
+  /system/bin/sh "$recovery/parasite-start.sh" 9>&- || code=$?
+  record "$code" recovery-start
+}
 policies() {
   local directory
   set --
@@ -747,7 +787,8 @@ esac
       # The parked (>3) counter survives successful fallback boots.
       "$bin/maplesu-tools" module-preinit boot-completed 9>&-
       record "$?" preinit-boot-completed
-      stage_scripts "$event" ;;
+      stage_scripts "$event"
+      resume_hidden_recovery ;;
     *) stage_scripts "$event" ;;
   esac
   # Catch changes made by hooks as well as the merged/pruned module inventory.

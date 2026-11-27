@@ -158,9 +158,9 @@ static int msu_profile_regs(unsigned long (*lookup)(const char *))
     return 0;
 }
 
-static int msu_profile_workbit(unsigned long (*lookup)(const char *), u32 member, u32 *output)
+static int msu_profile_workbit_function(unsigned long (*lookup)(const char *),
+    const char *name, u32 member, bool references_only, u32 *output)
 {
-    const char *name = member ? "syscall_enter_from_user_mode_work" : "syscall_trace_enter";
     struct msu_profile_work_program program = { .initial_work_register = -1 };
     struct msu_runtime_btf_function function;
     struct msu_runtime_btf_type type;
@@ -169,12 +169,13 @@ static int msu_profile_workbit(unsigned long (*lookup)(const char *), u32 member
     u32 *code = NULL, *pending = NULL, i;
     s32 *jumps = NULL;
     u8 *reach = NULL;
-    unsigned long bytes, jump_start, jump_end, entry, pc, target;
+    unsigned long bytes, jump_start, jump_end, entry, pc, target, helper;
     u32 jump_bytes;
     s32 relative;
     s64 explicit;
     int error = msu_init_bridge_lookup_size(name, &program.address, &bytes);
     if (error) return error;
+    if (references_only && program.address != lookup(name)) return -ESTALE;
     if (!bytes || bytes > 16384 || bytes % 4) return -EPROTO;
     program.words = bytes / 4;
     program.tracepoint = lookup("__tracepoint_sys_enter");
@@ -236,6 +237,28 @@ static int msu_profile_workbit(unsigned long (*lookup)(const char *), u32 member
     if (copy_from_kernel_nofault(code, (void *)program.address, bytes)) { error = -EFAULT; goto out; }
     program.code = code;
     program.jump_targets = jumps;
+    if (references_only) {
+        error = msu_profile_work_flow(&program, states, pending);
+        if (error) goto out;
+        error = -ENOENT;
+        for (i = 0; i < program.words; ++i) if (states[i].reference) { error = 0; break; }
+        goto out;
+    }
+    helper = lookup("trace_sys_enter");
+    if (helper) {
+        error = msu_profile_work_flow(&program, states, pending);
+        if (error) goto out;
+    }
+    for (i = 0; helper && i < program.words; ++i) {
+        if (!states[i].seen || (code[i] & 0xfc000000U) != 0x94000000U ||
+            msu_profile_work_branch(program.address + i * 4, code[i], 26) != helper) continue;
+        /* A real call needs the helper's own reachable tracepoint reference.
+         * Its snapshot includes the same native static-key alternatives. */
+        error = msu_profile_workbit_function(lookup, "trace_sys_enter", 0, true, NULL);
+        if (error) goto out;
+        program.trace_helper = helper;
+        break;
+    }
     error = msu_profile_work_decode(&program, states, pending, reach, reach + program.words, output);
     if (!error && member) {
         error = msu_runtime_btf_enum("SYSCALL_WORK_BIT_SYSCALL_TRACEPOINT", &explicit);
@@ -244,6 +267,12 @@ static int msu_profile_workbit(unsigned long (*lookup)(const char *), u32 member
 out:
     kfree(jumps); kfree(reach); kfree(pending); kvfree(states); kfree(code);
     return error;
+}
+
+static int msu_profile_workbit(unsigned long (*lookup)(const char *), u32 member, u32 *output)
+{
+    return msu_profile_workbit_function(lookup,
+        member ? "syscall_enter_from_user_mode_work" : "syscall_trace_enter", member, false, output);
 }
 
 bool msu_task_profile_runtime_ready(void)

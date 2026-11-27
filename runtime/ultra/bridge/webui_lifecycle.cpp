@@ -1,4 +1,5 @@
 #include "webui_lifecycle.h"
+#include "../../maplesu-sdk/sdk/include/maplesu_request_private.h"
 #include "maplesu_sdk/features/maplesu_module_webui_loader.h"
 #include "../../maplesu-sdk/sdk/src/maplesu_core/module_webui_host.h"
 #include <cerrno>
@@ -11,16 +12,18 @@
 
 namespace maplesu {
 namespace {
-KModErr start_detached_module_webui(const char* key, const char* id, int& port,
+KModErr start_detached_module_webui(const char* id, int& port,
                                   std::string* module_directory) {
     // The SDK loader watches its creator and repeatedly runs device adaptation
     // until that creator exits. A short-lived creator hands server lifetime to
-    // the module's KeepRunning callback instead. Credentials stay in memory.
+    // the module's KeepRunning callback instead. Deployment facts travel through the private pipe.
     struct Receipt {
         KModErr error;
         int port;
         char module_directory[128];
     } receipt{KModErr::ERR_READ_CHILD_ERRCODE, 0, {}};
+    const auto admission = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(admission)) return admission;
     int fds[2];
     if (pipe2(fds, O_CLOEXEC) != 0) return receipt.error;
     const pid_t worker = fork();
@@ -30,7 +33,7 @@ KModErr start_detached_module_webui(const char* key, const char* id, int& port,
             if (module_directory) {
                 std::string directory;
                 receipt.error = maplesu::sdk::features::web_ui::start_module_web_ui_server_for_manager(
-                    key, id, receipt.port, directory);
+                    id, receipt.port, directory);
                 if (is_ok(receipt.error)) {
                     if (directory.empty() || directory.size() >= sizeof(receipt.module_directory)) {
                         receipt.error = KModErr::ERR_READ_CHILD_DATA;
@@ -39,7 +42,7 @@ KModErr start_detached_module_webui(const char* key, const char* id, int& port,
                     }
                 }
             } else {
-                receipt.error = maplesu::sdk::features::web_ui::start_module_web_ui_server_async(key, id, receipt.port);
+                receipt.error = maplesu::sdk::features::web_ui::start_module_web_ui_server_async(id, receipt.port);
             }
         } catch (...) {}
         ssize_t count;
@@ -71,12 +74,12 @@ KModErr start_detached_module_webui(const char* key, const char* id, int& port,
 }
 }
 
-KModErr start_detached_module_webui(const char* key, const char* id, int& port) {
-    return start_detached_module_webui(key, id, port, nullptr);
+KModErr start_detached_module_webui(const char* id, int& port) {
+    return start_detached_module_webui(id, port, nullptr);
 }
 
-KModErr start_detached_module_webui(const char* key, const char* id, int& port,
+KModErr start_detached_module_webui(const char* id, int& port,
                                  std::string& module_directory) {
-    return start_detached_module_webui(key, id, port, &module_directory);
+    return start_detached_module_webui(id, port, &module_directory);
 }
 }

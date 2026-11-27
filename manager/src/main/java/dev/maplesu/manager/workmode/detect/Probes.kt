@@ -16,6 +16,8 @@ data class UltraEnvironmentObservation(
     val state: UltraState,
     val kernelRootVerified: Boolean = false,
     val managerOwnerBound: Boolean = false,
+    /** Existing authenticated partition observation only; it grants no running capability. */
+    val installedCarrierVerified: Boolean = false,
 )
 
 fun interface UltraEnvironmentPort {

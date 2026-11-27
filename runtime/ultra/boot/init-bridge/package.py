@@ -257,23 +257,7 @@ def inspect_module(data, release, config, symvers, target_contract=None):
             "legacyCfi": legacy_facts, "coldBootOrSuQualified": False}
 
 
-def module_credential(data, name):
-    elf = ELFFile(io.BytesIO(data))
-    table = elf.get_section_by_name(".symtab")
-    symbols = table.get_symbol_by_name(name) if table is not None else None
-    if not symbols or len(symbols) != 1:
-        raise ValueError("ULTRA_BRIDGE_CREDENTIAL_SYMBOL_REQUIRED:" + name)
-    symbol = symbols[0]
-    if not isinstance(symbol["st_shndx"], int) or symbol["st_size"] < 48:
-        raise ValueError("ULTRA_BRIDGE_CREDENTIAL_SYMBOL_STORAGE")
-    section = elf.get_section(symbol["st_shndx"])
-    at = symbol["st_value"]
-    if section["sh_type"] == "SHT_NOBITS" or at > section["sh_size"] - 48:
-        raise ValueError("ULTRA_BRIDGE_CREDENTIAL_SYMBOL_STORAGE")
-    return section.data()[at:at + 48]
-
-
-def module_parameter_metadata(data, config):
+def module_keyless_metadata(data, config):
     pages = [size for token, size in (("4K", 4096), ("16K", 16384), ("64K", 65536))
              if config.get("CONFIG_ARM64_" + token + "_PAGES") == "y"]
     if config.get("CONFIG_ARM64") != "y" or config.get("CONFIG_MODULES") != "y" or len(pages) != 1:
@@ -284,8 +268,10 @@ def module_parameter_metadata(data, config):
     if table is None or info is None:
         raise ValueError("ULTRA_BRIDGE_MODULE_METADATA")
     parameter = [tag for tag in info.data().split(b"\0") if tag.startswith(b"parmtype=credential:")]
-    if parameter != [b"parmtype=credential:string"]:
-        raise ValueError("ULTRA_BRIDGE_CREDENTIAL_PARAMETER_TYPE")
+    if parameter:
+        raise ValueError("ULTRA_BRIDGE_LEGACY_CREDENTIAL_PARAMETER")
+    if info.data().split(b"\0").count(b"parmtype=deployment_namespace:string") != 1:
+        raise ValueError("ULTRA_BRIDGE_DEPLOYMENT_NAMESPACE_PARAMETER_TYPE")
     symbols = []
     for name in ("msu_sdk_call_prefix", "msu_sdk_call_blr"):
         found = table.get_symbol_by_name(name)
@@ -304,11 +290,11 @@ def module_parameter_metadata(data, config):
     displacement = pages[0] - (call - start)
     if not displacement or displacement % 4 or not -134217728 <= displacement <= 134217728:
         raise ValueError("ULTRA_BRIDGE_METADATA_DISPLACEMENT")
-    return {"credentialMode": "module-parameter", "metadataDisplacement": displacement,
+    return {"credentialMode": "keyless", "metadataDisplacement": displacement,
             "pageBytes": pages[0], "callBlrFromPrefix": call - start,
-            "credentialParameterType": "string", "parameterPermissionValidatedFromModule": False,
-            "parameterPermissionSource": "bridge.c:module_param_string(credential, credential, 49, 0)",
-            "runtimeCredentialOrCfiQualified": False}
+            "deploymentParameterType": "string", "parameterPermissionValidatedFromModule": False,
+            "parameterPermissionSource": "bridge.c:module_param_string(deployment_namespace, deployment_namespace, 17, 0)",
+            "runtimeIdentityOrCfiQualified": False}
 
 
 
@@ -572,7 +558,7 @@ def session_abi_main():
         # LTO may replace the original .o with bitcode. Keep the final-link
         # provenance explicit and require every definition's real DWARF CU.
         with derived.open("rb") as stream:
-            elf = ELFFile(stream)
+            elf = task_profile_api().dwarf_view(stream.read())
             if not elf.has_dwarf_info():
                 raise ValueError("ULTRA_BRIDGE_SESSION_LTO_DWARF_REQUIRED")
             needed = set(facts["callbacks"]) | {facts["symbol"]}
@@ -605,15 +591,17 @@ def session_abi_main():
     result.write_bytes(encoded)
     print(json.dumps(file_identity(result), indent=2))
 
-def publish_bundle(output, paths, data, release, module, source_data):
+def publish_bundle(output, paths, data, release, module, source_data, compact=False):
     files = {"target_boot": ("targetBoot", "target-boot.img"),
              "target_config": ("config", "target.config"),
              "symvers": ("moduleSymvers", "Module.symvers"),
              "target_contract": ("targetContract", "target-contract.json"),
              "bridge": ("bridge", "bridge.ko"), "handoff": ("handoff", "ultra-init"),
              "target_identity": (None, "target-identity.source.json")}
-    if "btf" in data:
+    if "btf" in data and not compact:
         files["btf"] = ("btf", "target.btf")
+    if compact:
+        files.pop("target_boot")
     if "abiEvidence" in module:
         data["abi_evidence"] = (json.dumps(module["abiEvidence"], indent=2) + "\n").encode("utf-8")
         if not 0 < len(data["abi_evidence"]) <= 1024 * 1024:
@@ -627,10 +615,19 @@ def publish_bundle(output, paths, data, release, module, source_data):
                 "kernelSha256": digest(data["kernel_image"])}
     if "targetVermagic" in module:
         manifest["targetVermagic"] = module["targetVermagic"]
-    if module["credentialMode"] == "module-parameter":
-        manifest.update(credentialMode="module-parameter", metadataDisplacement=module["metadataDisplacement"])
-    else:
-        manifest["credentialSha256"] = digest(data["credential_file"])
+    if compact:
+        spec = importlib.util.spec_from_file_location("bridge_reference_facts", Path(__file__).with_name("reference_facts.py"))
+        facts_api = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(facts_api)
+        generation = facts_api.generation(paths["bridge"].parent / "SOURCE-SELECTION.json", data["handoff"])
+        facts = facts_api.generate(data, release, module, generation)
+        data["reference_facts"] = facts_api.encoded(facts)
+        files["reference_facts"] = ("referenceFacts", "reference-facts.json")
+        manifest.update(schemaVersion=3, kind="target-template", sourceGenerationSha256=generation,
+                        targetBootSha256=digest(data["target_boot"]), targetVermagic=facts["sourceVermagic"])
+    if module["credentialMode"] != "keyless":
+        raise ValueError("ULTRA_BRIDGE_KEYLESS_COMPONENT_REQUIRED")
+    manifest.update(credentialMode="keyless", metadataDisplacement=module["metadataDisplacement"])
     if "session_abi" in data and not 0 < len(data["session_abi"]) <= 1024 * 1024:
         raise ValueError("ULTRA_BRIDGE_BUNDLE_SESSION_ABI_SIZE_LIMIT")
     if "task_profile_abi" in data and not 0 < len(data["task_profile_abi"]) <= 1024 * 1024:
@@ -849,7 +846,7 @@ def inspect_component_module(data, release, config, cfi_mode):
     tags = [x.decode("ascii") for x in info.data().split(b"\0") if x]
     if tags.count("maplesu_runtime_facts=1") != 1:
         raise ValueError("ULTRA_COMPONENT_RUNTIME_FACTS_REQUIRED")
-    for name in ("credential", "deployment_namespace"):
+    for name in ("deployment_namespace",):
         if tags.count("parmtype=" + name + ":string") != 1:
             raise ValueError("ULTRA_COMPONENT_PARAMETER:" + name)
     magic = [x[9:] for x in tags if x.startswith("vermagic=")]
@@ -866,7 +863,7 @@ def inspect_component_module(data, release, config, cfi_mode):
     if required - defined:
         raise ValueError("ULTRA_COMPONENT_RUNTIME_PRODUCERS:" + ",".join(sorted(required - defined)))
     direct = legacy_direct_api().inspect(data, actual_cfi)
-    metadata = module_parameter_metadata(data, config)
+    metadata = module_keyless_metadata(data, config)
     return dict(metadata, cfiMode=actual_cfi, requestedCfiMode=cfi_mode, buildVermagic=magic[0],
                 legacyDirectImports=direct, runtimeFactsAbi="maplesu-runtime-facts/1",
                 targetQualified=False, deviceQualified=False)
@@ -919,7 +916,7 @@ def component_main():
     generation = digest(catalog.encoded({"moduleSources": sources, "handoffSha256": digest(data["handoff"])}))
     manifest = dict(schemaVersion=2, kind="kmi-component", kmi=build_kmi or args.kmi, architecture="arm64",
                     pageSize=module["pageBytes"], cfiMode=module["cfiMode"], kernelRelease=release,
-                    credentialMode="module-parameter", metadataDisplacement=module["metadataDisplacement"],
+                    credentialMode="keyless", metadataDisplacement=module["metadataDisplacement"],
                     runtimeFactsAbi="maplesu-runtime-facts/1", sourceGenerationSha256=generation)
     files = {"bridge": "bridge.ko", "handoff": "ultra-init"}
     if "ksu_init" in data:
@@ -968,13 +965,11 @@ def main():
     add_python_dependency_options(parser)
     args = parser.parse_args()
     dependency = python_dependency(args)
-    if bool(args.credential_file) != bool(args.credential_symbol):
-        parser.error("ULTRA_BRIDGE_LEGACY_CREDENTIAL_PAIR_REQUIRED")
+    if args.credential_file or args.credential_symbol:
+        parser.error("ULTRA_BRIDGE_LEGACY_CREDENTIAL_INPUT_RETIRED")
     paths = {name: getattr(args, name).resolve() for name in
              ("target_boot", "kernel_image", "target_config", "symvers",
               "bridge", "handoff", "handoff_verifier", "target_identity", "target_contract")}
-    if args.credential_file:
-        paths["credential_file"] = args.credential_file.resolve()
     data = {name: path.read_bytes() for name, path in paths.items()}
     if args.session_abi:
         paths["session_abi"] = args.session_abi.resolve()
@@ -987,8 +982,6 @@ def main():
         paths["btf"] = args.btf.resolve()
         data["btf"] = paths["btf"].read_bytes()
         original_data["btf"] = data["btf"]
-    if "credential_file" in data and not re.fullmatch(rb"[A-Za-z0-9]{48}", data["credential_file"]):
-        raise ValueError("ULTRA_BRIDGE_CREDENTIAL_SHAPE")
     kdir = args.kernel_build.resolve()
     contract = json.loads(data["target_contract"])
     if not isinstance(contract, dict) or not contract:
@@ -1100,12 +1093,7 @@ def main():
     if kmi_contract:
         module["targetVermagic"] = contract["targetVermagic"]
         module["buildRelease"] = contract["buildRelease"]
-    if args.credential_file:
-        if module_credential(data["bridge"], args.credential_symbol) != data["credential_file"]:
-            raise ValueError("ULTRA_BRIDGE_CREDENTIAL_BINDING")
-        module["credentialMode"] = "legacy-embedded"
-    else:
-        module.update(module_parameter_metadata(data["bridge"], config))
+    module.update(module_keyless_metadata(data["bridge"], config))
     module["targetIdentitySha256"] = digest(data["target_identity"])
     module["targetContractFunctionalProofEvaluated"] = False
     # Use the shim owner's verifier; do not maintain a second static ELF parser.
@@ -1117,7 +1105,7 @@ def main():
         if path.read_bytes() != original_data[name]:
             raise ValueError("ULTRA_BRIDGE_INPUT_CHANGED:" + name)
     python_dependency(args)
-    publish_bundle(args.output.resolve(), paths, data, release, module, original_data)
+    publish_bundle(args.output.resolve(), paths, data, release, module, original_data, compact=True)
 
 
 if __name__ == "__main__":

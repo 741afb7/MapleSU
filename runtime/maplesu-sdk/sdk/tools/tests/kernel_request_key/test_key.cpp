@@ -1,4 +1,5 @@
 #include "module_base_kernel_request.h"
+#include "maplesu_request_private.h"
 
 #include <cstdarg>
 #include <array>
@@ -221,6 +222,8 @@ extern "C" long __wrap_syscall(long number, ...) {
 }
 
 int main() {
+    check(kernel_module::maplesu_request_set_auth_mode(kernel_module::RequestAuthMode::LegacyKey) == KModErr::OK,
+          "legacy protocol is selected explicitly; cold threads default to owner");
     bounds_red = std::getenv("MAPLESU_BOUNDS_RED") != nullptr;
     for (size_t length : {size_t(0), size_t(1), size_t(15), size_t(16), size_t(17), size_t(48), size_t(1023)}) {
         const std::string key(length, 'K');

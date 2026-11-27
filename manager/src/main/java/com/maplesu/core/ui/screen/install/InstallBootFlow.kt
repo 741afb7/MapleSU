@@ -59,13 +59,13 @@ internal data class BootFlowProfile(
  *
  * 生产装配是 [com.maplesu.core.ui.util.UltraKernelGeneration.port]：它真的会调
  * `UltraKernelFlow.generatePlan` 渲染这个内核的 plan，并把拒绝原因（`SITE_*` / `KALLSYMS` /
- * `CREDENTIAL_REQUIRED`）作为稳定码返回。这一层只决定"能不能修"，产物仍然由
+ * `CHANNEL_UNAVAILABLE`）作为稳定码返回。这一层只决定"能不能修"，产物仍然由
  * `UltraKernelInstall` 走既有 builder 门禁生成 —— 端口本身**不建镜像、不写盘**。
  */
 internal interface UltraKernelGenerationPort {
     /**
      * @param boot 将用于渲染的 boot 镜像；`null` = 调用方只有 release 字符串
-     *        （"当前分区"来源没有拷贝镜像），此时延后到用户确认安装时准备凭据并生成。
+     *        （"当前分区"来源没有拷贝镜像），此时延后到用户确认安装、取得真实镜像后生成。
      */
     fun plan(boot: File?, release: String): GenerationPlan
 
@@ -73,10 +73,9 @@ internal interface UltraKernelGenerationPort {
         /**
          * 已接线：能现场产出该内核的 spec。
          *
-         * @param specSha256 现算的**修补后内核**摘要（不是 spec 文本摘要 —— 后者含口令明文，
-         *        产品路径不落盘、不进 UI）。
+         * @param specSha256 现算的**修补后内核**摘要，来自实际应用补丁后的内核字节。
          * @param patches 记录条数；[deferred] 时为 0（写入前才渲染）。
-         * @param deferred `true` = 缺少镜像或修补凭据，确认安装/文件修补后再渲染。
+         * @param deferred `true` = 镜像缺失或已匹配 KMI 组件，候选准备时核验并生成。
          */
         data class Available(
             val specSha256: String,
@@ -126,7 +125,7 @@ internal object InstallBootFlow {
                 release = facts.release,
                 series = facts.series,
                 target = null,
-                // 端口的码优先：它比"目录里没有这个 release"更具体（缺凭据 / 站点半覆盖 /
+                // 端口的码优先：它比"目录里没有这个 release"更具体（通道未就绪 / 站点半覆盖 /
                 // kallsyms 走不通）。facts 的码只在端口没给码时兜底。
                 stableCode = plan.code.ifEmpty { facts.stableCode },
                 detail = plan.detail.ifEmpty {
@@ -214,7 +213,7 @@ internal fun probeCurrentBoot(deviceRelease: String): BootFlowProfile {
     if (deviceRelease.isBlank()) {
         return InstallBootFlow.failed("current", deviceRelease, "ULTRA_KERNEL_BASE_RELEASE_UNREADABLE")
     }
-    // 真正的源镜像、凭据与组件在 PRE 和构建阶段核实。
+    // 真正的源镜像与组件在 PRE 和构建阶段核实。
     return BootFlowProfile(source = "current", deviceRelease = deviceRelease, release = deviceRelease,
         series = ultraKernelFacts(deviceRelease).series)
 }

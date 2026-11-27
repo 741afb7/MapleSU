@@ -29,51 +29,12 @@ static void clear_parameters(char *parameters, size_t bytes) {
     while (bytes--) *at++ = 0;
 }
 
-static int read_parameters(char parameters[128]) {
-    const char *path = "/.maplesu_ultra/credential";
-    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) {
-        const int error = errno;
-        parameters[0] = 0;
-        if (error == ENOENT) return 1; // Existing embedded-credential artifacts need no file.
-        report_failure("open", path, error);
-        return 0;
-    }
-    size_t bytes = 0;
-    int error = 0;
-    memcpy(parameters, "credential=", 11);
-    while (bytes < 49) {
-        ssize_t count = read(fd, parameters + 11 + bytes, 49 - bytes);
-        if (count < 0) {
-            if (errno == EINTR) continue;
-            error = errno;
-            break;
-        }
-        if (count == 0) break;
-        bytes += (size_t)count;
-    }
-    if (!error && bytes != 48) error = EINVAL;
-    for (size_t index = 11; !error && index < 59; ++index) {
-        unsigned char value = (unsigned char)parameters[index];
-        if (!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'z') ||
-              (value >= 'A' && value <= 'Z'))) error = EINVAL;
-    }
-    if (error) report_failure("read", path, error);
-    const int closed = close(fd);
-    const int close_error = closed < 0 ? errno : 0;
-    if (close_error) report_failure("close", path, close_error);
-    if (unlink(path) < 0) report_failure("unlink", path, errno);
-    if (error || close_error) return 0;
-    parameters[59] = 0;
-    return 1;
-}
-
 static int read_deployment(char parameters[128]) {
     const char *path = "/.maplesu_ultra/deployment";
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) {
         const int error = errno;
-        if (error == ENOENT) return 1; // Old artifacts keep their config1 path.
+        // Standard carriers require their verified public deployment record.
         report_failure("open", path, error);
         return 0;
     }
@@ -118,16 +79,14 @@ static void load_bridge_once(void) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         report_failure("open", path, errno);
-        (void)read_parameters(parameters);
         (void)read_deployment(parameters);
         clear_parameters(parameters, sizeof(parameters));
         return;
     }
-    const int valid_parameters = read_parameters(parameters);
     const int valid_deployment = read_deployment(parameters);
     // Ordinary imports retain normal loading. Explicit legacy direct calls use
     // pinned-KSU SHN_ABS binding; signature/version failures are never retried.
-    const long loaded = valid_parameters && valid_deployment ? msu_load_bridge_fd(fd, parameters) : 0;
+    const long loaded = valid_deployment ? msu_load_bridge_fd(fd, parameters) : 0;
     const int load_error = loaded < 0 ? errno : 0;
     clear_parameters(parameters, sizeof(parameters));
     const int closed = close(fd);

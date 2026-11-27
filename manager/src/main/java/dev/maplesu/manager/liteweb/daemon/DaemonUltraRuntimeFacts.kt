@@ -35,11 +35,7 @@ class DaemonUltraRuntimeFacts(
         val state = runCatching {
             when (val sdk = openSdk()) {
                 is DaemonUltraSdkResult.Ready -> DaemonSdkFactMapping.state(sdk.client.environmentState())
-                is DaemonUltraSdkResult.Unavailable -> if (sdk.detail == "rootkey_absent") {
-                    DaemonUltraState.NO_KEY
-                } else {
-                    DaemonUltraState.UNKNOWN
-                }
+                is DaemonUltraSdkResult.Unavailable -> DaemonUltraState.UNKNOWN
             }
         }.getOrDefault(DaemonUltraState.UNKNOWN)
         // Do not even consult Normal metadata until the SDK explicitly reports NotInstalled.

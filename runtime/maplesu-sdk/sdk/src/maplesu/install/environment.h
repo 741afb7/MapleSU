@@ -10,10 +10,6 @@
 
 namespace maplesu::install::environment {
 
-inline const char* current_module_root_key() {
-    return __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-}
-
 inline std::string kernel_file_dir_path() {
     std::string directory;
     if (storage::current_kernel_directory(directory) != KModErr::OK) return {};

@@ -13,6 +13,76 @@ const msu_loader_u32 msu_manager_deployment_support_facts[] = {
 typedef int (*msu_permissions)(unsigned long, int);
 typedef int (*msu_materializer)(const struct msu_loader_binding *, const void *, void *, msu_loader_u32);
 
+/* This callback and the allocator/permissions stubs execute from the kernel
+ * Image. It may release the drained resident allocation and its external work
+ * control without returning into either allocation. Never attach it to READY. */
+static int msu_resident_retire(struct msu_resident_retirement *job)
+{
+    const struct msu_manager_claim_anchor *a = job->anchor;
+    const unsigned char *image = (const unsigned char *)a - a->self_offset;
+    struct msu_resident_slot *slot = job->slot;
+    int error, pages = job->allocation_bytes >> a->page_shift;
+    void (*free_job)(const void *) = job->free;
+
+    if (__atomic_load_n(&job->caller_active, __ATOMIC_ACQUIRE)) return -115;
+    if (__atomic_load_n(&slot->state, __ATOMIC_ACQUIRE) != MSU_RESIDENT_QUARANTINED ||
+        slot->memory != (msu_loader_uptr)job->memory || slot->reserved[0] != (msu_loader_uptr)job)
+        return -116;
+    if (!job->drained) {
+        error = job->discard();
+        if (error) return error;
+        job->drained = 1;
+    }
+    /* Once NX succeeds never execute a resident callback again, including
+     * on a later RW rollback failure. Only Image callbacks are used below. */
+    error = ((msu_permissions)(image + a->set_nx_offset))((unsigned long)job->memory, pages);
+    if (error) return error;
+    error = ((msu_permissions)(image + a->set_rw_offset))((unsigned long)job->memory, pages);
+    if (error) return error;
+    ((void (*)(void *))(image + a->release_offset))(job->memory);
+    slot->memory = slot->dispatch = slot->allocation_bytes = 0;
+    slot->reserved[0] = 0;
+    /* last_error remains the initiating error; reserved[1] records the latest
+     * cleanup error and attempts, and remains inspectable after release. */
+    slot->reserved[1] = (msu_loader_u64)job->attempts << 32;
+    __atomic_store_n(&slot->state, MSU_RESIDENT_EMPTY, __ATOMIC_RELEASE);
+    free_job(job);
+    return 0;
+}
+
+static void msu_manager_resident_retire_work(struct work_struct *work)
+{
+    struct msu_resident_retirement *job = (void *)((unsigned char *)work - sizeof(*job));
+    int error = msu_resident_retire(job);
+    if (!error) return; /* job and the resident allocation have been released. */
+    job->cleanup_error = error;
+    if (!job->first_cleanup_error) job->first_cleanup_error = error;
+    job->slot->reserved[2] = (msu_loader_u32)job->first_cleanup_error;
+    if (job->attempts != ~0U) ++job->attempts;
+    job->slot->reserved[1] = ((msu_loader_u64)job->attempts << 32) | (msu_loader_u32)error;
+    /* Workqueue retry only while ownership is retained; no userspace process,
+     * grant/event rescan, mutation replay, or bounded retry implies draining. */
+    if (job->delay < job->max_delay)
+        job->delay = job->delay > job->max_delay / 2 ? job->max_delay : job->delay * 2;
+    job->queue(job->cpu, job->wq, (struct delayed_work *)work, job->delay);
+}
+
+/* Keep the established entry at blob offset zero while compiling the actual
+ * work callback with the target's KCFI/normalize policy. External Image entry
+ * branches here, so its stub does not need an indirect-call type prefix. */
+#ifdef MSU_RESIDENT_RETIREMENT_KCFI
+__asm__(".pushsection .text.msu_manager_claim_bootstrap,\"ax\",%progbits\n"
+        ".balign 4\n.global msu_manager_claim_bootstrap\n"
+        ".type msu_manager_claim_bootstrap,%function\n"
+        "msu_manager_claim_bootstrap:\n b msu_manager_claim_bootstrap_impl\n"
+        ".size msu_manager_claim_bootstrap,.-msu_manager_claim_bootstrap\n.popsection\n");
+#define msu_manager_claim_bootstrap msu_manager_claim_bootstrap_impl
+#endif
+
+/* Preserve the original Image import adapters: only the new kernel work
+ * callback requires a KCFI prefix; allocator-kind adapters retain their
+ * established reference-ABI validation rather than new indirect checks. */
+__attribute__((no_sanitize("kcfi")))
 static int msu_resident_start(const struct msu_manager_claim_anchor *a,
     unsigned int initialize, struct msu_resident_slot **published)
 {
@@ -39,7 +109,8 @@ static int msu_resident_start(const struct msu_manager_claim_anchor *a,
         a->binding.descriptor_offset > a->binding.image_bytes ||
         a->binding.descriptor_bytes > a->binding.image_bytes - a->binding.descriptor_offset ||
         a->self_offset > a->binding.image_bytes - sizeof(*a) ||
-        a->credential_offset > a->binding.image_bytes - MSU_MANAGER_CLAIM_KEY_BYTES)
+        (a->credential_offset &&
+         a->credential_offset > a->binding.image_bytes - MSU_MANAGER_CLAIM_KEY_BYTES))
         return -22;
     if (!a->reserved[1] || a->reserved[1] % 4 ||
         a->reserved[1] > a->binding.image_bytes - 4 ||
@@ -127,27 +198,36 @@ static int msu_resident_start(const struct msu_manager_claim_anchor *a,
     if (error) goto cleanup;
     {
         struct msu_resident_config config;
-        struct msu_resident_config_v2 config_v2;
+        struct msu_resident_config_v3 config3 = {0};
+        struct msu_resident_config_v2 *config_v2 = &config3.base;
         const struct msu_resident_config *selected = &config;
         config.version = 1;
         config.append_bytes = resident->append_bytes;
         config.image = image;
         config.append = image + resident->append_offset;
-        config.credential = (const char *)image + a->credential_offset;
-        if (deployment) {
-            config_v2.version = 2;
-            config_v2.config_bytes = sizeof(config_v2);
-            config_v2.append_bytes = config.append_bytes;
-            config_v2.namespace_record_bytes = sizeof(*deployment);
-            config_v2.image = config.image;
-            config_v2.append = config.append;
-            config_v2.credential = config.credential;
-            config_v2.namespace_record = deployment;
-            selected = (const void *)&config_v2;
-        }
+        config.credential = a->credential_offset ? (const char *)image + a->credential_offset : 0;
+        config_v2->version = 3;
+        config_v2->config_bytes = sizeof(config3);
+        config_v2->append_bytes = config.append_bytes;
+        config_v2->namespace_record_bytes = deployment ? sizeof(*deployment) : 0;
+        config_v2->image = config.image;
+        config_v2->append = config.append;
+        config_v2->credential = config.credential;
+        config_v2->namespace_record = deployment;
+        config3.anchor = a;
+        config3.slot = slot;
+        config3.memory = memory;
+        config3.allocation_bytes = bytes;
+        config3.retire_work = msu_manager_resident_retire_work;
+        selected = (const void *)&config3;
         initialized = 1;
         entry = ((int (*)(const struct msu_resident_config *))(memory + resident->init_offset))(selected);
         if (entry) { slot->last_error = entry; goto cleanup; }
+        if (slot->reserved[0]) {
+            struct msu_resident_retirement *job = (void *)(msu_loader_uptr)slot->reserved[0];
+            slot->reserved[0] = 0;
+            job->free(job); /* Never queued on the successful startup path. */
+        }
         slot->memory = (msu_loader_uptr)memory;
         slot->dispatch = (msu_loader_uptr)(memory + resident->dispatch_offset);
         slot->allocation_bytes = bytes;
@@ -158,6 +238,18 @@ static int msu_resident_start(const struct msu_manager_claim_anchor *a,
 cleanup:
     if (error) slot->last_error = error;
     error = slot->last_error;
+    if (initialized && slot->reserved[0]) {
+        struct msu_resident_retirement *job = (void *)(msu_loader_uptr)slot->reserved[0];
+        slot->memory = (msu_loader_uptr)memory;
+        slot->allocation_bytes = bytes;
+        slot->dispatch = 0;
+        __atomic_store_n(&slot->state, MSU_RESIDENT_QUARANTINED, __ATOMIC_RELEASE);
+        /* The queue may run on another CPU before this bootstrap returns. Its
+         * acquire gate protects all slot/job writes until this final store. */
+        job->queue(job->cpu, job->wq, (struct delayed_work *)((unsigned char *)job + sizeof(*job)), job->delay);
+        __atomic_store_n(&job->caller_active, 0, __ATOMIC_RELEASE);
+        return error;
+    }
     if (initialized &&
         ((int (*)(void))(memory + resident->discard_offset))()) {
         slot->memory = (msu_loader_uptr)memory;

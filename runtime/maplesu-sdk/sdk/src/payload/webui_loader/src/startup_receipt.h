@@ -2,13 +2,69 @@
 
 #include <cerrno>
 #include <cstdint>
+#include <cstring>
 #include <unistd.h>
+#include "maplesu/compat/native_module_abi.h"
 
 namespace maplesu::payload::webui {
 
 // Private SDK/payload startup channel. This is not a module or kernel ABI.
 inline constexpr const char* kReadyArgument = "--maplesu-webui-ready-v1";
 inline constexpr const char* kOwnerDirectoryArgument = "--maplesu-webui-directory-v1";
+inline constexpr const char* kLegacyDirectoryArgument = "--maplesu-webui-directory-legacy-v1";
+
+// Present only when the caller explicitly configured the historical module ABI.
+// This record follows the unchanged directory record on the same anonymous FD.
+struct LegacyCredential {
+    uint32_t magic = 0x4d574b31;
+    uint16_t version = 1;
+    uint16_t size = 64;
+    char value[49]{};
+    uint8_t reserved[7]{};
+};
+static_assert(sizeof(LegacyCredential) == 64);
+
+inline void clear_legacy_credential(LegacyCredential& credential) {
+    volatile char* value = credential.value;
+    for (size_t i = 0; i < sizeof(credential.value); ++i) value[i] = 0;
+}
+
+inline bool valid_credential(const LegacyCredential& credential) {
+    if (credential.magic != 0x4d574b31 || credential.version != 1 ||
+        credential.size != sizeof(credential) ||
+        !maplesu::compat::native_module::valid_legacy_credential(credential.value)) return false;
+    for (uint8_t byte : credential.reserved) if (byte != 0) return false;
+    return true;
+}
+
+inline bool write_legacy_credential(int fd, const LegacyCredential& credential) {
+    if (!valid_credential(credential)) return false;
+    const char* data = reinterpret_cast<const char*>(&credential);
+    size_t remaining = sizeof(credential);
+    while (remaining != 0) {
+        const ssize_t count = ::write(fd, data, remaining);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) return false;
+        data += count;
+        remaining -= static_cast<size_t>(count);
+    }
+    return true;
+}
+
+inline bool read_legacy_credential(int fd, LegacyCredential& credential) {
+    char* data = reinterpret_cast<char*>(&credential);
+    size_t remaining = sizeof(credential);
+    while (remaining != 0) {
+        const ssize_t count = ::read(fd, data, remaining);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) { clear_legacy_credential(credential); return false; }
+        data += count;
+        remaining -= static_cast<size_t>(count);
+    }
+    if (valid_credential(credential)) return true;
+    clear_legacy_credential(credential);
+    return false;
+}
 
 // A path fact from the authenticated worker, never a session or Root credential.
 struct DeploymentDirectory {

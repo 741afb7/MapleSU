@@ -34,9 +34,6 @@ namespace kernel_root {
 int parasite_check_so_link(const char*, const char*);
 int parasite_start_link_so(const char*, const char*);
 }
-namespace maplesu::sdk {
-KModErr get_su_auth_list_with_cb(const char*, void (*)(const su_auth_item*));
-}
 
 #ifndef MAPLESU_PARASITE_PROC_ROOT
 #define MAPLESU_PARASITE_PROC_ROOT "/proc"
@@ -278,7 +275,7 @@ ParasiteError owner_target_authorized(const char* cmdline) {
         ~Reset() { captured = output; }
     } reset{captured};
     captured = &allowed;
-    const auto error = maplesu::su_auth::get_uid_profiles_with_cb(nullptr, [](const maplesu::su_auth::UidProfileV1* row) {
+    const auto error = maplesu::su_auth::get_uid_profiles_with_cb([](const maplesu::su_auth::UidProfileV1* row) {
         if (row && captured && row->allow) captured->insert(row->uid);
     });
     if (is_failed(error)) return static_cast<ParasiteError>(error);
@@ -286,7 +283,7 @@ ParasiteError owner_target_authorized(const char* cmdline) {
     return PARASITE_OK;
 }
 
-ParasiteError implant(const char* key, const char* cmdline, const char* original, const char* su_dir) {
+ParasiteError implant(const char* cmdline, const char* original, const char* su_dir) {
     Libraries eligible;
     auto error = precheck(cmdline, eligible);
     if (error) return error;
@@ -296,25 +293,8 @@ ParasiteError implant(const char* key, const char* cmdline, const char* original
         struct stat st{};
         if (lstat(MAPLESU_PARASITE_START, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != 0 ||
             (st.st_mode & 0022) != 0) return PARASITE_RECOVERY_MISSING;
-        std::string package(cmdline); package = package.substr(0, package.find(':'));
-        if (!key) {
-            const auto authorized = owner_target_authorized(cmdline);
-            if (authorized) return authorized;
-        } else {
-            bool found = false;
-            // The prebuilt exports the callback ABI, not the inline vector convenience API.
-            thread_local const std::string* expected_package = nullptr;
-            thread_local bool* authorized = nullptr;
-            expected_package = &package; authorized = &found;
-            auto auth_error = maplesu::sdk::get_su_auth_list_with_cb(key, [](const maplesu::sdk::su_auth_item* item) {
-                if (item && expected_package && authorized &&
-                    strnlen(item->app_package_name, sizeof(item->app_package_name)) < sizeof(item->app_package_name) &&
-                    *expected_package == item->app_package_name) *authorized = true;
-            });
-            expected_package = nullptr; authorized = nullptr;
-            if (is_failed(auth_error)) return static_cast<ParasiteError>(auth_error);
-            if (!found) return -31003;
-        }
+        const auto authorized = owner_target_authorized(cmdline);
+        if (authorized) return authorized;
     } else {
         if (canonical(su_dir) != su_dir || strchr(su_dir, ':')) return PARASITE_PARAM;
         struct stat st{};
@@ -421,14 +401,14 @@ ParasiteError implant(const char* key, const char* cmdline, const char* original
 }
 
 struct Reply { int64_t error; uint32_t count; uint32_t reserved = 0; };
-ParasiteError invoke(const char* key, const char* cmdline, const char* so, const char* su,
+ParasiteError invoke(const char* cmdline, const char* so, const char* su,
                     void (*callback)(const char*, AppDynlibStatus)) {
     const auto auth = kernel_module::maplesu_request_auth_state();
-    if (!kernel_module::maplesu_request_auth_usable(auth) ||
-        (kernel_module::maplesu_request_auth_authenticated(auth) ? key != nullptr :
-            (!key || strnlen(key, 49) != 48)) || !identifier(cmdline) ||
+    if (!kernel_module::maplesu_request_auth_authenticated(auth) || !identifier(cmdline) ||
         (so && (so[0] != '/' || strnlen(so, PATH_MAX) == PATH_MAX)) ||
         (su && (su[0] != '/' || strnlen(su, 1024) == 1024))) return PARASITE_PARAM;
+    const auto admitted = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(admitted)) return static_cast<ParasiteError>(admitted);
     int pipes[2];
     if (pipe2(pipes, O_CLOEXEC) != 0) return PARASITE_CHILD;
     Fd input(pipes[0]), output(pipes[1]);
@@ -440,13 +420,11 @@ ParasiteError invoke(const char* key, const char* cmdline, const char* so, const
         Libraries libraries;
         ParasiteError error = PARASITE_CHILD;
         try {
-            error = static_cast<ParasiteError>(maplesu::sdk::get_root(key));
-            if (!error) error = so ? implant(key, cmdline, so, su) : precheck(cmdline, libraries);
+            error = static_cast<ParasiteError>(maplesu::sdk::get_root());
+            if (!error) error = so ? implant(cmdline, so, su) : precheck(cmdline, libraries);
         } catch (...) { error = PARASITE_CHILD; libraries.clear(); }
-        if (!key) {
-            const auto closed = kernel_module::maplesu_request_owner_close();
-            if (!error && is_failed(closed)) error = static_cast<ParasiteError>(closed);
-        }
+        const auto closed = kernel_module::maplesu_request_owner_close();
+        if (!error && is_failed(closed)) error = static_cast<ParasiteError>(closed);
         Reply reply{error, error ? 0 : static_cast<uint32_t>(libraries.size())};
         bool sent = transfer(output.value, &reply, sizeof(reply), true);
         if (!error) for (const auto& item : libraries) {
@@ -502,17 +480,17 @@ ParasiteError invoke(const char* key, const char* cmdline, const char* so, const
 }
 
 namespace kernel_root {
-ParasiteError parasite_precheck_app_with_cb(const char* key, const char* cmdline,
+ParasiteError parasite_precheck_app_with_cb(const char* cmdline,
                                           void (*callback)(const char*, AppDynlibStatus)) {
     if (!callback) return PARASITE_PARAM;
-    return invoke(key, cmdline, nullptr, nullptr, callback);
+    return invoke(cmdline, nullptr, nullptr, callback);
 }
-ParasiteError parasite_implant_app(const char* key, const char* cmdline, const char* so) {
+ParasiteError parasite_implant_app(const char* cmdline, const char* so) {
     if (!so) return PARASITE_PARAM;
-    return invoke(key, cmdline, so, nullptr, nullptr);
+    return invoke(cmdline, so, nullptr, nullptr);
 }
-ParasiteError parasite_implant_su_env(const char* key, const char* cmdline, const char* so, const char* su) {
+ParasiteError parasite_implant_su_env(const char* cmdline, const char* so, const char* su) {
     if (!so || !su) return PARASITE_PARAM;
-    return invoke(key, cmdline, so, su, nullptr);
+    return invoke(cmdline, so, su, nullptr);
 }
 }

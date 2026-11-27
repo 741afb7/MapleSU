@@ -109,7 +109,7 @@ fun MiuixKernelSUTheme(
                 colorSpec=colorSpec,contrastLevel=appSettings.contrast,generationMode=appSettings.generationMode,
             )
             val adapted = if (wallpaperStyle != null && wallpaperStyle.darkNeutral != darkTheme) common.withThemeNeutral(neutral) else common
-            val scheme = if (!imported.has("colorGenerationMode") && wallpaperStyle == null) native else native.copy(
+            val baseScheme = if (!imported.has("colorGenerationMode") && wallpaperStyle == null) native else native.copy(
                 primary = common.primary, onPrimary = common.onPrimary,
                 primaryVariant = common.primaryContainer, onPrimaryVariant = common.onPrimaryContainer,
                 primaryContainer = common.primaryContainer, onPrimaryContainer = common.onPrimaryContainer,
@@ -125,6 +125,7 @@ fun MiuixKernelSUTheme(
                 error = common.error, onError = common.onError, errorContainer = common.errorContainer, onErrorContainer = common.onErrorContainer,
                 outline = adapted.outline, dividerLine = adapted.outlineVariant,
             )
+            val scheme = baseScheme.withSukisuColors(imported)
             val fonts = MiuixTheme.textStyles.withFamily(themeFontFamily())
 
             // Miuix 有公开重载 MiuixTheme(colorScheme: Colors, ...),

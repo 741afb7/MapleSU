@@ -45,7 +45,10 @@
 asmlinkage long __arm64_sys_setns(const struct pt_regs *regs);
 asmlinkage long __arm64_sys_unshare(const struct pt_regs *regs);
 asmlinkage long __arm64_sys_close(const struct pt_regs *regs);
-extern int path_mount(const char *dev_name, struct path *path,
+#ifndef MSU_PATH_MOUNT_PATH_QUALIFIER
+#error path_mount target type selection required
+#endif
+extern int path_mount(const char *dev_name, MSU_PATH_MOUNT_PATH_QUALIFIER struct path *path,
     const char *type_page, unsigned long flags, void *data_page);
 
 static_assert(__builtin_types_compatible_p(typeof(&__arm64_sys_setns),

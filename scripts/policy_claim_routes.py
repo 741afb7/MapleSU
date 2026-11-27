@@ -51,12 +51,18 @@ def verify_native_module(module, contract, components):
     sys.path.insert(0, str(ROOT / 'tools/specgen'))
     from specgen.bootimg import _inspect, decode as decode_kernel
     from specgen.kallsyms import decode as decode_symbols
-    boot = components['targetBoot']
-    layout = _inspect(boot)
-    require(layout['kernelSize'] > 0, 'TARGET_BOOT_KERNEL')
-    image = decode_kernel(boot[layout['kernelOffset']:layout['kernelOffset'] + layout['kernelSize']])
-    require(digest(image) == contract['inputs']['kernelImage']['sha256'], 'TARGET_KERNEL')
-    require(api('legacy_cfi_contract').target_facts(image, decode_symbols(image)) == contract['legacyCfi'], 'TARGET_CFI')
+    if 'targetBoot' in components:
+        boot = components['targetBoot']
+        layout = _inspect(boot)
+        require(layout['kernelSize'] > 0, 'TARGET_BOOT_KERNEL')
+        image = decode_kernel(boot[layout['kernelOffset']:layout['kernelOffset'] + layout['kernelSize']])
+        require(digest(image) == contract['inputs']['kernelImage']['sha256'], 'TARGET_KERNEL')
+        require(api('legacy_cfi_contract').target_facts(image, decode_symbols(image)) == contract['legacyCfi'], 'TARGET_CFI')
+    else:
+        facts = json.loads(components['referenceFacts'])
+        require(facts.get('schema') == 'maplesu-init-bridge-reference-facts/1' and
+                facts.get('legacyCfi') is True and
+                facts.get('referenceKernelSha256') == contract['inputs']['kernelImage']['sha256'], 'SOURCE_CFI_FACTS')
     config = dict(line.split('=', 1) for line in components['config'].decode().splitlines()
                   if line.startswith('CONFIG_') and '=' in line)
     # Reuse normal MODULE/package qualification. This adds no raw BTF requirement.
@@ -95,9 +101,13 @@ def catalog_routes(read, raw_sources=None, verify_module=verify_native_module):
                 digest(encoded(proof['generationInputs'])) == generation, 'SOURCE_GENERATION')
         for key in ('manifestSha256', 'targetBootSha256', 'kernelSha256'):
             require(proof.get(key) == row.get(key), 'PROOF_BINDING:' + key)
-        require(manifest.get('schemaVersion') == 1 and all(field in manifest for field in REQUIRED_COMPONENTS),
+        compact = manifest.get('schemaVersion') == 3
+        required = (tuple(field for field in REQUIRED_COMPONENTS if field != 'targetBoot') + ('referenceFacts',)) if compact else REQUIRED_COMPONENTS
+        require(manifest.get('schemaVersion') in (1, 3) and all(field in manifest for field in required),
                 'MODULE_COMPONENTS')
-        components = {field: read(prefix + relative(manifest[field])) for field in REQUIRED_COMPONENTS}
+        if compact:
+            require(manifest.get('kind') == 'target-template' and not ({'targetBoot', 'btf', 'btfSha256'} & manifest.keys()), 'COMPACT_SCHEMA')
+        components = {field: read(prefix + relative(manifest[field])) for field in required}
         for field, body in components.items():
             require(digest(body) == manifest.get(field + 'Sha256'), 'COMPONENT_IDENTITY:' + field)
         require(proof['generationInputs'].get('handoffSha256') == digest(components['handoff']), 'HANDOFF_GENERATION')
@@ -105,6 +115,11 @@ def catalog_routes(read, raw_sources=None, verify_module=verify_native_module):
                 manifest['kernelSha256'] == row['kernelSha256'], 'TARGET_IDENTITY')
         contract = json.loads(components['targetContract'])
         require(contract.get('schema') == 'maplesu-init-bridge-kmi-target/1', 'TARGET_CONTRACT')
+        if compact:
+            facts = json.loads(components['referenceFacts'])
+            require(manifest.get('sourceGenerationSha256') == generation and
+                    proof.get('targetInputs', {}).get('referenceFacts') == manifest['referenceFactsSha256'], 'COMPACT_GENERATION')
+            api('reference_facts').verify(facts, manifest, contract, components)
         inputs = contract.get('inputs', {})
         for field, key in (('targetBoot', 'targetBoot'), ('config', 'targetConfig')):
             require(inputs.get(key, {}).get('sha256') == manifest[field + 'Sha256'], 'CONTRACT_TARGET:' + key)

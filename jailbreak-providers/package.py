@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import gzip
 import json
+import os
 import sys
 import re
 import shutil
@@ -627,9 +628,12 @@ def build(report, output_dir, jni_dir, manifest_path, variant="minimal"):
     assets_dir.mkdir(parents=True, exist_ok=True)
     profile_files, profile_index = stage_profiles(assets_dir)
     ir_block = stage_ir(report, assets_dir)
+    source_date_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    generated_at = (datetime.now(timezone.utc) if source_date_epoch is None else
+                    datetime.fromtimestamp(int(source_date_epoch), timezone.utc))
     document = {
         "schemaVersion": 2,
-        "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
+        "generatedAtUtc": generated_at.isoformat(),
         "contract": "TRANSIENT_PROVIDER_RESTORE_V1",
         "koVariant": variant,
         "sourceCommit": overlay.get("upstreamCommit", ""),

@@ -1,4 +1,4 @@
-/* Synchronous environment-owned loader. The root credential stays in-process. */
+/* Synchronous environment-owned loader for an already Root helper task. */
 #include <dlfcn.h>
 #include <stdint.h>
 #include <errno.h>
@@ -67,19 +67,19 @@ static void* load_backend(void) {
     close(fd);
     return backend;
 }
-int64_t maplesu_helper_su_writer_load(const void* packages, const char* key, const char* module) {
+int64_t maplesu_helper_su_writer_load(const void* packages, const char* module) {
     void* backend = load_backend();
     if (!backend) return -21002;
-    int64_t (*entry)(const void*, const char*, const char*) =
-        (int64_t (*)(const void*, const char*, const char*))dlsym(backend, "maplesu_helper_su_write");
+    int64_t (*entry)(const void*, const char*) =
+        (int64_t (*)(const void*, const char*))dlsym(backend, "maplesu_helper_su_write");
     if (!entry) return -21003;
-    return entry(packages, key, module);
+    return entry(packages, module);
 }
-int64_t maplesu_helper_su_exec_load(void* object, uint64_t control, const char* key, const char* module) {
+int64_t maplesu_helper_su_exec_load(void* object, uint64_t control, const char* module) {
     void* backend = load_backend();
     if (!backend) return -21002;
-    int64_t (*entry)(void*, uint64_t, const char*, const char*) =
-        (int64_t (*)(void*, uint64_t, const char*, const char*))dlsym(backend, "maplesu_helper_su_exec");
+    int64_t (*entry)(void*, uint64_t, const char*) =
+        (int64_t (*)(void*, uint64_t, const char*))dlsym(backend, "maplesu_helper_su_exec");
     if (!entry) return -21003;
-    return entry(object, control, key, module);
+    return entry(object, control, module);
 }

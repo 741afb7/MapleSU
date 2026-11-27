@@ -81,7 +81,7 @@ class SourceIntegrationTest(unittest.TestCase):
             for field in package.MAPLESU93260_ADDRESS_FIELDS:
                 self.assertRegex(default["addresses"][field], r"^[0-9a-f]{1,16}$")
             plants = [item for item in inventory["profiles"] if item["engine"] == "plant"]
-            self.assertEqual(12, len(plants))
+            self.assertEqual(13, len(plants))
             self.assertEqual([], inventory["declared"])
             for profile in plants:
                 self.assertRegex(profile["runner"], r"^plant-\d{5}$")

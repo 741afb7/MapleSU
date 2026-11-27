@@ -3,7 +3,6 @@ package dev.maplesu.manager.runtime
 import android.content.Context
 import com.topjohnwu.superuser.Shell
 import java.io.File
-import java.nio.ByteBuffer
 
 /**
  * Management primitive. A su client must go through the authorization backend.
@@ -14,8 +13,10 @@ class MapleSuCommandExecutor(context: Context) {
     private val executable = File(context.applicationInfo.nativeLibraryDir, "libmaplesu_runtime.so")
 
     /** Blocking management adapter. The caller owns the returned Shell and must close it. */
-    fun openShell(credential: ByteArray, globalMnt: Boolean = false): Shell {
-        val process = start(credential, listOf("/system/bin/sh"), globalMnt = globalMnt)
+    fun openShell(globalMnt: Boolean = false): Shell =
+        openProcessShell(start(listOf("/system/bin/sh"), globalMnt = globalMnt))
+
+    private fun openProcessShell(process: Process): Shell {
         var shell: Shell? = null
         var accepted = false
         try {
@@ -33,21 +34,14 @@ class MapleSuCommandExecutor(context: Context) {
     }
 
     fun start(
-        credential: ByteArray,
         command: List<String>,
         directory: File? = null,
         environment: Map<String, String> = emptyMap(),
         globalMnt: Boolean = false,
-    ): Process {
-        requireValidMapleSuCredential(credential)
-        val mode = if (globalMnt) "--maplesu-global-stdin" else "--maplesu-stdin"
-        return writeMapleSuCredential(launch(mode, command, directory, environment), credential)
-    }
+    ): Process = launch(if (globalMnt) "--ultra-global" else "--ultra", command, directory, environment)
 
-    internal fun startModule(credential: ByteArray, command: List<String>, environment: Array<String>): Process {
-        requireValidMapleSuCredential(credential)
-        return writeMapleSuCredential(launch("--maplesu-stdin", command, null, emptyMap(), environment), credential)
-    }
+    internal fun startModule(command: List<String>, environment: Array<String>): Process =
+        launch("--ultra", command, null, emptyMap(), environment)
 
     internal fun startUnprivileged(
         command: List<String>,
@@ -71,19 +65,6 @@ class MapleSuCommandExecutor(context: Context) {
             if (moduleEnvironment != null) ModuleTaskEnvironment.replace(environment(), moduleEnvironment)
             environment().putAll(environment)
         }.start()
-    }
-}
-
-/** On failure no Process reaches the caller, so this function retains cleanup ownership. */
-internal fun writeMapleSuCredential(process: Process, credential: ByteArray): Process {
-    try {
-        process.outputStream.write(ByteBuffer.allocate(4).putInt(48).array())
-        process.outputStream.write(credential)
-        process.outputStream.flush()
-        return process
-    } catch (error: Exception) {
-        destroyMapleSuProcess(process)
-        throw error
     }
 }
 

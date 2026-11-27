@@ -28,6 +28,7 @@ data class StoreTheme(
     val mirrors: List<String> = emptyList(),
 ) {
     val downloadSources: List<String> get() = (listOf(download)+mirrors).distinct()
+    fun metadata() = ThemeMetadata(name, type, version, author, description)
     internal fun json() = JSONObject().put("id", id).put("name", name).put("author", author)
         .put("version", version).put("description", description).put("type", type).put("source", source)
         .put("preview_url", preview).put("download_url", download).put("download_sha256", sha256)
@@ -58,6 +59,13 @@ class ThemeStore internal constructor(context: Context, private val client: OkHt
     .followSslRedirects(false).build()) {
     private val context = context.applicationContext
     private val root = File(context.filesDir, "themes/store").apply { mkdirs() }
+    // A custom authentication header must never follow a redirect to a different origin.
+    private val credentialClient = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val access = SukisuThemeAccess(object : SukisuAccessStore {
+        private val credentials = this@ThemeStore.context.getSharedPreferences("theme_sukisu_access", Context.MODE_PRIVATE)
+        override fun get(key: String) = credentials.getString(key, null)
+        override fun put(key: String, value: String) = credentials.edit().putString(key, value).commit()
+    })
     private val prefs get() = com.maplesu.core.ui.util.AppearancePreferences.prefs(context)
     fun source(): ThemeStoreSource = runCatching { ThemeStoreSource.resolve(
         prefs.getString(ThemeStoreSource.PREFERENCE,null),prefs.getString(ThemeStoreSource.CUSTOM_URL,"").orEmpty())
@@ -74,8 +82,26 @@ class ThemeStore internal constructor(context: Context, private val client: OkHt
     fun packageFile(theme: StoreTheme) = File(root, "${key(theme)}.fpt")
     fun samePackage(a: StoreTheme, b: StoreTheme) = key(a) == key(b)
 
-    private suspend fun <T> response(request: Request, block: suspend (Response) -> T): T = coroutineScope {
-        val call = client.newCall(request)
+    private suspend fun <T> response(request: Request, block: suspend (Response) -> T): T {
+        val base = SukisuThemeAccess.baseFor(request.url) ?: return rawResponse(request, block = block)
+        suspend fun credential(rejectedToken: String? = null) = access.token(base, rejectedToken) { accessRequest ->
+            rawResponse(accessRequest, credentials = true) {
+                it.code to readSmall(it.body.byteStream(), 64 * 1024).toString(Charsets.UTF_8)
+            }
+        }
+        val token = credential()
+        return rawResponse(request.newBuilder().header(SukisuThemeAccess.HEADER, token).build(), credentials = true) {
+            if (it.code == 401) {
+                it.close()
+                val fresh = credential(token)
+                rawResponse(request.newBuilder().header(SukisuThemeAccess.HEADER, fresh).build(), credentials = true, block = block)
+            } else block(it)
+        }
+    }
+
+    private suspend fun <T> rawResponse(request: Request, credentials: Boolean = false,
+        block: suspend (Response) -> T): T = coroutineScope {
+        val call = (if (credentials) credentialClient else client).newCall(request)
         val cancellation = launch(start = CoroutineStart.UNDISPATCHED) {
             try { awaitCancellation() } finally { call.cancel() }
         }
@@ -209,7 +235,7 @@ class ThemeStore internal constructor(context: Context, private val client: OkHt
         }
         // Validate the actual container before publishing a library item. Applying remains separate.
         val repo = ThemeRepository(context)
-        val prepared = try { repo.prepare(android.net.Uri.fromFile(partial)) }
+        val prepared = try { repo.prepare(android.net.Uri.fromFile(partial), theme.metadata()) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { partial.delete(); state.delete(); throw e }
         repo.discard(prepared)
@@ -252,9 +278,43 @@ class ThemeStore internal constructor(context: Context, private val client: OkHt
     }
 
     companion object {
+        /** A browser has no access to private store credentials; keep protected downloads in-app. */
+        internal fun browserDownload(theme: StoreTheme, mode: String): String? = theme.download.takeIf {
+            mode == "compat" && it.toHttpUrlOrNull()?.let(SukisuThemeAccess::baseFor) == null
+        }
+
         internal fun parse(text: String, indexUrl: String? = null): List<StoreTheme> {
-            val array = JSONArray(text)
             val base = indexUrl?.toHttpUrlOrNull()
+            val array = if (text.trimStart().startsWith("{")) {
+                val catalog = JSONObject(text)
+                require(catalog.getInt("schema") == 1) { "Unsupported SukiSU catalog schema" }
+                check(!catalog.optBoolean("maintenance")) { "SukiSU theme store maintenance" }
+                val themes = catalog.getJSONArray("themes")
+                JSONArray().apply { for (i in 0 until themes.length()) {
+                    val item = themes.getJSONObject(i)
+                    val format = item.optInt("formatVersion", 2)
+                    if (format !in 1..5) continue
+                    val origin = requireNotNull(base) { "SukiSU catalog origin is missing" }
+                    fun asset(field: String): String {
+                        val path = item.optString(field)
+                        if (path.isBlank()) return ""
+                        val resolved = requireNotNull(origin.resolve(path)) { "Invalid SukiSU resource path" }
+                        require(resolved.isHttps && resolved.host == origin.host && resolved.port == origin.port &&
+                            resolved.username.isEmpty() && resolved.password.isEmpty() && resolved.fragment == null) { "Invalid SukiSU resource origin" }
+                        return resolved.toString()
+                    }
+                    val download = asset("path")
+                    require(item.getString("sha256").matches(Regex("[0-9a-fA-F]{64}"))) { "Invalid SukiSU SHA-256" }
+                    val mirrors = if (SukisuThemeAccess.baseFor(origin) != null) ThemeStoreSource.SUKI_MIRRORS
+                        .mapNotNull { it.toHttpUrlOrNull()?.resolve(item.getString("path"))?.toString() }
+                        .filter { it != download } else emptyList()
+                    put(JSONObject().put("id", item.getString("id")).put("name", item.getString("name"))
+                        .put("author", item.optString("author")).put("version", item.opt("version").toString())
+                        .put("description", item.optString("description")).put("type", "phone").put("source", "sukisu")
+                        .put("download_url", download).put("preview_url", asset("previewPath"))
+                        .put("download_sha256", item.getString("sha256")).put("download_mirrors", JSONArray(mirrors)))
+                } }
+            } else JSONArray(text)
             fun resolve(value: String) = if (value.isBlank()) value else base?.resolve(value)?.toString() ?: value
             val entries = (0 until array.length()).mapNotNull { runCatching {
                 val entry = JSONObject(array.getJSONObject(it).toString())

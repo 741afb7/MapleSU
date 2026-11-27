@@ -23,6 +23,33 @@ class EnvironmentProbeRunnerTest {
         assertSame(error, (result as EnvironmentProbeResult.Failed).cause)
     }
 
+    @Test fun workerStartFailureKeepsTheCauseAndAllowsRetry() = runBlocking {
+        val error = OutOfMemoryError("pthread_create failed")
+        var launches = 0
+        var calls = 0
+        val runner = EnvironmentProbeRunner(startWorker = { thread ->
+            if (launches++ == 0) throw error
+            thread.start()
+        })
+        val result = runner.run(1_000) { ++calls }
+        assertSame(error, (result as EnvironmentProbeResult.Failed).cause)
+        assertEquals(0, calls)
+        assertEquals(EnvironmentProbeResult.Completed(1), runner.run(1_000) { ++calls })
+    }
+
+    @Test fun cancelledWorkerStartPropagatesAndAllowsRetry() = runBlocking {
+        var launches = 0
+        val runner = EnvironmentProbeRunner(startWorker = { thread ->
+            if (launches++ == 0) throw CancellationException("start cancelled")
+            thread.start()
+        })
+        try {
+            runner.run(1_000) { 1 }
+            fail("Worker start cancellation must propagate")
+        } catch (_: CancellationException) { }
+        assertEquals(EnvironmentProbeResult.Completed(2), runner.run(1_000) { 2 })
+    }
+
     @Test fun timeoutReturnsWhileUninterruptibleWorkerRemainsSingleFlight() = runBlocking {
         val runner = EnvironmentProbeRunner()
         val release = CountDownLatch(1)

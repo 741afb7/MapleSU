@@ -152,6 +152,7 @@ scan_finished:
 }
 KModErr safe_parse_module_desc_from_zip_file(const char* module_zip_path,
                                              Descriptor& out_desc) {
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     compat::fork_pipe_info pipe_info;
 
     if (compat::fork_pipe_child_process(pipe_info)) {
@@ -161,7 +162,9 @@ KModErr safe_parse_module_desc_from_zip_file(const char* module_zip_path,
             storage::WorkerScope worker;
             RETURN_IF_ERROR(worker.root());
             std::string elf_name;
-            return find_module_elf_in_zip(module_zip_path, parsed_desc, elf_name);
+            const auto result = find_module_elf_in_zip(module_zip_path, parsed_desc, elf_name);
+            const auto closed = worker.close_checked();
+            return is_failed(result) ? result : closed;
         }();
         const bool error_written = compat::write_errcode_from_child(pipe_info, child_err);
         std::vector<uint8_t> transfer(sizeof(parsed_desc));

@@ -18,15 +18,9 @@
 #include <vector>
 
 namespace skroot_env::features::web_ui {
-KModErr start_module_web_ui_server_async(const char* root_key, const char* mod_id32,
+KModErr start_module_web_ui_server_async(const char* mod_id32,
                                          int& out_port);
 }
-
-// 安装期注入的私有 helper（名字带固定 hash 后缀；声明处见
-// include/third_party/____DO_NOT_EDIT____/private_desc_parser.h:40）。
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(
-    const char* root_key);
 
 // 模块 ROOT 环境切换（实现在别的成员里，本 TU 只引用）。
 namespace default_modules::module_root {
@@ -116,19 +110,11 @@ using maplesu::sdk::fork_base_info;
 using maplesu::sdk::fork_pipe_info;
 using maplesu::sdk::fork_pipe_child_process;
 
-static inline const char* current_webui_root_key() {
-    return __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-}
-
-static inline void set_webui_root_key(const char* key) {
-    __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
-}
-
 static inline KModErr set_webui_root(bool current) {
     return default_modules::module_root::set_current_root(current);
 }
 
-static inline bool webui_log_enabled(const char* key) {
-    return maplesu::sdk::is_maplesu_log_enabled(key);
+static inline bool webui_log_enabled() {
+    return maplesu::sdk::is_maplesu_log_enabled();
 }
 }  // namespace maplesu::compat

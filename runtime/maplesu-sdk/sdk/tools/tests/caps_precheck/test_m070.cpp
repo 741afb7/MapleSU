@@ -33,11 +33,11 @@ struct Fixture {
 } fixture;
 }
 
-extern "C" uid_t __wrap_getuid() { return fixture.uid; }
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW() {
-    static const char key[] = "fixture-root-key-012345678901234567890123";
-    return key;
+namespace maplesu::storage {
+KModErr current_context(StorageContext&) { return KModErr::ERR_MODULE_PARAM; }
 }
+
+extern "C" uid_t __wrap_getuid() { return fixture.uid; }
 extern "C" pid_t __wrap_setsid() { return 1; }
 extern "C" int __wrap_setpgid(pid_t, pid_t) { return 0; }
 extern "C" __sighandler_t __wrap_signal(int, __sighandler_t handler) { return handler; }
@@ -95,6 +95,9 @@ RequestManagementReply maplesu_request_management_reply() {
     return fixture.owner_tasks ? fixture.owner_task_reply : fixture.owner_root_reply;
 }
 KModErr maplesu_request_owner_procattr(uint32_t, const char*, uint32_t) { return KModErr::OK; }
+KModErr maplesu_request_helper_fixed(uint32_t, uint32_t, uint32_t, uint64_t, RequestEarlyFixedResult&) {
+    return KModErr::ERR_MODULE_TEST_CHANNEL;
+}
 HookCleanupReceiptScope::HookCleanupReceiptScope() noexcept = default;
 HookCleanupReceiptScope::~HookCleanupReceiptScope() noexcept = default;
 RequestManagementReply maplesu_hook_reply() { return {}; }
@@ -118,6 +121,13 @@ KModErr get_cred_uid_offset(uint32_t& out) { out = 4; return KModErr::OK; }
 KModErr get_cred_euid_offset(uint32_t& out) { out = 20; return KModErr::OK; }
 KModErr get_cred_cap_inheritable_offset(uint32_t& out) { out = 48; return KModErr::OK; }
 KModErr get_task_struct_seccomp_offset(uint32_t& out) { out = 1024; return KModErr::OK; }
+KModErr maplesu_resolve_root_credential_offsets(uint32_t& task, uint32_t& uid, uint32_t& euid,
+    uint32_t& seccomp, uint32_t& inheritable) {
+    const auto error = get_task_struct_cred_offset(task);
+    uid = 4; euid = 20; seccomp = 1024; inheritable = 48;
+    return error;
+}
+KModErr maplesu_hook_legacy_boot_selected(bool& selected) { selected = false; return KModErr::OK; }
 KModErr set_current_process_name(const char*) { return KModErr::OK; }
 KModErr get_avc_denied_kaddr(uint64_t& entry, uint64_t& tail) {
     ++fixture.symbols; entry = 0x100000; tail = 0x100004; return KModErr::OK;

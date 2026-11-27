@@ -3,7 +3,7 @@
 //
 // This file is NOT the reference bridge. The reference bytes are kept unmodified in
 // runtime/ultra/reference/native-lib.cpp for diff and provenance. Here the same 30 JNI
-// entry names are implemented against the fixed prebuilt SDK archive, but every entry
+// entry names are implemented against the source-built SDK archive, but every entry
 // returns one structured JSON receipt instead of a human string:
 //
 //   {"schemaVersion":1,"backend":"maplesu_ultra","operation":"install_module","ok":false,
@@ -17,8 +17,7 @@
 //
 // 5.0.5 adds one identity entry on top of the reference set, getSdkBuildIdentity: it
 // reports the bundled build identity that was compiled into these bytes (see the
-// MAPLESU_* compile definitions below) and never calls the SDK. The 33 pre-existing
-// declarations are unchanged.
+// MAPLESU_* compile definitions below) and never calls the SDK. Every selected SDK declaration uses the current task identity.
 //
 // Ownership: every cJSON tree is created and destroyed inside this translation unit.
 // No SDK C++ object crosses the JNI boundary; only UTF-8 JSON text does.
@@ -59,9 +58,8 @@
 #include "urlEncodeUtils.h"
 #include "webui_lifecycle.h"
 #include "../../maplesu-sdk/sdk/src/maplesu_core/module_webui_host.h"
-#include "image_credentials.h"
-#include "manager_identity_claim.h"
 #include "manager_owner_identity.h"
+#include "manager_identity_claim.h"
 #include "manager_owner_root_probe.h"
 #include "installed_helper_readback.h"
 #include "../policy/module_policy_management.h"
@@ -91,9 +89,6 @@
 #ifndef MAPLESU_ULTRA_HELPER_SIZE
 #define MAPLESU_ULTRA_HELPER_SIZE -1
 #endif
-#ifndef MAPLESU_ULTRA_KEY_SLOT_OFFSET
-#define MAPLESU_ULTRA_KEY_SLOT_OFFSET -1
-#endif
 #ifndef MAPLESU_APP_VERSION
 #define MAPLESU_APP_VERSION "unknown"
 #endif
@@ -102,8 +97,8 @@
 // so they are declared here. They must stay at global scope: inside the anonymous
 // namespace they would acquire internal linkage and never resolve to the archive's
 // definitions.
-KModErr oneplus_bypass_stage1_and_2(const char* root_key, void (*cb)(const char* info));
-bool oneplus_bypass_is_work_normal(const char* root_key);
+KModErr oneplus_bypass_stage1_and_2(void (*cb)(const char* info));
+bool oneplus_bypass_is_work_normal();
 
 namespace {
 
@@ -659,14 +654,6 @@ private:
     jmethodID update_ = nullptr, finish_ = nullptr, reset_ = nullptr;
 };
 
-struct HelperReadbackKey final {
-    char bytes[49]{};
-    ~HelperReadbackKey() {
-        volatile char* value = bytes;
-        for (size_t i = 0; i < sizeof(bytes); ++i) value[i] = 0;
-    }
-};
-
 // Every entry funnels through this guard: a C++ exception must never cross JNI, and a
 // caught exception must never be reported as success.
 template <typename Body>
@@ -734,7 +721,7 @@ void restore_authenticated_mode(cJSON* root, KModErr restore, KModErr& sdk_error
 }
 
 template <typename Body>
-jstring guarded_authenticated(JNIEnv* env, const char* operation, jstring root_key, Body&& body) {
+jstring guarded_authenticated(JNIEnv* env, const char* operation, Body&& body) {
     KModErr sdk_error = KModErr::OK;
     return guarded(env, operation, [&](cJSON* root) {
         if (!root) return;
@@ -746,14 +733,11 @@ jstring guarded_authenticated(JNIEnv* env, const char* operation, jstring root_k
             authenticated_receipt_alloc(root, sdk_error);
             return;
         }
-        const auto key = jstring_to_utf8(env, root_key);
-        if (env->ExceptionCheck()) return;
-        maplesu::RequestAuthModeScope mode(root_key ? kernel_module::RequestAuthMode::LegacyKey :
-            kernel_module::RequestAuthMode::ManagerOwner);
+        maplesu::RequestAuthModeScope mode(maplesu::bridge_request_auth_mode());
         sdk_error = mode.error();
         if (is_failed(sdk_error)) { mark_sdk_error(root, sdk_error, {}); return; }
         try {
-            body(root, root_key ? key.c_str() : nullptr, sdk_error);
+            body(root, sdk_error);
         } catch (...) {
             sdk_error = authenticated_primary_error(root, sdk_error);
             restore_authenticated_mode(root, mode.restore(), sdk_error);
@@ -790,16 +774,80 @@ void control_error(cJSON* root, int64_t error) {
 
 }  // namespace
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_claimManagerIdentity(JNIEnv* env, jclass) {
+    return guarded(env, "claim_manager_identity", [&](cJSON* root) {
+        std::string candidate = maplesu::manager_identity_candidate();
+        OwnedJson data(cJSON_CreateObject());
+        if (!data || !cJSON_AddBoolToObject(data.get(), "liveRootVerified", false) ||
+            (!candidate.empty() && !cJSON_AddStringToObject(data.get(), "candidate", candidate.c_str())) ||
+            !attach_owned_json(root, "data", data.release())) {
+            maplesu::LegacyCredentialScope::erase(candidate.data(), candidate.size());
+            authenticated_receipt_alloc(root, KModErr::OK);
+            return;
+        }
+        maplesu::LegacyCredentialScope::erase(candidate.data(), candidate.size());
+        mark_authenticated_ok(root);
+    });
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_invokeWithLegacyCredential(
+    JNIEnv* env, jclass, jstring operation, jstring credential, jobject callback) {
+    const auto name = jstring_to_utf8(env, operation);
+    if (env->ExceptionCheck()) return nullptr;
+    try {
+        std::string key = jstring_to_utf8(env, credential);
+        if (env->ExceptionCheck()) return nullptr;
+        maplesu::LegacyCredentialScope identity(key.c_str());
+        maplesu::LegacyCredentialScope::erase(key.data(), key.size());
+        if (is_failed(identity.error())) {
+            cJSON* root = begin(name.c_str());
+            mark_sdk_error(root, identity.error(), {});
+            return finish(env, root, name.c_str(), {});
+        }
+        jstring result = nullptr;
+        if (callback) {
+            const auto type = env->GetObjectClass(callback);
+            const auto call = type ? env->GetMethodID(type, "call", "()Ljava/lang/Object;") : nullptr;
+            if (call) result = static_cast<jstring>(env->CallObjectMethod(callback, call));
+            if (type) env->DeleteLocalRef(type);
+        }
+        const auto restore = identity.restore();
+        // The original cancellation/exception remains pending after native cleanup.
+        if (env->ExceptionCheck()) return nullptr;
+        if (callback && !is_failed(restore)) return result;
+        const auto raw = jstring_to_utf8(env, result);
+        if (env->ExceptionCheck()) return nullptr;
+        cJSON* root = cJSON_Parse(raw.c_str());
+        if (!root) {
+            root = begin(name.c_str());
+            mark_bridge_error(root, kBridgeNullArgument, "MAPLESU_BRIDGE_INVALID_CALLBACK",
+                "The compatibility callback did not return a receipt.");
+        }
+        KModErr error = authenticated_primary_error(root, KModErr::OK);
+        restore_authenticated_mode(root, restore, error);
+        if (is_failed(identity.close_error()))
+            cJSON_AddNumberToObject(root, "authScopeCloseErrorCode", static_cast<double>(to_num(identity.close_error())));
+        return finish(env, root, name.c_str(), {});
+    } catch (...) {
+        cJSON* root = begin(name.c_str());
+        if (root) mark_bridge_error(root, kBridgeException, "MAPLESU_BRIDGE_EXCEPTION",
+            "Legacy request scope failed.");
+        return env->ExceptionCheck() ? (cJSON_Delete(root), nullptr) : finish(env, root, name.c_str(), {});
+    }
+}
+
 // --- Environment and version (5) ------------------------------------------------
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_installEnvironment(
-    JNIEnv* env, jclass, jstring rootKey, jstring insMode, jstring insExploitMethod) {
+    JNIEnv* env, jclass, jstring insMode, jstring insExploitMethod) {
     const std::string mode_text = jstring_to_utf8(env, insMode);
     const std::string exploit = jstring_to_utf8(env, insExploitMethod);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "install_maplesu_environment", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "install_maplesu_environment",
+        [&](cJSON* root, KModErr& err) {
         maplesu::sdk::InstallMode mode;
         if (mode_text == "Boot") {
             mode = maplesu::sdk::InstallMode::Boot;
@@ -831,7 +879,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_installEnvironment(
         }
         OwnedJson completed(cJSON_CreateTrue());
         if (!completed) { authenticated_receipt_alloc(root, err); return; }
-        err = maplesu::sdk::install_maplesu_environment(key, mode, config);
+        err = maplesu::sdk::install_maplesu_environment(mode, config);
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
             return;
@@ -851,11 +899,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_installEnvironment(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_uninstallEnvironment(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "uninstall_maplesu_environment", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "uninstall_maplesu_environment", [&](cJSON* root, KModErr& err) {
         OwnedJson completed(cJSON_CreateTrue());
         if (!completed) { authenticated_receipt_alloc(root, err); return; }
-        err = maplesu::sdk::uninstall_maplesu_environment(key);
+        err = maplesu::sdk::uninstall_maplesu_environment();
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
             return;
@@ -872,10 +920,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_uninstallEnvironment(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getEnvironmentState(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "get_maplesu_environment_state", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
-        const maplesu::sdk::MapleSUEnvState state = maplesu::sdk::get_maplesu_environment_state(key);
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "get_maplesu_environment_state",
+        [&](cJSON* root, KModErr& err) {
+        const maplesu::sdk::MapleSUEnvState state = maplesu::sdk::get_maplesu_environment_state();
         const char* name = nullptr;
         switch (state) {
             case maplesu::sdk::MapleSUEnvState::NotInstalled:
@@ -914,11 +962,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getEnvironmentState(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getInstalledEnvironmentVersion(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "get_installed_maplesu_environment_version", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "get_installed_maplesu_environment_version",
+        [&](cJSON* root, KModErr& err) {
         maplesu::sdk::MapleSUSdkVersion version{};
-        err = maplesu::sdk::get_installed_maplesu_environment_version(key, version);
+        err = maplesu::sdk::get_installed_maplesu_environment_version(version);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         OwnedJson data(cJSON_CreateObject());
         char text[32] = {0};
@@ -950,7 +998,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSdkVersion(JNIEnv*
 
 // --- Bundled build identity (5.0.5, additive) ------------------------------------
 // The identity of the bytes packaged with this build: SDK build id, upstream version,
-// archive/helper digests, helper build id and the helper's key slot offset. Every value
+// archive/helper digests and helper build id. Every value
 // comes from compile definitions that runtime/CMakeLists.txt took from
 // runtime/maplesu-sdk/SDK-IDENTITY.cmake, so it describes what was actually linked in.
 // This entry never calls the SDK: that is exactly why it stays useful when the SDK
@@ -977,8 +1025,6 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSdkBuildIdentity(J
         cJSON_AddStringToObject(data, "sdkSha256", MAPLESU_ULTRA_SDK_SHA256);
         cJSON_AddStringToObject(data, "helperSha256", helper_sha256.c_str());
         cJSON_AddStringToObject(data, "helperBuildId", MAPLESU_ULTRA_HELPER_BUILD_ID);
-        cJSON_AddNumberToObject(data, "helperKeySlotOffset",
-                                static_cast<double>(MAPLESU_ULTRA_KEY_SLOT_OFFSET));
         cJSON_AddNumberToObject(data, "bridgeVersion", kBridgeVersion);
         cJSON_AddBoolToObject(data, "identityKnown", identity_known);
         attach_data(root, data);
@@ -1122,52 +1168,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_probeManagerOwnerRoot
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_claimManagerIdentity(
-    JNIEnv* env, jclass) {
-    return guarded(env, "claim_manager_identity", [&](cJSON* root) {
-        const std::string candidate = maplesu::manager_identity_candidate();
-        cJSON* data = cJSON_CreateObject();
-        if (!candidate.empty()) cJSON_AddStringToObject(data, "candidate", candidate.c_str());
-        cJSON_AddBoolToObject(data, "liveRootVerified", false);
-        attach_data(root, data);
-        mark_ok(root);
-    });
-}
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_recoverImageCredentials(
-    JNIEnv* env, jclass, jbyteArray kernel) {
-    return guarded(env, "recover_image_credentials", [&](cJSON* root) {
-        const jsize size = kernel == nullptr ? 0 : env->GetArrayLength(kernel);
-        if (size < 64 || size > 256 * 1024 * 1024) {
-            mark_bridge_error(root, kBridgeNullArgument, "MAPLESU_IMAGE_KERNEL_INVALID", {});
-            return;
-        }
-        std::vector<uint8_t> bytes(static_cast<size_t>(size));
-        env->GetByteArrayRegion(kernel, 0, size, reinterpret_cast<jbyte*>(bytes.data()));
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-            mark_bridge_error(root, kBridgeException, "MAPLESU_IMAGE_KERNEL_READ_FAILED", {});
-            return;
-        }
-        const auto keys = maplesu::image_credentials(bytes.data(), bytes.size());
-        cJSON* data = cJSON_CreateObject();
-        cJSON* candidates = cJSON_CreateArray();
-        for (const auto& key : keys) cJSON_AddItemToArray(candidates, cJSON_CreateString(key.c_str()));
-        cJSON_AddItemToObject(data, "credentials", candidates);
-        cJSON_AddBoolToObject(data, "liveRootVerified", false);
-        attach_data(root, data);
-        mark_ok(root);
-    });
-}
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testRoot(JNIEnv* env, jclass, jstring rootKey) {
-    const std::string key = jstring_to_utf8(env, rootKey);
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testRoot(JNIEnv* env, jclass) {
     KModErr sdk_error = KModErr::OK;
     return guarded(env, "get_root_status_report", [&](cJSON* root) {
         if (!root) return;
-        const char* raw = maplesu::sdk::get_root_status_report(key.c_str());
+        const char* raw = maplesu::sdk::get_root_status_report();
         const auto observed = maplesu::sdk::current_root_status_result();
         sdk_error = observed.error;
         if (is_failed(sdk_error)) mark_sdk_error(root, sdk_error, {});
@@ -1194,9 +1199,9 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testRoot(JNIEnv* env,
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_runRootCmd(
-    JNIEnv* env, jclass, jstring rootKey, jstring cmd) {
-    return guarded_authenticated(env, "run_root_cmd", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass, jstring cmd) {
+    return guarded_authenticated(env, "run_root_cmd",
+        [&](cJSON* root, KModErr& err) {
         const auto command = jstring_to_utf8(env, cmd);
         if (env->ExceptionCheck()) return;
         OwnedJson completed(cJSON_CreateTrue());
@@ -1205,7 +1210,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_runRootCmd(
             return;
         }
         std::string output;
-        err = maplesu::sdk::run_root_cmd(key, command.c_str(), output);
+        err = maplesu::sdk::run_root_cmd(command.c_str(), output);
         const auto command_result = maplesu::sdk::current_root_command_result();
         if (is_failed(err)) mark_sdk_error(root, err, {});
         else {
@@ -1228,7 +1233,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_runRootCmd(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readInstalledHelper(
-    JNIEnv* env, jclass, jstring rootKey, jstring helperPath, jlong keySlotOffset, jint timeoutMillis) {
+    JNIEnv* env, jclass, jstring helperPath, jint timeoutMillis) {
     KModErr sdk_error = KModErr::OK;
     return guarded(env, "read_installed_helper", [&](cJSON* root) {
         cJSON* ok = cJSON_GetObjectItemCaseSensitive(root, "ok");
@@ -1239,14 +1244,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readInstalledHelper(
             mark_call_bridge_error(root, &sdk_error, kBridgeAlloc, "MAPLESU_BRIDGE_ALLOC", {});
             return;
         }
-        if (timeoutMillis <= 0 || timeoutMillis > 5000 || (!helperPath && rootKey) || (helperPath && (env->GetStringLength(helperPath) != 27 ||
-            env->GetStringUTFLength(helperPath) != 27)) ||
-            (rootKey && (env->GetStringLength(rootKey) != 48 || env->GetStringUTFLength(rootKey) != 48))) {
+        if (timeoutMillis <= 0 || timeoutMillis > 5000 || (helperPath && (env->GetStringLength(helperPath) != 27 ||
+            env->GetStringUTFLength(helperPath) != 27))) {
             mark_bridge_error(root, kBridgeNullArgument, "MAPLESU_HELPER_READBACK_ARGUMENT", {});
             return;
         }
-        HelperReadbackKey key;
-        if (rootKey) env->GetStringUTFRegion(rootKey, 0, 48, key.bytes);
         const auto path = helperPath ? jstring_to_utf8(env, helperPath) : std::string{};
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
@@ -1258,8 +1260,8 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readInstalledHelper(
             mark_bridge_error(root, kBridgeException, "MAPLESU_HELPER_DIGEST_FAILED", {});
             return;
         }
-        const auto observed = maplesu::read_installed_helper(rootKey ? key.bytes : nullptr,
-            helperPath ? path.c_str() : nullptr, static_cast<int64_t>(keySlotOffset), HelperReadbackDigest::consume, &digest,
+        const auto observed = maplesu::read_installed_helper(
+            helperPath ? path.c_str() : nullptr, HelperReadbackDigest::consume, &digest,
             static_cast<uint32_t>(timeoutMillis));
         const int64_t error = observed.mode_error ? observed.mode_error : observed.channel_error ? observed.channel_error :
             observed.sdk_error ? observed.sdk_error : observed.root.error ? observed.root.error : observed.close.error;
@@ -1387,12 +1389,12 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readInstalledHelper(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_addSuAuth(
-    JNIEnv* env, jclass, jstring rootKey, jstring appPackageName) {
+    JNIEnv* env, jclass, jstring appPackageName) {
     const std::string package = jstring_to_utf8(env, appPackageName);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "add_su_auth_list", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "add_su_auth_list", [&](cJSON* root, KModErr& err) {
         maplesu::su_auth::ResultV1 result(maplesu::su_auth::Operation::Add);
-        err = maplesu::su_auth::add(key, package.c_str(), result);
+        err = maplesu::su_auth::add(package.c_str(), result);
         cJSON* data = maplesu::ultra::write_authorization_result(root, result);
         if (!data) { authenticated_receipt_alloc(root, err); return; }
         if (is_failed(err)) {
@@ -1410,11 +1412,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_addSuAuth(
 // selects the repaired SDK's refresh-only transaction inside its existing root
 // fork; unlike addSuAuth, it neither creates nor persists any package grant.
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_refreshSuAuthList(JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "refresh_su_auth_list", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_refreshSuAuthList(JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "refresh_su_auth_list", [&](cJSON* root, KModErr& err) {
         maplesu::su_auth::ResultV1 result(maplesu::su_auth::Operation::Refresh);
-        err = getuid() == 0 ? maplesu::su_auth::add(key, nullptr, result)
-            : maplesu::su_auth::fail(result, KModErr::ERR_MODULE_NO_ROOT, maplesu::su_auth::Phase::EntryRoot);
+        err = maplesu::su_auth::add(nullptr, result);
         auto* data = maplesu::ultra::write_authorization_result(root, result);
         if (!data) { authenticated_receipt_alloc(root, err); return; }
         if (is_failed(err)) mark_sdk_error(root, err, {});
@@ -1424,12 +1425,12 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_refreshSuAuthList(JNI
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_removeSuAuth(
-    JNIEnv* env, jclass, jstring rootKey, jstring modUuid) {
+    JNIEnv* env, jclass, jstring modUuid) {
     const std::string uuid = jstring_to_utf8(env, modUuid);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "remove_su_auth_list", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "remove_su_auth_list", [&](cJSON* root, KModErr& err) {
         maplesu::su_auth::ResultV1 result(maplesu::su_auth::Operation::Remove);
-        err = maplesu::su_auth::remove(key, uuid.c_str(), result);
+        err = maplesu::su_auth::remove(uuid.c_str(), result);
         cJSON* data = maplesu::ultra::write_authorization_result(root, result);
         if (!data) { authenticated_receipt_alloc(root, err); return; }
         if (is_failed(err)) {
@@ -1443,10 +1444,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_removeSuAuth(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSuAuthList(JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "get_su_auth_list", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSuAuthList(JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "get_su_auth_list", [&](cJSON* root, KModErr& err) {
         std::vector<maplesu::sdk::su_auth_item> items;
-        err = maplesu::sdk::get_su_auth_list(key, items);
+        err = maplesu::sdk::get_su_auth_list(items);
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
             return;
@@ -1471,15 +1472,15 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSuAuthList(JNIEnv*
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setSuUidProfile(
-    JNIEnv* env, jclass, jstring rootKey, jint uid, jstring packageName, jboolean allow) {
+    JNIEnv* env, jclass, jint uid, jstring packageName, jboolean allow) {
     const auto package = jstring_to_utf8(env, packageName);
     if (env->ExceptionCheck()) return nullptr;
     const bool granted = allow == JNI_TRUE;
-    return guarded_authenticated(env, "set_su_uid_profile", rootKey,
-        [&](cJSON* root, const char* key, KModErr& error) {
+    return guarded_authenticated(env, "set_su_uid_profile",
+        [&](cJSON* root, KModErr& error) {
         maplesu::su_auth::ResultV1 result(granted ? maplesu::su_auth::Operation::Add : maplesu::su_auth::Operation::Remove);
         error = maplesu::su_auth::set_uid_profile(
-            key, static_cast<uint32_t>(uid), package.c_str(), granted, result);
+            static_cast<uint32_t>(uid), package.c_str(), granted, result);
         auto* data = maplesu::ultra::write_authorization_result(root, result);
         if (!data || !cJSON_AddNumberToObject(data, "uid", uid) ||
             !cJSON_AddStringToObject(data, "package", url_encode_copy(package).c_str()) ||
@@ -1493,15 +1494,15 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setSuUidProfile(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSuUidProfiles(JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "get_su_uid_profiles", rootKey,
-        [&](cJSON* root, const char* key, KModErr& error) {
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSuUidProfiles(JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "get_su_uid_profiles",
+        [&](cJSON* root, KModErr& error) {
         using maplesu::su_auth::UidProfileV1;
         std::vector<UidProfileV1> profiles;
         static thread_local std::vector<UidProfileV1>* output = nullptr;
         output = &profiles;
         try {
-            error = maplesu::su_auth::get_uid_profiles_with_cb(key, [](const UidProfileV1* profile) {
+            error = maplesu::su_auth::get_uid_profiles_with_cb([](const UidProfileV1* profile) {
                 if (output && profile) output->push_back(*profile);
             });
         } catch (...) {
@@ -1527,7 +1528,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSuUidProfiles(JNIE
         if (!attach_owned_json(data.get(), "profiles", rows.release()) ||
             !cJSON_AddNumberToObject(data.get(), "count", static_cast<double>(profiles.size())) ||
             !cJSON_AddStringToObject(data.get(), "encoding", "url") ||
-            !cJSON_AddBoolToObject(data.get(), "deliveryVerified", true) ||
+            !cJSON_AddBoolToObject(data.get(), "decisionsVerified", true) ||
             !attach_owned_json(root, "data", data.release())) {
             authenticated_receipt_alloc(root, error);
             return;
@@ -1537,10 +1538,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getSuUidProfiles(JNIE
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_clearSuAuthList(JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "clear_su_auth_list", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_clearSuAuthList(JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "clear_su_auth_list", [&](cJSON* root, KModErr& err) {
         maplesu::su_auth::ResultV1 result(maplesu::su_auth::Operation::Clear);
-        err = maplesu::su_auth::clear(key, result);
+        err = maplesu::su_auth::clear(result);
         cJSON* data = maplesu::ultra::write_authorization_result(root, result);
         if (!data) { authenticated_receipt_alloc(root, err); return; }
         if (is_failed(err)) {
@@ -1557,16 +1558,16 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_clearSuAuthList(JNIEn
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_installModule(
-    JNIEnv* env, jclass, jstring rootKey, jstring zipFilePath, jboolean isDevRunOnceMode) {
+    JNIEnv* env, jclass, jstring zipFilePath, jboolean isDevRunOnceMode) {
     const bool dev_once = isDevRunOnceMode == JNI_TRUE;
-    return guarded_authenticated(env, dev_once ? "install_module_dev_run_once" : "install_module", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, dev_once ? "install_module_dev_run_once" : "install_module",
+        [&](cJSON* root, KModErr& err) {
         const std::string zip = jstring_to_utf8(env, zipFilePath);
         if (env->ExceptionCheck()) return;
         std::string reason;
         maplesu::module_install::InstallCompletion completion;
         err = maplesu::module_install::install_with_completion(
-            key, zip.c_str(), dev_once, reason, completion);
+            zip.c_str(), dev_once, reason, completion);
         // A non-empty reason is callback data; a committed install retains its completion fact.
         if (is_failed(err)) {
             mark_sdk_error(root, err,
@@ -1617,11 +1618,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_installModule(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_uninstallModule(
-    JNIEnv* env, jclass, jstring rootKey, jstring modUuid) {
-    return guarded_authenticated(env, "uninstall_module", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass, jstring modUuid) {
+    return guarded_authenticated(env, "uninstall_module", [&](cJSON* root, KModErr& err) {
         const std::string id32 = module_id_to_utf8(env, modUuid);
         if (env->ExceptionCheck()) return;
-        err = maplesu::sdk::uninstall_module(key, id32.c_str());
+        err = maplesu::sdk::uninstall_module(id32.c_str());
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
             if (err == KModErr::ERR_READ_CHILD_ERRCODE) {
@@ -1643,8 +1644,8 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_uninstallModule(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getModuleList(JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "get_all_modules_list", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getModuleList(JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "get_all_modules_list", [&](cJSON* root, KModErr& err) {
         struct PhaseLatency {
             const char* phase;
             long long count = -1;
@@ -1660,13 +1661,13 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getModuleList(JNIEnv*
         std::vector<maplesu::sdk::module_record> records;
         {
             PhaseLatency latency{"native-list"};
-            err = maplesu::sdk::get_all_modules_list(key, records);
+            err = maplesu::sdk::get_all_modules_list(records);
             latency.count = static_cast<long long>(records.size());
         }
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         const auto controls = [&] {
             PhaseLatency latency{"native-control"};
-            auto result = maplesu::get_module_controls(key, records);
+            auto result = maplesu::get_module_controls(records);
             latency.count = static_cast<long long>(result.size());
             return result;
         }();
@@ -1710,13 +1711,13 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getModuleList(JNIEnv*
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parseModuleDescriptor(
-    JNIEnv* env, jclass, jstring rootKey, jstring zipFilePath) {
-    return guarded_authenticated(env, "parse_module_desc_from_zip_file", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass, jstring zipFilePath) {
+    return guarded_authenticated(env, "parse_module_desc_from_zip_file",
+        [&](cJSON* root, KModErr& err) {
         const std::string zip = jstring_to_utf8(env, zipFilePath);
         if (env->ExceptionCheck()) return;
         maplesu::sdk::module_desc desc;
-        err = maplesu::sdk::parse_module_desc_from_zip_file(key, zip.c_str(), desc);
+        err = maplesu::sdk::parse_module_desc_from_zip_file(zip.c_str(), desc);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         OwnedJson data(cJSON_CreateObject());
         if (!data || !attach_owned_json(data.get(), "desc", descriptor_to_json(desc)) ||
@@ -1728,11 +1729,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parseModuleDescriptor
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getModuleControlCapabilities(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "get_module_control_capabilities", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "get_module_control_capabilities",
+        [&](cJSON* root, KModErr& err) {
         bool supported = false;
-        const auto error = maplesu::module_control_capability(key, supported);
+        const auto error = maplesu::module_control_capability(supported);
         err = static_cast<KModErr>(error);
         if (error != 0) { control_error(root, error); return; }
         OwnedJson data(cJSON_CreateObject());
@@ -1745,12 +1746,12 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getModuleControlCapab
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getModuleControl(
-    JNIEnv* env, jclass, jstring rootKey, jstring moduleId) {
-    return guarded_authenticated(env, "get_module_control", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass, jstring moduleId) {
+    return guarded_authenticated(env, "get_module_control", [&](cJSON* root, KModErr& err) {
         const auto id = module_id_to_utf8(env, moduleId);
         if (env->ExceptionCheck()) return;
         maplesu::ModuleControlState state;
-        const auto error = maplesu::get_module_control(key, id.c_str(), state);
+        const auto error = maplesu::get_module_control(id.c_str(), state);
         err = static_cast<KModErr>(error);
         if (error != 0) { control_error(root, error); return; }
         OwnedJson data(control_to_json(state));
@@ -1762,12 +1763,12 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_getModuleControl(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setModuleEnabled(
-    JNIEnv* env, jclass, jstring rootKey, jstring moduleId, jboolean enabled) {
-    return guarded_authenticated(env, "set_module_enabled", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass, jstring moduleId, jboolean enabled) {
+    return guarded_authenticated(env, "set_module_enabled", [&](cJSON* root, KModErr& err) {
         const auto id = module_id_to_utf8(env, moduleId);
         if (env->ExceptionCheck()) return;
         maplesu::ModuleControlState state;
-        const auto error = maplesu::set_module_enabled(key, id.c_str(), enabled == JNI_TRUE, state);
+        const auto error = maplesu::set_module_enabled(id.c_str(), enabled == JNI_TRUE, state);
         err = static_cast<KModErr>(error);
         if (error != 0) { control_error(root, error); return; }
         if (!cJSON_AddBoolToObject(root, "operationCompleted", true)) { authenticated_receipt_alloc(root, err); return; }
@@ -1782,11 +1783,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setModuleEnabled(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_publishPolicyBackend(
-    JNIEnv* env, jclass, jstring rootKey, jstring sha256, jbyteArray verifiedBytes) {
+    JNIEnv* env, jclass, jstring sha256, jbyteArray verifiedBytes) {
     const auto digest = jstring_to_utf8(env, sha256);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "publish_policy_backend", rootKey,
-        [&](cJSON* root, const char* key, KModErr& error) {
+    return guarded_authenticated(env, "publish_policy_backend",
+        [&](cJSON* root, KModErr& error) {
         const auto size = verifiedBytes ? env->GetArrayLength(verifiedBytes) : 0;
         if (size < 64 || size > 32 * 1024 * 1024) {
             error = KModErr::ERR_MODULE_PARAM;
@@ -1798,7 +1799,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_publishPolicyBackend(
         if (env->ExceptionCheck()) return;
         OwnedJson completed(cJSON_CreateTrue());
         if (!completed) { authenticated_receipt_alloc(root, error); return; }
-        error = static_cast<KModErr>(maplesu::module_policy::publish_backend(key, digest.c_str(), bytes.data(), bytes.size()));
+        error = static_cast<KModErr>(maplesu::module_policy::publish_backend(digest.c_str(), bytes.data(), bytes.size()));
         if (is_failed(error)) {
             mark_sdk_error(root, error, {});
             return;
@@ -1817,9 +1818,9 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_publishPolicyBackend(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_modulePolicySettings(
-    JNIEnv* env, jclass, jstring rootKey, jint requested) {
-    return guarded_authenticated(env, requested < 0 ? "get_module_policy_settings" : "set_module_policy_settings", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
-        const auto state = maplesu::module_policy::manage(key, requested);
+    JNIEnv* env, jclass, jint requested) {
+    return guarded_authenticated(env, requested < 0 ? "get_module_policy_settings" : "set_module_policy_settings", [&](cJSON* root, KModErr& err) {
+        const auto state = maplesu::module_policy::manage(requested);
         if (state.error != 0) {
             err = static_cast<KModErr>(state.error);
             mark_bridge_error(root, -1010, "MAPLESU_MODULE_POLICY_SETTINGS", state.reason);
@@ -1840,18 +1841,18 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_modulePolicySettings(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_openModuleWebUi(
-    JNIEnv* env, jclass, jstring rootKey, jstring modUuid) {
-    return guarded_authenticated(env, "start_module_web_ui_server_async", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass, jstring modUuid) {
+    return guarded_authenticated(env, "start_module_web_ui_server_async",
+        [&](cJSON* root, KModErr& err) {
         const std::string id32 = module_id_to_utf8(env, modUuid);
         if (env->ExceptionCheck()) return;
         int port = 0;
         std::string module_directory;
         // This host opts into SDK KeepRunning; other modules retain their SDK lifecycle.
         err = id32 == "c45e8a7390b24987a4b01d6e2c5f9143"
-            ? maplesu::start_detached_module_webui(key, id32.c_str(), port, module_directory)
+            ? maplesu::start_detached_module_webui(id32.c_str(), port, module_directory)
             : maplesu::sdk::features::web_ui::start_module_web_ui_server_for_manager(
-                key, id32.c_str(), port, module_directory);
+                id32.c_str(), port, module_directory);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         if (!cJSON_AddBoolToObject(root, "operationCompleted", true)) { authenticated_receipt_alloc(root, err); return; }
         OwnedJson data(cJSON_CreateObject());
@@ -1869,12 +1870,12 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_openModuleWebUi(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setBootFailProtectEnabled(
-    JNIEnv* env, jclass, jstring rootKey, jboolean enable) {
+    JNIEnv* env, jclass, jboolean enable) {
     const bool requested = enable == JNI_TRUE;
-    return guarded_authenticated(env, "set_boot_fail_protect_enabled", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "set_boot_fail_protect_enabled", [&](cJSON* root, KModErr& err) {
         OwnedJson completed(cJSON_CreateTrue());
         if (!completed) { authenticated_receipt_alloc(root, err); return; }
-        err = maplesu::sdk::set_boot_fail_protect_enabled(key, requested);
+        err = maplesu::sdk::set_boot_fail_protect_enabled(requested);
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
             return;
@@ -1889,10 +1890,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setBootFailProtectEna
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_isBootFailProtectEnabled(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "is_boot_fail_protect_enabled", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "is_boot_fail_protect_enabled", [&](cJSON* root, KModErr& err) {
         bool enabled = false;
-        err = maplesu::sdk::runtime_settings::query_boot_fail_protect(key, enabled);
+        err = maplesu::sdk::runtime_settings::query_boot_fail_protect(enabled);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         OwnedJson data(cJSON_CreateObject());
         if (!data || !cJSON_AddBoolToObject(data.get(), "enabled", enabled) ||
@@ -1905,12 +1906,12 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_isBootFailProtectEnab
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setAdbForcedDisabled(
-    JNIEnv* env, jclass, jstring rootKey, jboolean enable) {
+    JNIEnv* env, jclass, jboolean enable) {
     const bool requested = enable == JNI_TRUE;
-    return guarded_authenticated(env, "set_adb_forced_disabled", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "set_adb_forced_disabled", [&](cJSON* root, KModErr& err) {
         OwnedJson completed(cJSON_CreateTrue());
         if (!completed) { authenticated_receipt_alloc(root, err); return; }
-        err = maplesu::sdk::set_adb_forced_disabled(key, requested);
+        err = maplesu::sdk::set_adb_forced_disabled(requested);
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
             return;
@@ -1925,10 +1926,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setAdbForcedDisabled(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_isAdbForcedDisabled(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "is_adb_forced_disabled", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "is_adb_forced_disabled", [&](cJSON* root, KModErr& err) {
         bool disabled = false;
-        err = maplesu::sdk::runtime_settings::query_adb_forced_disabled(key, disabled);
+        err = maplesu::sdk::runtime_settings::query_adb_forced_disabled(disabled);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         OwnedJson data(cJSON_CreateObject());
         if (!data || !cJSON_AddBoolToObject(data.get(), "disabled", disabled) ||
@@ -1941,10 +1942,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_isAdbForcedDisabled(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testBasics(
-    JNIEnv* env, jclass, jstring rootKey, jstring item) {
+    JNIEnv* env, jclass, jstring item) {
     const std::string name = jstring_to_utf8(env, item);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "test_maplesu_basics", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "test_maplesu_basics", [&](cJSON* root, KModErr& err) {
         maplesu::sdk::BasicItem basic;
         if (name == "Channel") basic = maplesu::sdk::BasicItem::Channel;
         else if (name == "KernelBase") basic = maplesu::sdk::BasicItem::KernelBase;
@@ -1958,7 +1959,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testBasics(
             return;
         }
         std::string info;
-        err = maplesu::sdk::test_maplesu_basics(key, basic, info);
+        err = maplesu::sdk::test_maplesu_basics(basic, info);
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
         }
@@ -1973,10 +1974,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testBasics(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testDefaultModule(
-    JNIEnv* env, jclass, jstring rootKey, jstring name) {
+    JNIEnv* env, jclass, jstring name) {
     const std::string module_name = jstring_to_utf8(env, name);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "test_maplesu_default_module", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "test_maplesu_default_module", [&](cJSON* root, KModErr& err) {
         maplesu::sdk::DeafultModuleName target;
         if (module_name == "RootBridgePrint") target = maplesu::sdk::DeafultModuleName::RootBridgePrint;
         else if (module_name == "RootBridgeExec") target = maplesu::sdk::DeafultModuleName::RootBridgeExec;
@@ -1988,7 +1989,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testDefaultModule(
             return;
         }
         std::string info;
-        err = maplesu::sdk::test_maplesu_deafult_module(key, target, info);
+        err = maplesu::sdk::test_maplesu_deafult_module(target, info);
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
         }
@@ -2002,11 +2003,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_testDefaultModule(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_restartZygote64(JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "restart_zygote64", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_restartZygote64(JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "restart_zygote64", [&](cJSON* root, KModErr& err) {
         OwnedJson completed(cJSON_CreateTrue());
         if (!completed) { authenticated_receipt_alloc(root, err); return; }
-        err = maplesu::sdk::restart_zygote64(key);
+        err = maplesu::sdk::restart_zygote64();
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
             return;
@@ -2025,11 +2026,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_restartZygote64(JNIEn
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setLogEnabled(
-    JNIEnv* env, jclass, jstring rootKey, jboolean enable) {
+    JNIEnv* env, jclass, jboolean enable) {
     const bool requested = enable == JNI_TRUE;
-    return guarded_authenticated(env, "set_maplesu_log_enabled", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
-        err = maplesu::sdk::set_maplesu_log_enabled(key, requested);
+    return guarded_authenticated(env, "set_maplesu_log_enabled",
+        [&](cJSON* root, KModErr& err) {
+        err = maplesu::sdk::set_maplesu_log_enabled(requested);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         if (!cJSON_AddBoolToObject(root, "operationCompleted", true)) { authenticated_receipt_alloc(root, err); return; }
         OwnedJson data(cJSON_CreateObject());
@@ -2041,11 +2042,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_setLogEnabled(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_isLogEnabled(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "is_maplesu_log_enabled", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "is_maplesu_log_enabled",
+        [&](cJSON* root, KModErr& err) {
         bool enabled = false;
-        err = maplesu::runtime_log::query_enabled(key, enabled);
+        err = maplesu::runtime_log::query_enabled(enabled);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         OwnedJson data(cJSON_CreateObject());
         if (!data || !cJSON_AddBoolToObject(data.get(), "enabled", enabled) ||
@@ -2055,11 +2056,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_isLogEnabled(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readLog(JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "read_maplesu_log", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readLog(JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "read_maplesu_log",
+        [&](cJSON* root, KModErr& err) {
         std::string log;
-        err = maplesu::sdk::read_maplesu_log(key, log);
+        err = maplesu::sdk::read_maplesu_log(log);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         OwnedJson data(cJSON_CreateObject());
         if (!data || !cJSON_AddStringToObject(data.get(), "log", url_encode_copy(log).c_str()) ||
@@ -2072,10 +2073,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_readLog(JNIEnv* env, 
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_clearLog(JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "clear_maplesu_log", rootKey,
-        [&](cJSON* root, const char* key, KModErr& err) {
-        err = maplesu::sdk::clear_maplesu_log(key);
+Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_clearLog(JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "clear_maplesu_log",
+        [&](cJSON* root, KModErr& err) {
+        err = maplesu::sdk::clear_maplesu_log();
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         if (!cJSON_AddBoolToObject(root, "operationCompleted", true)) { authenticated_receipt_alloc(root, err); return; }
         OwnedJson data(cJSON_CreateObject());
@@ -2089,8 +2090,8 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_clearLog(JNIEnv* env,
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_oneplusBypassWriteStage1(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "oneplus_bypass_stage1_and_2", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "oneplus_bypass_stage1_and_2", [&](cJSON* root, KModErr& err) {
         if (!device_detect::is_oplus_device()) {
             // Not an OPPO/OnePlus device: report the condition instead of a fake success.
             mark_bridge_error(root, kBridgeBadEnum, "MAPLESU_BRIDGE_UNSUPPORTED_DEVICE",
@@ -2103,7 +2104,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_oneplusBypassWriteSta
         thread_local std::string captured;
         captured.clear();
         auto callback = [](const char* text) { captured = text == nullptr ? "" : text; };
-        err = oneplus_bypass_stage1_and_2(key, callback);
+        err = oneplus_bypass_stage1_and_2(callback);
         if (is_failed(err)) {
             mark_sdk_error(root, err, {});
         }
@@ -2118,8 +2119,8 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_oneplusBypassWriteSta
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_oneplusBypassIsWorkNormal(
-    JNIEnv* env, jclass, jstring rootKey) {
-    return guarded_authenticated(env, "oneplus_bypass_is_work_normal", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    JNIEnv* env, jclass) {
+    return guarded_authenticated(env, "oneplus_bypass_is_work_normal", [&](cJSON* root, KModErr& err) {
         if (!device_detect::is_oplus_device()) {
             mark_bridge_error(root, kBridgeBadEnum, "MAPLESU_BRIDGE_UNSUPPORTED_DEVICE",
                               "not an OPPO/OnePlus device");
@@ -2129,7 +2130,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_oneplusBypassIsWorkNo
             return;
         }
         bool working = false;
-        err = oneplus_bypass_query_work_normal(key, working);
+        err = oneplus_bypass_query_work_normal(working);
         if (is_failed(err)) { mark_sdk_error(root, err, {}); return; }
         OwnedJson data(cJSON_CreateObject());
         if (!data || !cJSON_AddBoolToObject(data.get(), "supported", true) ||
@@ -2150,7 +2151,7 @@ namespace {
 constexpr int kBridgeSdkSymbol = -1005;
 
 struct ParasiteSdkSymbols {
-    // KRootErr parasite_precheck_app_with_cb(root_key, cmdline, cb(path, AppDynlibStatus))
+    // KRootErr parasite_precheck_app_with_cb(cmdline, cb(path, AppDynlibStatus))
     using PrecheckFn = decltype(&kernel_root::parasite_precheck_app_with_cb);
     using ImplantFn = decltype(&kernel_root::parasite_implant_app);
     using SuEnvFn = decltype(&kernel_root::parasite_implant_su_env);
@@ -2166,11 +2167,11 @@ ParasiteSdkSymbols load_parasite_symbols() {
     ParasiteSdkSymbols symbols;
     symbols.precheck = reinterpret_cast<ParasiteSdkSymbols::PrecheckFn>(dlsym(
         RTLD_DEFAULT,
-        "_ZN11kernel_root29parasite_precheck_app_with_cbEPKcS1_PFvS1_NS_15AppDynlibStatusEE"));
+        "_ZN11kernel_root29parasite_precheck_app_with_cbEPKcPFvS1_NS_15AppDynlibStatusEE"));
     symbols.implant = reinterpret_cast<ParasiteSdkSymbols::ImplantFn>(dlsym(
-        RTLD_DEFAULT, "_ZN11kernel_root20parasite_implant_appEPKcS1_S1_"));
+        RTLD_DEFAULT, "_ZN11kernel_root20parasite_implant_appEPKcS1_"));
     symbols.suEnv = reinterpret_cast<ParasiteSdkSymbols::SuEnvFn>(dlsym(
-        RTLD_DEFAULT, "_ZN11kernel_root23parasite_implant_su_envEPKcS1_S1_S1_"));
+        RTLD_DEFAULT, "_ZN11kernel_root23parasite_implant_su_envEPKcS1_S1_"));
     return symbols;
 }
 
@@ -2221,10 +2222,10 @@ cJSON* dynlibs_to_json(const std::map<std::string, int>& libraries) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasitePrecheckApp(
-    JNIEnv* env, jclass, jstring rootKey, jstring targetPidCmdline) {
+    JNIEnv* env, jclass, jstring targetPidCmdline) {
     const std::string cmdline = jstring_to_utf8(env, targetPidCmdline);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "parasite_precheck_app", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "parasite_precheck_app", [&](cJSON* root, KModErr& err) {
         if (cmdline.empty()) {
             mark_bridge_error(root, kBridgeNullArgument, "MAPLESU_BRIDGE_INVALID_ARGUMENT",
                               "targetPidCmdline is empty");
@@ -2246,7 +2247,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasitePrecheckApp(
             ~RestoreCapture() { captured = previous; }
         } restore{captured};
         captured = &libraries;
-        const auto error = symbols.precheck(key, cmdline.c_str(), callback);
+        const auto error = symbols.precheck(cmdline.c_str(), callback);
         err = static_cast<KModErr>(error);
         if (error != 0) {
             // Preserve both legacy KRootErr and Ultra root-channel errors verbatim.
@@ -2265,11 +2266,11 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasitePrecheckApp(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasiteImplantApp(
-    JNIEnv* env, jclass, jstring rootKey, jstring targetPidCmdline, jstring soPath) {
+    JNIEnv* env, jclass, jstring targetPidCmdline, jstring soPath) {
     const std::string cmdline = jstring_to_utf8(env, targetPidCmdline);
     const std::string so = jstring_to_utf8(env, soPath);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "parasite_implant_app", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "parasite_implant_app", [&](cJSON* root, KModErr& err) {
         OwnedJson completed(cJSON_CreateTrue());
         if (!completed) { authenticated_receipt_alloc(root, err); return; }
         if (cmdline.empty() || so.empty()) {
@@ -2282,7 +2283,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasiteImplantApp(
             mark_sdk_symbol_missing(root, "parasite_implant_app");
             return;
         }
-        const auto error = symbols.implant(key, cmdline.c_str(), so.c_str());
+        const auto error = symbols.implant(cmdline.c_str(), so.c_str());
         err = static_cast<KModErr>(error);
         if (error != 0) {
             cJSON_AddStringToObject(root, "sdkError", "ERR_PARASITE_IMPLANT_APP");
@@ -2301,12 +2302,12 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasiteImplantApp(
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasiteImplantSuEnv(
-    JNIEnv* env, jclass, jstring rootKey, jstring targetPidCmdline, jstring soPath, jstring suDir) {
+    JNIEnv* env, jclass, jstring targetPidCmdline, jstring soPath, jstring suDir) {
     const std::string cmdline = jstring_to_utf8(env, targetPidCmdline);
     const std::string so = jstring_to_utf8(env, soPath);
     const std::string directory = jstring_to_utf8(env, suDir);
     if (env->ExceptionCheck()) return nullptr;
-    return guarded_authenticated(env, "parasite_implant_su_env", rootKey, [&](cJSON* root, const char* key, KModErr& err) {
+    return guarded_authenticated(env, "parasite_implant_su_env", [&](cJSON* root, KModErr& err) {
         OwnedJson completed(cJSON_CreateTrue());
         if (!completed) { authenticated_receipt_alloc(root, err); return; }
         if (cmdline.empty() || so.empty() || directory.empty()) {
@@ -2319,7 +2320,7 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasiteImplantSuEnv(
             mark_sdk_symbol_missing(root, "parasite_implant_su_env");
             return;
         }
-        const auto error = symbols.suEnv(key, cmdline.c_str(), so.c_str(), directory.c_str());
+        const auto error = symbols.suEnv(cmdline.c_str(), so.c_str(), directory.c_str());
         err = static_cast<KModErr>(error);
         if (error != 0) {
             cJSON_AddStringToObject(root, "sdkError", "ERR_PARASITE_IMPLANT_SU_ENV");
@@ -2339,11 +2340,10 @@ Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_parasiteImplantSuEnv(
 // Private module-only facts; generic Root never depends on install.mode.
 extern "C" JNIEXPORT jobjectArray JNICALL
 Java_dev_maplesu_manager_runtime_ultra_bridge_NativeBridge_captureModuleEnvironment(
-    JNIEnv* env, jclass, jstring rootKey) {
+    JNIEnv* env, jclass) {
     maplesu::SdkCallScope scope("capture_module_environment");
-    const std::string key = jstring_to_utf8(env, rootKey);
     std::vector<std::string> facts;
-    const auto error = scope.acquired() ? maplesu::capture_module_environment(rootKey ? key.c_str() : nullptr, facts) :
+    const auto error = scope.acquired() ? maplesu::capture_module_environment(facts) :
         static_cast<KModErr>(-EBUSY);
     if (is_failed(error)) {
         const std::string reason = "MODULE_ENVIRONMENT_CAPTURE_FAILED:" + std::to_string(static_cast<int64_t>(error));

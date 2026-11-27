@@ -81,14 +81,13 @@ class UltraFaultRecoveryTest {
         val result = UltraEnvironmentUpgrade.submitMarked(install = {
             UltraEnvironmentInstaller.install(port, UltraEnvironmentInstaller.Intent.UpgradeToBundledBuild,
                 UltraEnvironmentInstaller.Attachments(
-                    prepareUpgrade = { events += "prepare"; null },
+                    prepareInstall = { events += "prepare"; null },
                     whitelist = { events += "whitelist"; UltraSelfWhitelist.Result(true, false, true, false, true) },
-                    backup = { events += "backup"; "OK" },
                     verify = { events += "verify"; IdentityObservation(InstalledIdentity.unknown(),
                         IdentityVerification.passed("test-build")) },
                 ))
         }, clear = { error("A submitted recovery must keep the per-boot marker") })
         assertEquals(UltraEnvironmentUpgrade.Result.SUBMITTED, UltraEnvironmentUpgrade.resultOf(result))
-        assertEquals(listOf("prepare", "submit", "verify", "whitelist", "backup"), events)
+        assertEquals(listOf("prepare", "submit", "verify", "whitelist"), events)
     }
 }

@@ -27,8 +27,12 @@ Version sdk_version() {
 }
 
 
-EnvironmentState environment_state(const char* root_key) {
-    if (!kernel_module::maplesu_request_owner_mode()) compat::select_installer_identity(root_key);
+EnvironmentState environment_state() {
+    const auto auth = kernel_module::maplesu_request_auth_state();
+    if (!kernel_module::maplesu_request_auth_usable(auth) ||
+        kernel_module::maplesu_request_auth_helper(auth) ||
+        kernel_module::maplesu_request_worker_admission() != KModErr::OK)
+        return EnvironmentState::Unknown;
 
     compat::InstallerChannel pipe;
     if (pipe.start()) {
@@ -105,8 +109,8 @@ KModErr reset_duplicate_boot_session_flag() {
 
 namespace maplesu::sdk {
 
-MapleSUEnvState get_maplesu_environment_state(const char* key) {
-    return static_cast<MapleSUEnvState>(static_cast<uint32_t>(maplesu::install::environment_state(key)));
+MapleSUEnvState get_maplesu_environment_state() {
+    return static_cast<MapleSUEnvState>(static_cast<uint32_t>(maplesu::install::environment_state()));
 }
 
 MapleSUSdkVersion get_sdk_version() {

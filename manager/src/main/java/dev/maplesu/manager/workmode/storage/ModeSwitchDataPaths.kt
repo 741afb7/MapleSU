@@ -1,6 +1,5 @@
 package dev.maplesu.manager.workmode.storage
 
-import dev.maplesu.manager.workmode.Hashes
 import dev.maplesu.manager.workmode.WorkMode
 
 /** Known paths only. No directory enumeration or root operations are performed here. */
@@ -9,21 +8,15 @@ fun interface ModeSwitchDataPaths {
 
     companion object {
         fun fromLocal(
-            rootKey: String? = null,
-            credential: ByteArray? = null,
+            ultraDirectory: String? = null,
             previousPublication: String? = null,
             runtimeDirectory: String? = null,
             registeredExternal: Map<WorkMode, List<String>> = emptyMap(),
         ): ModeSwitchDataPaths {
             val ultra = linkedSetOf<String>()
-            rootKey?.trim()?.takeIf { it.isNotEmpty() }?.let { key ->
-                require(key.length == 48 && DIRECTORY_NAME.matches(key.take(16))) { "MOVE_ULTRA_PATH_INVALID" }
-                ultra += "/data/${key.take(16)}"
-            }
-            credential?.let { bytes ->
-                require(bytes.size == 48) { "MOVE_CREDENTIAL_PATH_INVALID" }
-                ultra += "/data/" + bytes.take(8).joinToString("") { "%02x".format(it.toInt() and 0xff) }
-                ultra += "/data/" + Hashes.sha256(bytes).take(16)
+            ultraDirectory?.let { directory ->
+                require(PRIVATE_DIRECTORY.matches(directory)) { "MOVE_ULTRA_PATH_INVALID" }
+                ultra += directory
             }
             for (path in listOfNotNull(previousPublication, runtimeDirectory)) {
                 require(PRIVATE_DIRECTORY.matches(path)) { "MOVE_PUBLISHED_PATH_INVALID" }

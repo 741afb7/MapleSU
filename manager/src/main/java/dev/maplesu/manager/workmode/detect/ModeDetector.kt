@@ -88,7 +88,7 @@ class DefaultModeDetector(
 
         trace += ProbeTrace(
             "L3", Strength.A, if (ultraIdentityKnown) true else null,
-            "ultra=$ultraState kernelRootVerified=${ultra.kernelRootVerified} managerOwnerBound=${ultra.managerOwnerBound}", ultraElapsed,
+            "ultra=$ultraState kernelRootVerified=${ultra.kernelRootVerified} managerOwnerBound=${ultra.managerOwnerBound} installedCarrierVerified=${ultra.installedCarrierVerified}", ultraElapsed,
         )
         val leaseStarted = clock.nowMillis()
         // A confirmed Ultra SDK wins both channel selection and rule evaluation.
@@ -111,6 +111,7 @@ class DefaultModeDetector(
             ultraKeyPresent = false,
             ultraKernelRootVerified = ultra.kernelRootVerified,
             managerOwnerBound = ultra.managerOwnerBound,
+            installedCarrierVerified = ultra.installedCarrierVerified,
         )
 
         // R6 already determines the mode; control-plane reads are separate recovery work.

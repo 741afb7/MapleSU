@@ -83,7 +83,7 @@ enum class EnvironmentVerdict(val code: String) {
     KSU_NORMAL("ENV_KSU_NORMAL"),
 
     /** 拿不到结论（超时/探针异常/KSU 探针不可用）。**绝不**写成未安装，也绝不覆盖上次状态。 */
-    UNKNOWN("ENV_UNKNOWN_TIMEOUT"),
+    UNKNOWN("ENV_UNKNOWN"),
 }
 
 /** 具名细节码（写进日志/证据；UI 不得硬编码字符串）。 */
@@ -124,7 +124,14 @@ data class EnvironmentCheckOutcome(
     /** 实际调用过的探针名（顺序敏感，用于断言短路）：ultraCurrent / su / ultra / ksu。 */
     val probes: List<String> = emptyList(),
 ) {
-    val code: String get() = verdict.code
+    val code: String
+        get() = if (verdict != EnvironmentVerdict.UNKNOWN) verdict.code else when {
+            detail == EnvironmentCheckDetail.DEADLINE_EXCEEDED -> "ENV_UNKNOWN_TIMEOUT"
+            detail == EnvironmentCheckDetail.PROBE_STILL_RUNNING -> "ENV_UNKNOWN_BUSY"
+            detail == EnvironmentCheckDetail.PROBE_FAILED ||
+                detail.startsWith(EnvironmentCheckDetail.PROBE_FAILED + ":") -> "ENV_UNKNOWN_PROBE_FAILED"
+            else -> verdict.code
+        }
 
     /** true = 本次没有任何触发探测的疑点，直接沿用了上次状态。 */
     val inherited: Boolean get() = verdict == EnvironmentVerdict.INHERITED

@@ -21,9 +21,6 @@
 # classes it instantiates by name across the process boundary.
 -keep class dev.maplesu.manager.liteweb.daemon.** { *; }
 -keep class dev.maplesu.manager.workmode.service.ModeSwitchRootMain { *; }
--keep class dev.maplesu.manager.runtime.ultra.UltraIdentityBroker {
-    public static void main(java.lang.String[]);
-}
 
 # One-shot authorization tools and the lease executor are launched by stable app_process names.
 -keep class dev.maplesu.manager.runtime.authorization.AuthorizationTool {

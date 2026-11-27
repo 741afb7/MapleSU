@@ -13,5 +13,5 @@ struct Reply {
     char reason[80]{};
 };
 // -1 reads; 0/1/3 saves. 7 saves Hide with explicit unverified-kernel consent.
-Reply manage(const char* key, int request);
+Reply manage(int request);
 }

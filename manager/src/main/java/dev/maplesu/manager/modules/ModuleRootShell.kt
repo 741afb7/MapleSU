@@ -61,7 +61,6 @@ object RootExecModuleScriptRunner : ModuleScriptRunner {
 internal class ManagementModuleScriptRunner(context: Context) : ModuleScriptRunner {
     private val app = context.applicationContext
     private var shell: Shell? = null
-    private var key: String? = null
     private var boot: String? = null
 
     @Synchronized
@@ -75,12 +74,10 @@ internal class ManagementModuleScriptRunner(context: Context) : ModuleScriptRunn
             return RootExecModuleScriptRunner.run(app, script)
         }
         return try {
-            val nextKey = UltraSdkCredentials.read(app)
             val nextBoot = UltraEnvironmentAutoSetup.currentBootId()
-            if (key != nextKey || boot != nextBoot || shell?.isAlive != true) {
+            if (boot != nextBoot || shell?.isAlive != true) {
                 closeShell()
                 shell = RootManagement.openShell(app)
-                key = nextKey
                 boot = nextBoot
             }
             // Each command gets its own shell flags and cwd. A failed `set -e`
@@ -127,7 +124,6 @@ internal class ManagementModuleScriptRunner(context: Context) : ModuleScriptRunn
     private fun closeShell() {
         runCatching { shell?.close() }
         shell = null
-        key = null
         boot = null
     }
 }

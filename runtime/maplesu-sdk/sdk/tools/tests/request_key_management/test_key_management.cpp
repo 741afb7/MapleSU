@@ -250,6 +250,7 @@ void bad_completion() {
     for (const auto mode : {Completion::Magic, Completion::Version, Completion::Length,
                            Completion::Command, Completion::Request, Completion::Positive}) {
         std::thread worker([mode] {
+        check(maplesu_request_select_legacy(state.key.c_str()) == KModErr::OK, "worker explicitly selects its historical credential");
             state.fail_command = MAPLESU_REQUEST_SESSION_OPEN; state.completion = mode;
             uint64_t output = untouched; bool supported = false;
             check(allocate(8, output, &supported) != KModErr::OK && supported && output == untouched,
@@ -265,6 +266,7 @@ void bad_completion() {
 void threads() {
     std::vector<std::thread> workers;
     for (int i = 0; i < 8; ++i) workers.emplace_back([i] {
+        check(maplesu_request_select_legacy(state.key.c_str()) == KModErr::OK, "worker explicitly selects its historical credential");
         state.key[0] = static_cast<char>('A' + i);
         for (int n = 0; n < 20; ++n) {
             open_allocation(8);
@@ -352,6 +354,7 @@ void old_no_v2() {
 void cross_thread() {
     open_allocation(8);
     std::thread worker([] {
+        check(maplesu_request_select_legacy(state.key.c_str()) == KModErr::OK, "worker explicitly selects its historical credential");
         uint64_t output = untouched; const uint8_t bytes[8]{};
         check(maplesu_request_managed_allocation(address), "another thread knows the managed address provenance");
         check(unsafe_request_kernel_write_mem(address, bytes, sizeof(bytes)) != KModErr::OK,
@@ -434,6 +437,7 @@ void credential_error() {
 void credential_identity() {
     for (int changed = 0; changed != 3; ++changed) {
         std::thread worker([changed] {
+        check(maplesu_request_select_legacy(state.key.c_str()) == KModErr::OK, "worker explicitly selects its historical credential");
             open_allocation(8);
             check(maplesu_request_key_credential_begin() == KModErr::OK, "identity case starts a real credential adapter");
             if (changed == 0) state.key[47] = 'Z';
@@ -659,6 +663,7 @@ extern "C" long __wrap_syscall(long number, ...) {
 
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
+    check(kernel_module::maplesu_request_select_legacy(state.key.c_str()) == KModErr::OK, "explicit historical client protocol");
     const std::string name = argv[1];
     if (name == "roundtrip") roundtrip();
     else if (name == "execute") execute();

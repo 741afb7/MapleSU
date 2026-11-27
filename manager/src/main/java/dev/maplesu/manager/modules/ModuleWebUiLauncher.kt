@@ -477,7 +477,7 @@ object ModuleWebUiLauncher {
             sdkError = receipt.sdkError,
             sdkErrorCode = receipt.sdkErrorCode.takeIf { it != Int.MIN_VALUE },
             errorCode = receipt.sdkError,
-            pageOpener = if (receipt.string("pageOpener") == "manager") WebUiPageOpener.MAPLESU else WebUiPageOpener.SDK,
+            pageOpener = WebUiPageOpener.fromWire(receipt.data?.opt("pageOpener")),
             moduleDir = receipt.string("moduleDir"),
         )
     }

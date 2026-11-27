@@ -161,7 +161,7 @@ struct BootObservation {
     char id[37]{};
     bool valid = false;
 };
-Reply read_control_row(const char* key, const char* id, int request,
+Reply read_control_row(const char* id, int request,
                        const maplesu::sdk::module_record& module, int parent,
                        const BootObservation* observed_boot = nullptr) {
     Reply result;
@@ -193,7 +193,7 @@ Reply read_control_row(const char* key, const char* id, int request,
     } else if (errno != ENOENT) { result.error = maplesu::MODULE_CONTROL_IO; return result; }
     if (request >= 0) {
         // Safe mode / Fault never starts or re-enables native execution through this API.
-        if (maplesu::sdk::get_maplesu_environment_state(key) != maplesu::sdk::MapleSUEnvState::Running) {
+        if (maplesu::sdk::get_maplesu_environment_state() != maplesu::sdk::MapleSUEnvState::Running) {
             result.error = maplesu::MODULE_CONTROL_ENVIRONMENT; return result;
         }
         if (result.state.enabled != uint32_t(request)) {
@@ -227,7 +227,7 @@ Reply read_control_row(const char* key, const char* id, int request,
     result.error = 0;
     return result;
 }
-Reply read_control(const char* key, const char* id, int request,
+Reply read_control(const char* id, int request,
                    const std::vector<maplesu::sdk::module_record>& modules) {
     Reply result;
     result.state.toggleSupported = 1;
@@ -246,30 +246,35 @@ Reply read_control(const char* key, const char* id, int request,
     std::string directory;
     maplesu_system_directory(&directory);
     Fd parent(open((directory + "/modules").c_str(), O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC));
-    return read_control_row(key, id, request, *found, parent.value);
+    return read_control_row( id, request, *found, parent.value);
 }
-Reply execute(const char* key, const char* id, int request) {
+Reply execute(const char* id, int request) {
     Reply result;
     maplesu::storage::WorkerScope worker(id);
-    auto err = kernel_module::maplesu_request_owner_mode() ? worker.root() : maplesu::sdk::get_root(key);
+    auto err = worker.root();
     if (is_failed(err)) { result.error = static_cast<int64_t>(err); return result; }
-    if (request >= 0) {
-        result.error = acquire_lock();
-        if (result.error != 0) return result;
-    }
-    result.state.toggleSupported = helper_supported();
-    if (request == -2) { result.error = 0; return result; }
-    if (!result.state.toggleSupported) { result.error = maplesu::MODULE_CONTROL_UNSUPPORTED; return result; }
-    std::vector<maplesu::sdk::module_record> modules;
-    err = maplesu::sdk::unsafe_get_all_modules(modules);
-    if (is_failed(err)) { result.error = static_cast<int64_t>(err); return result; }
-    return read_control(key, id, request, modules);
+    result = [&]() -> Reply {
+        if (request >= 0) {
+            result.error = acquire_lock();
+            if (result.error != 0) return result;
+        }
+        result.state.toggleSupported = helper_supported();
+        if (request == -2) { result.error = 0; return result; }
+        if (!result.state.toggleSupported) { result.error = maplesu::MODULE_CONTROL_UNSUPPORTED; return result; }
+        std::vector<maplesu::sdk::module_record> modules;
+        err = maplesu::sdk::unsafe_get_all_modules(modules);
+        if (is_failed(err)) { result.error = static_cast<int64_t>(err); return result; }
+        return read_control( id, request, modules);
+    }();
+    const auto closed = worker.close_checked();
+    if (!result.error && is_failed(closed)) result.error = static_cast<int64_t>(closed);
+    return result;
 }
-int64_t invoke(const char* key, const char* id, int request, maplesu::ModuleControlState& out) {
+int64_t invoke(const char* id, int request, maplesu::ModuleControlState& out) {
     out = {};
-    if (!kernel_module::maplesu_request_owner_mode() &&
-        (!key || strnlen(key, 1024) < 16 || strnlen(key, 1024) == 1024)) return maplesu::MODULE_CONTROL_IO;
     if (request != -2 && !id_valid(id)) return maplesu::MODULE_CONTROL_INVALID_ID;
+    const auto admission = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(admission)) return static_cast<int64_t>(admission);
     int pipes[2];
     if (pipe2(pipes, O_CLOEXEC) != 0) return maplesu::MODULE_CONTROL_IO;
     Fd input(pipes[0]), output(pipes[1]);
@@ -278,7 +283,7 @@ int64_t invoke(const char* key, const char* id, int request, maplesu::ModuleCont
     if (pid == 0) {
         close(input.value);
         Reply reply;
-        try { reply = execute(key, id, request); } catch (...) { reply.error = maplesu::MODULE_CONTROL_IO; }
+        try { reply = execute( id, request); } catch (...) { reply.error = maplesu::MODULE_CONTROL_IO; }
         release_lock();
         const auto ignored = write(output.value, &reply, sizeof(reply)); (void)ignored;
         _exit(0);
@@ -298,11 +303,10 @@ int64_t invoke(const char* key, const char* id, int request, maplesu::ModuleCont
     return reply.error;
 }
 
-void execute_controls(const char* key, const std::vector<maplesu::sdk::module_record>& records,
+void execute_controls(const std::vector<maplesu::sdk::module_record>& records,
                       std::vector<Reply>& replies) {
     maplesu::storage::WorkerScope worker;
-    int64_t error = static_cast<int64_t>(kernel_module::maplesu_request_owner_mode() ?
-        worker.root() : maplesu::sdk::get_root(key));
+    int64_t error = static_cast<int64_t>(worker.root());
     if (error == 0 && !helper_supported()) error = maplesu::MODULE_CONTROL_UNSUPPORTED;
     if (error != 0) {
         for (size_t index = 0; index < records.size(); ++index)
@@ -333,7 +337,7 @@ void execute_controls(const char* key, const std::vector<maplesu::sdk::module_re
             if (parent.value >= 0) observed_boot.valid = boot_id(observed_boot.id);
             prepared = true;
         }
-        replies[index] = read_control_row(key, id, -1, record, parent.value, &observed_boot);
+        replies[index] = read_control_row( id, -1, record, parent.value, &observed_boot);
     }
     if (parent.value >= 0) {
         // A held directory can survive replacement of its current pathname.
@@ -344,18 +348,27 @@ void execute_controls(const char* key, const std::vector<maplesu::sdk::module_re
                 if (reply.error == 0) reply.error = maplesu::MODULE_CONTROL_IO;
         }
     }
+    const auto closed = worker.close_checked();
+    if (is_failed(closed)) {
+        for (auto& reply : replies)
+            if (!reply.error) reply.error = static_cast<int64_t>(closed);
+    }
 }
 
-std::vector<Reply> invoke_controls(const char* key, const std::vector<maplesu::sdk::module_record>& records) {
+std::vector<Reply> invoke_controls(const std::vector<maplesu::sdk::module_record>& records) {
     std::vector<Reply> failed(records.size());
-    if (!kernel_module::maplesu_request_owner_mode() &&
-        (!key || strnlen(key, 1024) < 16 || strnlen(key, 1024) == 1024)) return failed;
     bool valid = false;
     for (size_t index = 0; index < records.size(); ++index) {
         if (id_valid(records[index].desc.id32)) valid = true;
         else failed[index].error = maplesu::MODULE_CONTROL_INVALID_ID;
     }
     if (!valid) return failed;
+    const auto admission = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(admission)) {
+        for (auto& reply : failed)
+            if (reply.error != maplesu::MODULE_CONTROL_INVALID_ID) reply.error = static_cast<int64_t>(admission);
+        return failed;
+    }
     int pipes[2];
     if (pipe2(pipes, O_CLOEXEC) != 0) return failed;
     Fd input(pipes[0]), output(pipes[1]);
@@ -364,7 +377,7 @@ std::vector<Reply> invoke_controls(const char* key, const std::vector<maplesu::s
     if (pid == 0) {
         close(input.value);
         auto replies = failed;
-        try { execute_controls(key, records, replies); } catch (...) { replies = failed; }
+        try { execute_controls( records, replies); } catch (...) { replies = failed; }
         release_lock();
         // A list can exceed PIPE_BUF; the parent drains complete replies as they arrive.
         const char* bytes = reinterpret_cast<const char*>(replies.data());
@@ -415,16 +428,16 @@ extern "C" [[noreturn]] void maplesu_module_worker_exit(int code) {
     release_lock(); _exit(code);
 }
 namespace maplesu {
-int64_t module_control_capability(const char* key, bool& supported) {
+int64_t module_control_capability(bool& supported) {
     ModuleControlState result;
-    const auto error = invoke(key, nullptr, -2, result);
+    const auto error = invoke( nullptr, -2, result);
     supported = error == 0 && result.toggleSupported;
     return error;
 }
-int64_t get_module_control(const char* key, const char* id, ModuleControlState& out) { return invoke(key,id,-1,out); }
+int64_t get_module_control(const char* id, ModuleControlState& out) { return invoke(id,-1,out); }
 std::vector<ModuleControlResult> get_module_controls(
-    const char* key, const std::vector<maplesu::sdk::module_record>& records) { return invoke_controls(key, records); }
-int64_t set_module_enabled(const char* key, const char* id, bool enabled, ModuleControlState& out) {
-    return invoke(key,id,enabled ? 1 : 0,out);
+    const std::vector<maplesu::sdk::module_record>& records) { return invoke_controls( records); }
+int64_t set_module_enabled(const char* id, bool enabled, ModuleControlState& out) {
+    return invoke(id,enabled ? 1 : 0,out);
 }
 }

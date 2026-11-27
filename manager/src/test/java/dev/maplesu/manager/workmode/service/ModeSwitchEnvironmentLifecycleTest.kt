@@ -312,7 +312,7 @@ class ModeSwitchEnvironmentLifecycleTest {
     private inner class Fixture {
         val root: File = tmp.newFolder()
         val privateDirectory = "/data/a1b2c3d4e5f60718"
-        val paths = ModeSwitchDataPaths.fromLocal(rootKey = "a1b2c3d4e5f60718" + "9".repeat(32))
+        val paths = ModeSwitchDataPaths.fromLocal(ultraDirectory = privateDirectory)
         var scripts = 0
         var uninstalls = 0
         var shellPrefix = ""

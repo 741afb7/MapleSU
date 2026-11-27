@@ -18,9 +18,6 @@ internal class UltraKernelGenerateException(
 
 /** Every code [UltraKernelSpecGenerator] and its dependencies may raise. */
 internal object UltraKernelGenerateCodes {
-    /** No shipped asset for this release *and* no device credential to generate one with. */
-    const val CREDENTIAL_REQUIRED = "ULTRA_KERNEL_CREDENTIAL_REQUIRED"
-
     /** The kernel's `kallsyms` table could not be decoded (see the detail for the anchor). */
     const val KALLSYMS = "ULTRA_KERNEL_GENERATE_KALLSYMS"
 

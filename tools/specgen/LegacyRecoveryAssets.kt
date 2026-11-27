@@ -47,13 +47,11 @@ fun main(args: Array<String>) {
         for ((start, end) in spans) check(extents.any { (name, delta, length) ->
             symbols.offsetOf(name)?.let { start >= it + delta && end <= it + delta + length } == true
         } || metadata(start, end)) { "LEGACY_PAIR_UNREVIEWED_RANGE:$start:${end - start}" }
-        val keyAt = requireNotNull(symbols.offsetOf("panic"))
-        val credential = UltraKernelCredential.of(patched.copyOfRange(keyAt, keyAt + 48).toString(Charsets.US_ASCII))
         val records = spans.mapIndexed { index, (start, end) ->
             UltraKernelPlan.PatchRecord("legacy-$index", start.toLong(),
                 original.copyOfRange(start, end), patched.copyOfRange(start, end))
         }
-        val plan = UltraKernelPlan.fromRecords(release, records, credential)
+        val plan = UltraKernelPlan.fromRecords(release, records)
         check(plan.apply(original).kernel.contentEquals(patched)) { "LEGACY_PAIR_REPLAY_MISMATCH" }
         val inverse = UltraKernelRecoveryRecord.fromPlan(plan, original.size, 0, 0).encode()
         check(UltraKernelRecoveryRecord.decode(inverse).restore(patched).contentEquals(original)) {

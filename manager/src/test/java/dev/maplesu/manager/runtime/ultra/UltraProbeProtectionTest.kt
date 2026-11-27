@@ -6,6 +6,41 @@ import org.junit.Test
 class UltraProbeProtectionTest {
     private val probe = UltraEnvironmentProbe
 
+    @Test fun currentSignedOwnerRetainsFaultWithoutRootAndRejectsUnboundForeignRoot() {
+        val owner = UltraRuntimeClient.ManagerOwnerIdentity(android.os.Process.myUid(), 7, "ab".repeat(16))
+        val fault = UltraEnvironmentProbe.Snapshot(UltraEnvironmentProbe.State.Fault,
+            managerOwnerIdentity = owner, sdkChannelAvailable = true)
+        val scopedFault = probe.scopeOwnerSnapshot(fault, owner, "boot", "boot", false)
+        assertEquals(UltraEnvironmentProbe.State.Fault, scopedFault.state)
+        assertFalse(scopedFault.rootAvailable)
+        assertEquals("ultra:fault", probe.recoveryFingerprint(scopedFault.state, true))
+        for (state in listOf(UltraEnvironmentProbe.State.Running, UltraEnvironmentProbe.State.Fault)) {
+            val foreign = UltraEnvironmentProbe.Snapshot(state, kernelRootVerified = true,
+                sdkChannelAvailable = true)
+            val scoped = probe.scopeOwnerSnapshot(foreign, null, "boot", "boot", false)
+            assertEquals(UltraEnvironmentProbe.State.Unknown, scoped.state)
+            assertFalse(scoped.rootAvailable)
+            assertFalse(scoped.sdkChannelAvailable)
+            assertThrows(IllegalStateException::class.java) {
+                probe.recoveryFingerprint(scoped.state, false, scoped.kernelRootVerified,
+                    scoped.kernelChannelAbsent, scoped.detail)
+            }
+        }
+    }
+
+    @Test fun staleEpochHostAndBootCannotReuseAnAuthenticatedUltraObservation() {
+        val owner = UltraRuntimeClient.ManagerOwnerIdentity(android.os.Process.myUid(), 7, "ab".repeat(16))
+        val running = UltraEnvironmentProbe.Snapshot(UltraEnvironmentProbe.State.Running,
+            kernelRootVerified = true, managerOwnerIdentity = owner, sdkChannelAvailable = true)
+        for (different in listOf(owner.copy(epoch = 8), owner.copy(hostInstance = "cd".repeat(16)),
+            owner.copy(fullUid = owner.fullUid + 100000))) {
+            assertEquals(UltraEnvironmentProbe.State.Unknown,
+                probe.scopeOwnerSnapshot(running, different, "boot", "boot", false).state)
+        }
+        assertEquals(UltraEnvironmentProbe.State.Unknown,
+            probe.scopeOwnerSnapshot(running, owner, "new", "old", false).state)
+    }
+
     @Test fun runningStatusRequiresIndependentKernelRootProof() {
         assertFalse(UltraEnvironmentProbe.Snapshot(UltraEnvironmentProbe.State.Running).rootAvailable)
         assertTrue(UltraEnvironmentProbe.Snapshot(UltraEnvironmentProbe.State.Running, kernelRootVerified = true).rootAvailable)
@@ -46,19 +81,28 @@ class UltraProbeProtectionTest {
             probe.stateAfterAdmission(UltraEnvironmentProbe.State.Fault, UltraEnvironmentProbe.State.Running, "OK", true))
     }
 
-    @Test fun aDifferentOrSuspendedIdentityMustNotInheritProtection() {
+    @Test fun absentChangedBootOrSuspendedOwnerDiscardsOldProtection() {
         val fault = UltraEnvironmentProbe.Snapshot(UltraEnvironmentProbe.State.Fault)
-        assertEquals(UltraEnvironmentProbe.State.NoKey,
-            probe.scopeSnapshot(fault, null, "key-a", "boot-a", "boot-a", false).state)
-        assertEquals(UltraEnvironmentProbe.State.Unknown,
-            probe.scopeSnapshot(fault, "key-b", "key-a", "boot-a", "boot-a", false).state)
-        assertEquals(UltraEnvironmentProbe.State.Unknown,
-            probe.scopeSnapshot(fault, "key-a", "key-a", "boot-b", "boot-a", false).state)
-        assertEquals(UltraEnvironmentProbe.State.Unknown,
-            probe.scopeSnapshot(fault, "key-a", "key-a", null, "boot-a", false).state)
-        assertEquals(UltraEnvironmentProbe.State.Unknown,
-            probe.scopeSnapshot(fault, "key-a", "key-a", "boot-a", "boot-a", true).state)
-        assertEquals(UltraEnvironmentProbe.State.Unknown,
-            probe.scopeSnapshot(fault, "key-a", "key-a", "boot-a", "boot-a", false, true).state)
+        for ((boot, observed, suspended) in listOf(Triple("new", "old", false),
+            Triple(null, "old", false), Triple("boot", "boot", true), Triple("boot", "boot", false))) {
+            assertEquals(UltraEnvironmentProbe.State.Unknown,
+                probe.scopeOwnerSnapshot(fault, null, boot, observed, suspended).state)
+        }
+    }
+
+    @Test fun failedOwnerObservationRetainsDiagnosticsWithoutRetainingCapabilities() {
+        val detail = "operation=query_manager_owner_identity;sdkError=ERR_MODULE_TEST_CHANNEL;sdkErrorCode=-19999"
+        val failed = UltraEnvironmentProbe.Snapshot(detail = detail, observedAtElapsedMs = 100,
+            kernelRootVerified = true, sdkChannelAvailable = true)
+        val scoped = probe.scopeOwnerSnapshot(failed, null, "boot", "boot", false)
+        assertEquals(detail, scoped.detail)
+        assertEquals(UltraEnvironmentProbe.State.Unknown, scoped.state)
+        assertNull(scoped.managerOwnerIdentity)
+        assertFalse(scoped.rootAvailable)
+        assertFalse(scoped.sdkChannelAvailable)
+        for ((boot, observed, suspended) in listOf(Triple("new", "old", false),
+            Triple(null, "boot", false), Triple("boot", "boot", true))) {
+            assertNull(probe.scopeOwnerSnapshot(failed, null, boot, observed, suspended).detail)
+        }
     }
 }

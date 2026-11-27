@@ -63,11 +63,17 @@ class UltraSafeModeObservationTest {
             probe.states.collect { modules.update { it.withUltraSafety(safe(), WorkMode.LITE) } }
         }
         val release = CountDownLatch(1)
+        val started = CountDownLatch(1)
         val finished = CountDownLatch(1)
         try {
+            withTimeout(2_000) {
+                home.first { it.isSafeMode }
+                modules.first { it.isSafeMode }
+            }
             assertTrue(home.value.showSafeModeBanner)
             assertTrue(modules.value.recoveryOnly)
             val result = EnvironmentProbeRunner("safe-mode-timeout-test").run(20) {
+                started.countDown()
                 try {
                     // A native call may finish after Future.cancel(true), as on the device.
                     while (true) {
@@ -97,7 +103,7 @@ class UltraSafeModeObservationTest {
             assertFalse(modules.value.installButtonVisible)
         } finally {
             release.countDown()
-            assertTrue(finished.await(2, TimeUnit.SECONDS))
+            if (started.count == 0L) assertTrue(finished.await(2, TimeUnit.SECONDS))
             homeJob.cancel()
             moduleJob.cancel()
         }

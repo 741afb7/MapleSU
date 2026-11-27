@@ -7,7 +7,6 @@
 #include <csignal>
 #include <new>
 
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
 namespace maplesu {
 namespace {
 struct Frame { int64_t error = 0; char facts[1024]{}; };
@@ -22,9 +21,10 @@ bool transfer(int fd, void* bytes, size_t size, bool sending) {
     return true;
 }
 }
-KModErr capture_module_environment(const char* key, std::vector<std::string>& out) {
+KModErr capture_module_environment(std::vector<std::string>& out) {
     out.clear();
-    if (key && (strnlen(key, 1024) < 16 || strnlen(key, 1024) >= 1024)) return KModErr::ERR_MODULE_ROOT_KEY;
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
+    const auto selected = kernel_module::maplesu_request_auth_mode(kernel_module::maplesu_request_auth_state());
     int pipe[2];
     if (pipe2(pipe, O_CLOEXEC)) return static_cast<KModErr>(-errno);
     const pid_t child = fork();
@@ -33,9 +33,7 @@ KModErr capture_module_environment(const char* key, std::vector<std::string>& ou
         close(pipe[0]); signal(SIGPIPE, SIG_IGN);
         Frame frame;
         try {
-            KModErr error = kernel_module::maplesu_request_set_auth_mode(key ?
-                kernel_module::RequestAuthMode::LegacyKey : kernel_module::RequestAuthMode::ManagerOwner);
-            if (key && is_ok(error)) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
+            KModErr error = kernel_module::maplesu_request_set_auth_mode(selected);
             storage::WorkerScope worker;
             if (is_ok(error)) error = worker.root();
             module_environment::Environment environment;

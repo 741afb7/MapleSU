@@ -59,8 +59,8 @@ extern const unsigned int msu_task_state_compiled_layout[MSU_TASK_STATE_LAYOUT_W
 
 /* Independent kernel-private Profile tail, not management wire or Linux nnp.
  * Enabling requires the actual target's fixed KSU bit63, embedded thread_info,
- * native atomic/RCU and tracepoint ABI. The native KMI route retains KSU's
- * clone/exec lifecycle; the exact Image route has its separate code proof. */
+ * native atomic/RCU and tracepoint ABI. The marker retains KSU's clone/exec
+ * lifecycle; it adds no target-binding offset or qualification bit. */
 #ifndef MSU_TASK_PROFILE_FLAGS_VERIFIED
 #define MSU_TASK_PROFILE_FLAGS_VERIFIED 0
 #endif
@@ -69,14 +69,16 @@ extern const unsigned int msu_task_state_compiled_layout[MSU_TASK_STATE_LAYOUT_W
 
 #define MSU_TASK_PROFILE_TARGET_MAGIC 0x4d535450U
 #define MSU_TASK_PROFILE_TARGET_SCHEMA 1U
-#define MSU_TASK_PROFILE_TARGET_PROOFS 0x3fU
+#define MSU_TASK_PROFILE_TARGET_PROOFS 0x1fU
+#define MSU_TASK_PROFILE_TARGET_LEGACY_PROOFS 0x3fU
 #define MSU_TASK_PROFILE_TARGET_IMAGE 1U
 #define MSU_TASK_PROFILE_TARGET_RUNTIME 2U
 #define MSU_TASK_PROFILE_RUNTIME_PROOFS 0x1fU
-/* bound=1 is the existing Image/BTF materializer's six-proof receipt, including
- * its Image/config/proof hashes. bound=2 identifies the live-kernel producer:
- * five live/private plus native DDK API facts, KSU clone/exec lifecycle, and zero offline
- * hashes. It is accepted only with the producer's private publication receipt.
+/* bound=1 is the Image/BTF materializer's five-proof receipt, including its
+ * Image/config/proof hashes. Historical six-proof Image receipts remain readable.
+ * bound=2 identifies the live-kernel producer: five live/private plus native DDK
+ * API facts and zero offline hashes. It is accepted only with the producer's
+ * private publication receipt; the fixed KSU clone/exec lifecycle is unchanged.
  * Offsets remain in the shared dynamic table; work_bit is decoded from the
  * actual running kernel's syscall-entry instructions, never a family constant. */
 struct msu_task_profile_target_binding {

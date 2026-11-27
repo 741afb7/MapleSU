@@ -12,8 +12,8 @@ extern decltype(sdk::get_sdk_version) sdk_version
     asm("_ZN10skroot_env15get_sdk_versionEv")
     __attribute__((alias("_ZN7maplesu3sdk15get_sdk_versionEv")));
 extern decltype(sdk::get_maplesu_environment_state) environment_state
-    asm("_ZN10skroot_env28get_skroot_environment_stateEPKc")
-    __attribute__((alias("_ZN7maplesu3sdk29get_maplesu_environment_stateEPKc")));
+    asm("_ZN10skroot_env28get_skroot_environment_stateEv")
+    __attribute__((alias("_ZN7maplesu3sdk29get_maplesu_environment_stateEv")));
 extern decltype(sdk::unsafe_reset_autorun_bootstrap_safe_flag) reset_safe_flag
     asm("_ZN10skroot_env40unsafe_reset_autorun_bootstrap_safe_flagEv")
     __attribute__((alias("_ZN7maplesu3sdk40unsafe_reset_autorun_bootstrap_safe_flagEv")));

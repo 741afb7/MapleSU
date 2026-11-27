@@ -28,9 +28,6 @@
 #include "kernel_module_kit_umbrella.h"
 #pragma clang diagnostic pop
 
-// Root key of the module instance that is currently running.
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-
 // Persists the package list and publishes the matching kernel UID table.
 // `required_package` must resolve to a live UID; `refresh_existing` rebuilds
 // the UID table from the regenerated packages.list even when the package set

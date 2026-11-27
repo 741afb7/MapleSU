@@ -38,8 +38,7 @@ private:
     bool selected_ = false;
 };
 
-// Legacy is derived at its single compatibility boundary on each call. Owner
-// requires the explicit current worker scope and never falls back to a Key.
+// Paths require the explicit current worker scope and its live session.
 __attribute__((visibility("hidden")))
 KModErr current_context(StorageContext& out);
 __attribute__((visibility("hidden")))

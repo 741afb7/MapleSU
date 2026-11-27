@@ -38,6 +38,12 @@ class UltraAutoSetupAttemptTest {
         var installs = 0
         var outcome = UltraEnvironmentInstaller.Outcome(true, "OK")
         var crash = false
+        var cancellation: java.util.concurrent.CancellationException? = null
+        var submitted = false
+        var guardOk = true
+        override fun alreadySubmitted() = submitted
+        override fun markSubmitted(): Boolean { if (guardOk) submitted = true; return guardOk }
+        override fun clearUnsubmitted() { submitted = false }
         override fun blockedReason() = blocked
         override fun state() = observed.also { afterProbe?.invoke() }
         override fun recordAttempt() {
@@ -47,6 +53,7 @@ class UltraAutoSetupAttemptTest {
         }
         override fun install(): UltraEnvironmentInstaller.Outcome {
             installs++
+            cancellation?.let { throw it }
             if (crash) error("install transport lost")
             if (outcome.ok && outcome.verified) observed = UltraEnvironmentProbe.State.Running
             return outcome
@@ -77,7 +84,7 @@ class UltraAutoSetupAttemptTest {
     }
 
     @Test fun changesDuringProbeAbortBeforeDiagnosticsOrAnyWrite() {
-        for (reason in listOf("KEY_CHANGED", "BOOT_CHANGED", "SUSPENDED", "SWITCH_PENDING", "MODE_KSU")) {
+        for (reason in listOf("OWNER_CHANGED", "BOOT_CHANGED", "SUSPENDED", "SWITCH_PENDING", "MODE_KSU")) {
             val port = Port().apply {
                 observed = UltraEnvironmentProbe.State.NotInstalled
                 afterProbe = { blocked = reason }
@@ -97,34 +104,81 @@ class UltraAutoSetupAttemptTest {
     @Test fun changesWhileWritingDiagnosticsStillAbortBeforeInstallation() {
         val port = Port().apply {
             observed = UltraEnvironmentProbe.State.NotInstalled
-            afterRecord = { blocked = "KEY_CHANGED" }
+            afterRecord = { blocked = "OWNER_CHANGED" }
         }
-        assertEquals("KEY_CHANGED", port.run().reason)
+        assertEquals("OWNER_CHANGED", port.run().reason)
         assertEquals(1, port.records)
         assertEquals(0, port.installs)
     }
 
-    @Test fun failedUnverifiedAndInterruptedWritesAllowOneRetryPerFreshRequest() {
+    @Test fun cancelledPreparationClearsOnlyTheKnownUnsubmittedGuard() {
+        val original = java.util.concurrent.CancellationException("preparation cancelled")
+        val port = Port().apply {
+            observed = UltraEnvironmentProbe.State.NotInstalled
+            cancellation = UltraInstallPreparationCancelled(original)
+        }
+        assertSame(original, assertThrows(java.util.concurrent.CancellationException::class.java) { port.run() })
+        assertFalse(port.submitted)
+        port.cancellation = null
+        assertTrue(port.run().installed)
+        assertEquals(2, port.installs)
+    }
+
+    @Test fun cancellationWithUnknownSubmissionKeepsTheGuardAndPropagates() {
+        val original = java.util.concurrent.CancellationException("transport cancelled")
+        val port = Port().apply {
+            observed = UltraEnvironmentProbe.State.NotInstalled
+            cancellation = original
+        }
+        assertSame(original, assertThrows(java.util.concurrent.CancellationException::class.java) { port.run() })
+        assertTrue(port.submitted)
+        port.cancellation = null
+        assertEquals("INSTALL_RECONCILIATION_REQUIRED", port.run().reason)
+        assertEquals(1, port.installs)
+    }
+
+    @Test fun aConfirmedUnsubmittedFailureAllowsAFreshAttempt() {
+        val port = Port().apply {
+            observed = UltraEnvironmentProbe.State.NotInstalled
+            outcome = UltraEnvironmentInstaller.Outcome(false, "MAPLESU_SDK_BUSY")
+        }
+        assertFalse(port.run().installed)
+        assertFalse(port.submitted)
+        port.outcome = UltraEnvironmentInstaller.Outcome(true, "OK")
+        assertTrue(port.run().installed)
+        assertEquals(2, port.installs)
+    }
+
+    @Test fun uncertainUnverifiedAndInterruptedSubmissionsAreNeverReplayed() {
         for (scenario in 0..2) {
             val port = Port().apply {
                 observed = UltraEnvironmentProbe.State.NotInstalled
                 when (scenario) {
-                    0 -> outcome = UltraEnvironmentInstaller.Outcome(false, "ERR_MODULE_NO_BOOT")
+                    0 -> outcome = UltraEnvironmentInstaller.Outcome(false, "HOTLOAD_REPLY_LOST",
+                        sdkErrorCode = -21002, submissionUnknown = true)
                     1 -> outcome = UltraEnvironmentInstaller.Outcome(true, "OK", verified = false)
                     2 -> crash = true
                 }
             }
-            val failed = port.run()
-            assertTrue(failed.attempted)
-            assertFalse(failed.installed)
-            assertEquals("one request never loops internally", 1, port.installs)
+            assertFalse(port.run().installed)
+            assertTrue(port.submitted)
             port.outcome = UltraEnvironmentInstaller.Outcome(true, "OK")
             port.crash = false
-            assertTrue(port.run().installed)
-            assertEquals(2, port.installs)
-            assertEquals("ALREADY_RUNNING", port.run().reason)
-            assertEquals(2, port.installs)
+            repeat(3) { assertEquals("INSTALL_RECONCILIATION_REQUIRED", port.run().reason) }
+            assertEquals(1, port.installs)
+            val reloaded = Port().apply {
+                observed = UltraEnvironmentProbe.State.NotInstalled
+                submitted = port.submitted
+            }
+            assertEquals("INSTALL_RECONCILIATION_REQUIRED", reloaded.run().reason)
+            assertEquals(0, reloaded.installs)
         }
+    }
+
+    @Test fun aFailedDurableGuardNeverSubmits() {
+        val port = Port().apply { observed = UltraEnvironmentProbe.State.NotInstalled; guardOk = false }
+        assertEquals("INSTALL_GUARD_STORE_FAILED", port.run().reason)
+        assertEquals(0, port.installs)
     }
 
     @Test fun aLostInstallReplyIsReconciledBeforeAnyLaterSubmission() {
@@ -137,7 +191,7 @@ class UltraAutoSetupAttemptTest {
             assertFalse(port.run().installed)
             port.observed = later
             assertFalse(port.run().attempted)
-            assertEquals("only a later NotInstalled observation permits a new submission", 1, port.installs)
+            assertEquals("observations preserve the original submission", 1, port.installs)
         }
     }
 }

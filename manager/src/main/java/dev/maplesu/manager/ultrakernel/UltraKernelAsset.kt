@@ -155,10 +155,8 @@ internal class UltraKernelFileAssets(private val root: File) : UltraKernelAssetS
 /**
  * `MANIFEST`-style stable failure for a release that cannot be built as-is.
  *
- * Since the recipe renderer exists, "no asset for this release" is no longer the end of the road:
- * the release may still be *generatable*, and the only thing missing may be the device credential.
- * That case is reported by [UltraKernelCredentialRequiredException], which is a subtype so that any
- * caller written before generation existed keeps catching a refusal instead of crashing.
+ * When no shipped asset matches, the generator resolves the actual kernel layout.
+ * Unsupported layouts retain this stable diagnostic and never produce a partial candidate.
  */
 internal open class UltraKernelReleaseUnsupportedException(
     val kernelRelease: String,
@@ -172,23 +170,6 @@ internal open class UltraKernelReleaseUnsupportedException(
         const val CODE_UNSUPPORTED = "ULTRA_KERNEL_RELEASE_UNSUPPORTED"
     }
 }
-
-/**
- * No shipped asset for [kernelRelease], and no 48 byte device credential to generate one with.
- *
- * The message is an instruction, not an error: the caller must obtain the Ultra root key (the value
- * `UltraRootKeyStore` holds and the Ultra SDK hands out) and pass it in. It never invents a credential -
- * a random key would produce a kernel that no device can talk to, which is worse than refusing.
- */
-internal class UltraKernelCredentialRequiredException(
-    kernelRelease: String,
-    knownReleases: List<String>,
-) : UltraKernelReleaseUnsupportedException(
-    kernelRelease,
-    knownReleases,
-    UltraKernelGenerateCodes.CREDENTIAL_REQUIRED,
-    ":need=ultra-root-key-or-device-credential(${UltraKernelCredential.LENGTH}B)",
-)
 
 internal fun sha256Hex(bytes: ByteArray): String =
     MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

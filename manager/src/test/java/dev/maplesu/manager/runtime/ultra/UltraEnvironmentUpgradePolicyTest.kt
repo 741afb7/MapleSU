@@ -81,7 +81,7 @@ class UltraEnvironmentUpgradePolicyTest {
     @Test fun upgradeIsUltraOnlyRecheckedAndMarkedBeforeWriting() {
         val source = upgradeSource()
         assertTrue(source.contains("ModeRuntime.active != WorkMode.LITE"))
-        assertTrue(source.contains("UltraEnvUpgradePolicy.decide(readFacts(app))"))
+        assertTrue(source.contains("UltraEnvUpgradePolicy.decide(readObservation(app, {}, binding).first)"))
         assertTrue(source.indexOf(".commit()") in 0 until source.indexOf("UltraEnvironmentInstaller.install("))
     }
 }

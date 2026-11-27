@@ -1,6 +1,6 @@
 // MapleSU unsafe hide dir implementation.
 //
-// 目录隐藏：在模块根密钥推导出的私有目录下铺开安装期使用的目录树，
+// 目录隐藏：在当前受验证部署 namespace 定位的私有目录下铺开安装目录树，
 // 删除整棵私有目录，以及清理旧版本 SDK 遗留的同类目录。
 //
 #include "../maplesu/install/installation_state.h"
@@ -132,7 +132,7 @@ KModErr unsafe_create_hide_dir() {
         if (!file_utils::file_exists(std::filesystem::path(path_str))) {
             return KModErr::ERR_MODULE_CREATE_DIR;
         }
-        // 内核私有根目录保留可执行位给工具进程，其余目录收紧到宿主专用。
+        // 系统工具根目录保留遍历位，其余目录保持宿主专用权限。
         const unsigned int mode = index == 1 ? 0711u : 0700u;
         if (!set_private_mode(path_str, mode)) {
             return KModErr::ERR_SET_FILE_SELINUX;

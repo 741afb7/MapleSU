@@ -1,7 +1,7 @@
-"""Bridge namespace/config2 seam only, with real formally selected ABI headers.
+"""Bridge keyless namespace/config2 seam with current production ABI headers.
 
 The fixture replaces kernel/providers with mocks, never loads a module, emits no
-ko and uses only a memory-only known credential for the bridge's shape check.
+ko and never supplies a Key to bridge or resident configuration.
 The actual host's copy/command27 path still needs its own owner validation.
 Only the host LLP64 copy translates unsigned-long image carriers to uintptr_t;
 actual ARM64 TU validation always uses original product bytes.
@@ -23,6 +23,8 @@ SHIMS = r"""
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
+typedef uint32_t u32;
+typedef uint64_t u64;
 #include <stdio.h>
 #include <string.h>
 #ifndef EOPNOTSUPP
@@ -66,7 +68,7 @@ int msu_init_bridge_imports_init(void);
 int msu_init_bridge_lookup_init(void);
 unsigned long msu_init_bridge_checked_lookup(const char *name);
 int msu_init_bridge_native_layout(unsigned int flags, unsigned int execmem_free, struct msu_boot_sdk_layout *layout);
-int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout, const char key[48]);
+int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout);
 int msu_boot_sdk_native_abort(void);
 """
 CASES = r"""
@@ -88,7 +90,7 @@ int msu_manager_resident_init(const struct msu_resident_config *config) {
         const struct msu_resident_config_v2 *v2 = (const void *)config;
         if (v2->config_bytes != 48 || v2->namespace_record_bytes != 24 ||
             v2->image != (void *)0x1000 || v2->append != (void *)0x2000 ||
-            v2->append_bytes != 48 || !v2->credential ||
+            v2->append_bytes != 48 || v2->credential ||
             !msu_deployment_namespace_valid(v2->namespace_record)) host_invalid = 1;
         else held = *v2->namespace_record;
     } else if (config->version != 1 || config->image != (void *)0x1000 ||
@@ -107,21 +109,19 @@ int msu_boot_events_stop(void) {
     ++event_stops; event_stop_order = ++cleanup_order;
     return event_retained;
 }
-int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout, const char key[48]) {
+int msu_boot_sdk_native_start(const struct msu_boot_sdk_layout *layout) {
     ++provider_calls; environment_seen = layout->environment;
     if (phase != (deployment_namespace[0] ? 2 : 1)) host_invalid = 1;
     phase = 3;
-    int error = msu_init_bridge_host_start(0x1000, (void *)0x2000, 48, key);
+    int error = msu_init_bridge_host_start(0x1000, (void *)0x2000, 48);
     return error ? error : provider_error;
 }
 int msu_boot_sdk_native_abort(void) {
     ++native_aborts; native_abort_order = ++cleanup_order;
     if (event_calls && (!event_stops || event_stop_order >= native_abort_order)) host_invalid = 1;
-    for (unsigned int i = 0; i < sizeof credential; ++i) if (credential[i]) host_invalid = 1;
     return retained;
 }
 static void reset_fixture(void) {
-    memset(credential, 'A', 48); credential[48] = 0;
     memcpy(deployment_namespace, valid_namespace, sizeof valid_namespace);
     fixture_pid = 1; host_attempted = false; bridge_first_error = 0;
     lookups = host_calls = provider_calls = config_version = 0;
@@ -131,7 +131,6 @@ static void reset_fixture(void) {
     phase = cleanup_order = event_stop_order = native_abort_order = layout_error = 0;
 }
 static int cleared(void) {
-    for (unsigned int i = 0; i < sizeof credential; ++i) if (credential[i]) return 0;
     for (unsigned int i = 0; i < sizeof deployment_namespace; ++i) if (deployment_namespace[i]) return 0;
     return 1;
 }
@@ -155,8 +154,6 @@ int main(void) {
     CHECK(msu_init_bridge_start() == -EINVAL && !lookups && !host_calls && cleared());
     reset_fixture(); fixture_pid = 2;
     CHECK(msu_init_bridge_start() == -EPERM && !lookups && !host_calls && cleared());
-    reset_fixture(); credential[0] = '!';
-    CHECK(msu_init_bridge_start() == -EINVAL && !lookups && !host_calls && cleared());
     reset_fixture(); host_error = -EIO;
     CHECK(msu_init_bridge_start() == -EIO && config_version == 2 && cleared());
     CHECK(event_calls == 1 && event_stops == 1 && native_aborts == 1 && !host_invalid && !pinned);
@@ -188,19 +185,13 @@ int main(void) {
 
 class NamespaceChecks(unittest.TestCase):
     def test_parameter_config2_record_and_cleanup(self):
-        selection_data = SELECTION.read_bytes()
-        self.assertEqual(hashlib.sha256(selection_data).hexdigest(), SELECTION_SHA256)
-        selected = {row["logicalPath"]: row["after"] for row in json.loads(selection_data)["files"]}
-        headers, originals = {}, {SELECTION: selection_data, BRIDGE / "bridge.c": (BRIDGE / "bridge.c").read_bytes(),
-                                  BRIDGE / "boot_events.h": (BRIDGE / "boot_events.h").read_bytes()}
+        headers = {}
+        originals = {BRIDGE / "bridge.c": (BRIDGE / "bridge.c").read_bytes(),
+                     BRIDGE / "boot_events.h": (BRIDGE / "boot_events.h").read_bytes()}
         for name in ("manager_claim_loader.h", "manager_deployment_namespace.h", "manager_resident_abi.h", "manager_resident_host.h"):
-            row = selected["runtime/ultra/identity/kernel/" + name]
-            path = Path(row["path"])
-            data = path.read_bytes()
-            self.assertEqual(len(data), row["bytes"])
-            self.assertEqual(hashlib.sha256(data).hexdigest(), row["sha256"])
-            headers[name] = data
-            originals[path] = data
+            path = REPO / "runtime/ultra/identity/kernel" / name
+            headers[name] = path.read_bytes()
+            originals[path] = headers[name]
         with tempfile.TemporaryDirectory(prefix="bridge-namespace-") as directory:
             output = Path(directory)
             for name in ("errno", "init", "module", "pid", "sched", "string", "version"):
@@ -219,7 +210,7 @@ class NamespaceChecks(unittest.TestCase):
             binary = output / "fixture.exe"
             environment = dict(os.environ, PATH=str(Path(CC).parent) + os.pathsep + os.environ.get("PATH", ""))
             compiled = subprocess.run([CC, "-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-UNDEBUG",
-                                       "-I" + str(output), str(source), "-o", str(binary)],
+                                       "-I" + str(output), "-I" + str(REPO / "runtime/ultra/authorization"), str(source), "-o", str(binary)],
                                       env=environment, capture_output=True, text=True, timeout=25)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             subprocess.run([str(binary)], check=True, env=environment, timeout=5)

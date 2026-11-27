@@ -21,6 +21,7 @@ def main():
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     sources = [HERE/'test_metadata.cpp', ROOT/'runtime/ultra/authorization/kernel_read.cpp',
+               ROOT/'runtime/ultra/authorization/kernel_read_legacy.cpp',
                ROOT/'runtime/maplesu-sdk/sdk/src/module/module_append_package_parser.cpp',
                ROOT/'runtime/maplesu-sdk/sdk/src/kernel_mem/module_base_kernel_mem.cpp']
     includes = [HERE, ROOT/'runtime/maplesu-sdk/sdk/include',
@@ -33,16 +34,19 @@ def main():
     environment['PATH'] = str(args.compiler.resolve().parent)+os.pathsep+environment.get('PATH','')
     environment['TMP'] = environment['TEMP'] = str(out)
     avc_source = ROOT/'runtime/maplesu-sdk/sdk/src/patch/patch_avc_denied.cpp'
-    identities = [Path(__file__).resolve(), *sources, avc_source, *HERE.glob('*.h'),
+    history_sources = [ROOT/'runtime/maplesu-sdk/sdk/src/module_base'/name for name in (
+        'module_base_kernel_idle_mem.cpp','module_base_kernel_hook_disable_flag.cpp')]
+    identities = [Path(__file__).resolve(), *sources, avc_source, *history_sources, *HERE.glob('*.h'),
                   ROOT/'runtime/ultra/authorization/kernel_read_metadata.h',
                   ROOT/'runtime/ultra/authorization/request_protocol.h',
                   ROOT/'runtime/maplesu-sdk/sdk/include/maplesu_request_private.h',
+                  ROOT/'runtime/maplesu-sdk/sdk/include/maplesu_request_identity.h',
                   ROOT/'runtime/maplesu-sdk/include/module_base_kernel_mem.h',
                   ROOT/'runtime/maplesu-sdk/include/module_err_def.h']
     initial = {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in identities}
     commands = [('compile',command),('test',[str(out/'metadata-test.exe')])]
     if args.ndk_compiler:
-        for source in [*sources[1:], avc_source]:
+        for source in [*sources[1:], avc_source, *history_sources]:
             flags = ['--target=aarch64-linux-android21','-std=c++20','-fexceptions',
                      '-fsyntax-only','-DMAPLESU_KERNEL_READ_CANONICAL']
             commands.append((f'syntax-{source.stem}',

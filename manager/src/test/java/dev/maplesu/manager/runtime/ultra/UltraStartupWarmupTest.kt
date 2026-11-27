@@ -9,7 +9,7 @@ import org.junit.Test
 class UltraStartupWarmupTest {
     private val pending = UltraStartupWarmup.Input(
         activeMode = null, detectionSettled = true, ksuResponded = false,
-        pendingInstallCredential = true, suspended = false, quiescing = false,
+        pendingInstall = true, suspended = false, quiescing = false,
         switchPending = false, conflictingRoot = false,
     )
 
@@ -30,25 +30,7 @@ class UltraStartupWarmupTest {
         assertEquals(listOf("setup", "pair", "detect"), calls)
     }
 
-    @Test fun firstExportKeepsItsBoundKeyForSetupBeforeTheSdkEnvironmentExists() {
-        var local: String? = null
-        var archived: String? = null
-        var installTask: String? = null
-        val policy = UltraInstallCredentialPolicy({ local }, { null }, { null },
-            { "Ab1".repeat(16).toByteArray() }, { false })
-        val embedded = policy.forCandidate().withMetadataDisplacement(-208)
-        policy.retainForExport(embedded, { archived = it }) {
-            local = it
-            installTask = UltraInstallCredentials.IMAGE_EXPORT_OPERATION
-            true
-        }
-        assertEquals(archived, local)
-        assertEquals(embedded, policy.existing())
-        val (result, calls) = run(pending.copy(pendingInstallCredential =
-            installTask == UltraInstallCredentials.IMAGE_EXPORT_OPERATION))
-        assertTrue(result.ran)
-        assertEquals(listOf("setup", "pair", "detect"), calls)
-    }
+
 
     @Test fun setupWithoutRunningNeverRequestsActivation() {
         val (result, calls) = run(pending, running = false)
@@ -57,37 +39,22 @@ class UltraStartupWarmupTest {
         assertEquals(listOf("setup", "pair"), calls)
     }
 
-    @Test fun aTransientUnknownDuringStartupCompletesPairingAndRequestsDetection() {
-        val calls = mutableListOf<String>()
-        var reads = 0
-        val result = UltraStartupWarmup.run(pending,
-            setupEnvironment = { calls += "setup" },
-            pairEnvironment = {
-                UltraEnvironmentProbe.readUntilConfirmed(false, read = {
-                    calls += "state"
-                    if (++reads == 1) UltraEnvironmentProbe.State.Unknown else UltraEnvironmentProbe.State.Running
-                }, pause = {}) == UltraEnvironmentProbe.State.Running
-            },
-            retryDetection = { calls += "detect" },
-        )
-        assertTrue(result.paired)
-        assertEquals(listOf("setup", "state", "state", "detect"), calls)
-    }
+
 
     @Test fun activatedLiteKeepsNormalWarmupWithoutInstallReceipt() {
-        val (result, calls) = run(pending.copy(activeMode = WorkMode.LITE, pendingInstallCredential = false))
+        val (result, calls) = run(pending.copy(activeMode = WorkMode.LITE, pendingInstall = false))
         assertTrue(result.ran)
         assertEquals(listOf("setup", "pair"), calls)
     }
 
     @Test fun previouslyVerifiedUltraCanRecoverAfterRebootWithoutPendingInstall() {
-        val (result, calls) = run(pending.copy(pendingInstallCredential = false, verifiedUltraIdentity = true))
+        val (result, calls) = run(pending.copy(pendingInstall = false, verifiedUltraIdentity = true))
         assertTrue("a paired device must not deadlock behind mode activation after reboot", result.ran)
         assertEquals(listOf("setup", "pair", "detect"), calls)
     }
 
     @Test fun historicalPairingNeverActivatesAnEnvironmentThatDidNotRecover() {
-        val (result, calls) = run(pending.copy(pendingInstallCredential = false,
+        val (result, calls) = run(pending.copy(pendingInstall = false,
             verifiedUltraIdentity = true), running = false)
         assertTrue(result.ran)
         assertFalse(result.paired)
@@ -95,7 +62,7 @@ class UltraStartupWarmupTest {
     }
 
     @Test fun verifiedIdentityStillRequiresSettledDetectionAndNoConflict() {
-        val verified = pending.copy(pendingInstallCredential = false, verifiedUltraIdentity = true)
+        val verified = pending.copy(pendingInstall = false, verifiedUltraIdentity = true)
         listOf(verified.copy(suspended = true), verified.copy(quiescing = true),
             verified.copy(switchPending = true), verified.copy(conflictingRoot = true),
             verified.copy(ksuResponded = true), verified.copy(ksuResponded = null),
@@ -111,7 +78,7 @@ class UltraStartupWarmupTest {
             pending.copy(detectionSettled = false),
             pending.copy(ksuResponded = null),
             pending.copy(ksuResponded = true),
-            pending.copy(pendingInstallCredential = false),
+            pending.copy(pendingInstall = false),
             pending.copy(activeMode = WorkMode.KSU),
         ).forEach { input ->
             val (result, calls) = run(input)
@@ -134,14 +101,14 @@ class UltraStartupWarmupTest {
         }
     }
     @Test fun committedPostBootSwitchCanInitializeWithoutAnInstallerTask() {
-        val (result, calls) = run(pending.copy(pendingInstallCredential = false,
+        val (result, calls) = run(pending.copy(pendingInstall = false,
             switchPending = true, postBootUltraSwitchRecovery = true))
         assertTrue(result.ran)
         assertEquals(listOf("setup", "pair", "detect"), calls)
     }
 
     @Test fun postBootSwitchReceiptDoesNotBypassPauseConflictOrUnsettledDetection() {
-        val recovery = pending.copy(pendingInstallCredential = false,
+        val recovery = pending.copy(pendingInstall = false,
             switchPending = true, postBootUltraSwitchRecovery = true)
         listOf(recovery.copy(suspended = true), recovery.copy(quiescing = true),
             recovery.copy(conflictingRoot = true), recovery.copy(ksuResponded = true),
@@ -163,14 +130,14 @@ class UltraStartupWarmupTest {
     }
 
     @Test fun postBootSwitchWithoutRunningDoesNotRequestActivation() {
-        val (result, calls) = run(pending.copy(pendingInstallCredential = false,
+        val (result, calls) = run(pending.copy(pendingInstall = false,
             switchPending = true, postBootUltraSwitchRecovery = true), running = false)
         assertTrue(result.ran)
         assertFalse(result.paired)
         assertEquals(listOf("setup", "pair"), calls)
     }
 
-    @Test fun healthyLiveEnvironmentVerifiesManagerSuBeforeRecoveryOrMaintenance() {
+    @Test fun healthyLiveEnvironmentRequestsDetectionBeforeManagerSuPairing() {
         for (ready in listOf(true, false)) {
             val calls = mutableListOf<String>()
             val result = UltraStartupWarmup.run(pending.copy(liveEnvironmentReady = true,
@@ -180,8 +147,71 @@ class UltraStartupWarmupTest {
                 pairEnvironment = { calls += "manager-su"; ready },
                 retryDetection = { calls += "detect" })
             assertEquals(ready, result.paired)
-            assertEquals(listOf("manager-su") + if (ready) listOf("detect") else emptyList(), calls)
+            assertEquals(listOf("detect", "manager-su"), calls)
             assertEquals(if (ready) "RUNNING" else "MANAGER_SU_UNVERIFIED", result.reason)
+        }
+    }
+
+    @Test fun recoveredIdentityRequestsDetectionBeforeSetupWithoutRepeatingAfterPairing() {
+        for (ready in listOf(true, false)) {
+            val calls = mutableListOf<String>()
+            val result = UltraStartupWarmup.run(pending.copy(pendingInstall = false,
+                detectionSettled = false, ksuResponded = null),
+                recoverIdentity = { calls += "identity"; true },
+                setupEnvironment = { calls += "setup" },
+                pairEnvironment = { calls += "pair"; ready },
+                retryDetection = { calls += "detect" })
+            assertTrue(result.ran)
+            assertEquals(ready, result.paired)
+            assertEquals(listOf("identity", "detect", "setup", "pair"), calls)
+            assertEquals(if (ready) "RUNNING" else "NOT_RUNNING", result.reason)
+        }
+    }
+
+    @Test fun verifiedEvidenceRequestsDetectionBeforeSetupOrPairingFailure() {
+        for (live in listOf(true, false)) {
+            val calls = mutableListOf<String>()
+            val expectedFailure = IllegalStateException("setup or pairing failed")
+            val failure = runCatching {
+                UltraStartupWarmup.run(pending.copy(liveEnvironmentReady = live),
+                    recoverIdentity = { calls += "identity"; true },
+                    setupEnvironment = { calls += "setup"; throw expectedFailure },
+                    pairEnvironment = { calls += "pair"; throw expectedFailure },
+                    retryDetection = { calls += "detect" })
+            }.exceptionOrNull()
+            assertTrue(failure === expectedFailure)
+            assertEquals(if (live) listOf("detect", "pair") else
+                listOf("identity", "detect", "setup"), calls)
+        }
+    }
+
+    @Test fun anAlreadySelectedUltraModeDoesNotRequestExtraDetectionForVerifiedEvidence() {
+        for (live in listOf(true, false)) {
+            val calls = mutableListOf<String>()
+            val result = UltraStartupWarmup.run(pending.copy(activeMode = WorkMode.LITE,
+                liveEnvironmentReady = live),
+                recoverIdentity = { calls += "identity"; true },
+                setupEnvironment = { calls += "setup" },
+                pairEnvironment = { calls += "pair"; true },
+                retryDetection = { calls += "detect" })
+            assertTrue(result.paired)
+            assertEquals(if (live) listOf("pair") else listOf("identity", "setup", "pair"), calls)
+        }
+    }
+
+    @Test fun failedOrUnknownIdentityRecoveryKeepsUnresolvedDetectionPending() {
+        for (recovery in listOf("RECOVERY_FAILED", "UNKNOWN")) {
+            val calls = mutableListOf<String>()
+            val result = UltraStartupWarmup.run(pending.copy(pendingInstall = false,
+                detectionSettled = false, ksuResponded = null),
+                recoverIdentity = { calls += "identity"; UltraStartupWarmup.identityRecovered(recovery) },
+                setupEnvironment = { error("unverified identity") },
+                pairEnvironment = { error("unverified identity") },
+                retryDetection = { calls += "detect" })
+            assertFalse(result.ran)
+            assertFalse(result.paired)
+            assertEquals("DETECTION_PENDING", result.reason)
+            assertEquals(listOf("identity"), calls)
         }
     }
 

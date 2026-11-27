@@ -20,7 +20,7 @@ class RootExecutionResponsivenessTest {
                 return RootExecResult(backend, 0, script)
             }
         }
-        RootExec.installForTest(RootExecutionRouter(null, root, modeProvider = { WorkMode.LITE }))
+        RootExec.installForTest(RootExecutionRouter(root, modeProvider = { WorkMode.LITE }))
         try {
             assertTrue(RootExec.executeServiceLaunch(null, "launch").ok)
             assertTrue("Service deadline was not installed: $remaining", remaining in 1..5_000)
@@ -47,7 +47,7 @@ class RootExecutionResponsivenessTest {
                 return RootExecResult(backend, 0, script)
             }
         }
-        val router = RootExecutionRouter(null, root, modeProvider = { WorkMode.LITE })
+        val router = RootExecutionRouter(root, modeProvider = { WorkMode.LITE })
         val workers = Executors.newFixedThreadPool(2)
         try {
             val first = workers.submit<RootExecResult> { router.execute("existing") }
@@ -79,7 +79,7 @@ class RootExecutionResponsivenessTest {
                 return RootExecResult(backend, 0, script)
             }
         }
-        val router = RootExecutionRouter(null, root, modeProvider = { WorkMode.LITE })
+        val router = RootExecutionRouter(root, modeProvider = { WorkMode.LITE })
         val worker = Executors.newSingleThreadExecutor()
         try {
             worker.submit<RootExecResult> { router.execute("existing") }
@@ -106,7 +106,7 @@ class RootExecutionResponsivenessTest {
                 return RootExecResult(backend, 0, "done")
             }
         }
-        val router = RootExecutionRouter(null, root, modeProvider = { WorkMode.LITE })
+        val router = RootExecutionRouter(root, modeProvider = { WorkMode.LITE })
         val workers = Executors.newFixedThreadPool(2)
         try {
             val first = workers.submit<RootExecResult> { router.execute("long-script") }

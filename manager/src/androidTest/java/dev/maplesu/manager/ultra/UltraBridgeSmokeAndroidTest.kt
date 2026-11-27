@@ -108,7 +108,7 @@ class UltraBridgeSmokeAndroidTest {
         }
 
         // --- 3. environment state: honest, never defaulted to Running -------------
-        val envRaw = NativeBridge.getEnvironmentState("maplesu-ultra-bridge-probe")
+        val envRaw = NativeBridge.getEnvironmentState()
         val env = receipt(envRaw, "get_maplesu_environment_state")
         evidence.put("envStateReceipt", envRaw)
         val envState = if (env.getBoolean("ok")) env.getJSONObject("data").getString("state") else null
@@ -125,7 +125,7 @@ class UltraBridgeSmokeAndroidTest {
         }
 
         // --- 4. module list: a missing environment is an error, not an empty list --
-        val listRaw = NativeBridge.getModuleList("maplesu-ultra-bridge-probe")
+        val listRaw = NativeBridge.getModuleList()
         val list = receipt(listRaw, "get_all_modules_list")
         evidence.put("moduleListReceipt", listRaw)
         val listOk = list.getBoolean("ok")
@@ -154,18 +154,18 @@ class UltraBridgeSmokeAndroidTest {
             bootProtectApi.isEmpty())
         evidence.put("bootFailProtectProductApi", "removed")
 
-        val adbRaw = NativeBridge.isAdbForcedDisabled("maplesu-ultra-bridge-probe")
+        val adbRaw = NativeBridge.isAdbForcedDisabled()
         receipt(adbRaw, "is_adb_forced_disabled").let { evidence.put("adbDisabledReceipt", adbRaw) }
 
-        val logRaw = NativeBridge.isLogEnabled("maplesu-ultra-bridge-probe")
+        val logRaw = NativeBridge.isLogEnabled()
         receipt(logRaw, "is_maplesu_log_enabled").let { evidence.put("logEnabledReceipt", logRaw) }
 
-        val oemRaw = NativeBridge.oneplusBypassIsWorkNormal("maplesu-ultra-bridge-probe")
+        val oemRaw = NativeBridge.oneplusBypassIsWorkNormal()
         receipt(oemRaw, "oneplus_bypass_is_work_normal").let { evidence.put("oneplusReceipt", oemRaw) }
 
         // --- 6. an unknown enum token must be refused, not guessed ----------------
         val badBasics = receipt(
-            NativeBridge.testBasics("maplesu-ultra-bridge-probe", "NoSuchItem"),
+            NativeBridge.testBasics("NoSuchItem"),
             "test_maplesu_basics"
         )
         assertFalse("An unknown BasicItem must be refused", badBasics.getBoolean("ok"))
@@ -175,7 +175,7 @@ class UltraBridgeSmokeAndroidTest {
         )
 
         val badMode = receipt(
-            NativeBridge.installEnvironment("maplesu-ultra-bridge-probe", "Sideways", "NONE"),
+            NativeBridge.installEnvironment("Sideways", "NONE"),
             "install_maplesu_environment"
         )
         assertFalse("An unknown InstallMode must be refused", badMode.getBoolean("ok"))

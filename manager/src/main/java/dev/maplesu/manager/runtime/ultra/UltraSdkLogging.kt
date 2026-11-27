@@ -57,16 +57,8 @@ object UltraSdkLogging {
             policy.apply(client::logPolicyScope, enabled) { client.setLogEnabled(enabled) }
         }.getOrNull()
 
-    /** App 启动/配对成功后的默认关闭（rootKey 从既有存储读取；缺失时 SDK 返回结构化失败）。 */
-    fun ensureDisabled(context: Context): NativeReceipt? {
-        val application = context.applicationContext
-        val client = UltraRuntimeClient(
-            rootKeyProvider = {
-                runCatching { dev.maplesu.manager.modules.UltraRootKeyStore.read(application) }.getOrNull()
-            },
-        )
-        return apply(client)
-    }
+    /** Apply the default policy through this installation's current task channel. */
+    fun ensureDisabled(context: Context): NativeReceipt? = apply(UltraSdkCredentials.client(context))
 
     /** 脱敏：疑似 48 位 key → `<REDACTED-KEY>`；null 原样返回空。 */
     fun redact(text: String?): String = text?.replace(KEY_LIKE, "<REDACTED-KEY>") ?: ""

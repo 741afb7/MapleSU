@@ -25,7 +25,7 @@ enum class Source { Readback, Persisted, Unknown }
  * 才可能判断「是不是这一版」。字段全部可为空，空即「不知道」——调用方不得把 null 当成
  * 「相同」，也不得把「读不到」说成「已是最新」。
  *
- * @param helperSha256 归一化 key 槽之后的 helper 摘要（64 位小写十六进制）
+ * @param helperSha256 完整 helper 字节摘要（64 位小写十六进制）
  * @param helperPath   设备上的绝对路径（仅供显示/排障）
  * @param helperSize   字节数
  * @param buildId      `maplesu-ultra-5.0.5-r1` 形态；磁盘上不存在该字段，按摘要反查
@@ -83,7 +83,7 @@ object UltraInstalledIdentityProbe {
     private const val KEY_BOOT = "bootId"
     private const val KEY_AT = "verifiedAtMillis"
     private const val KEY_APP = "appVersion"
-    private const val KEY_CREDENTIAL = "credentialFingerprint"
+    private const val KEY_OWNER_FINGERPRINT = "ownerFingerprint"
 
     private val SHA256 = Regex("""[0-9a-f]{64}""")
     private val HELPER_PATH = Regex("/data/[A-Za-z0-9]{16}/init")
@@ -92,6 +92,8 @@ object UltraInstalledIdentityProbe {
     data class Readback(val sha256: String, val path: String, val size: Long)
 
     private val cache = UltraIdentityReadCache(SystemClock::elapsedRealtime, CACHE_TTL_MS)
+
+    @Volatile private var locatedHelper: Pair<String, InstalledIdentity>? = null
 
     private val completedReadbacks = MutableStateFlow(0L)
     val readbackRevision = completedReadbacks.asStateFlow()
@@ -116,14 +118,14 @@ object UltraInstalledIdentityProbe {
                                timeoutMillis: Int, failure: (NativeReceipt?) -> Unit): InstalledIdentity {
         if (Thread.currentThread().isInterrupted) throw CancellationException("IDENTITY_READBACK_INTERRUPTED")
         check(Looper.myLooper() != Looper.getMainLooper()) { "ULTRA_IDENTITY_BACKGROUND_THREAD_REQUIRED" }
-        val key = keyFingerprint(context)
+        val owner = ownerFingerprint(context)
         val bootId = UltraEnvironmentAutoSetup.currentBootId()
         var completedReadback = false
-        val observed = cache.read(key, bootId, force) {
+        val observed = cache.read(owner, bootId, force) {
             val identity = readFromDevice(context, client, timeoutMillis, failure)
                 ?: readPersisted(context)
                 ?: InstalledIdentity.unknown(bootId)
-            if (Thread.currentThread().isInterrupted || key != keyFingerprint(context) || bootId != UltraEnvironmentAutoSetup.currentBootId()) {
+            if (Thread.currentThread().isInterrupted || owner != ownerFingerprint(context) || bootId != UltraEnvironmentAutoSetup.currentBootId()) {
                 InstalledIdentity.unknown()
             } else {
                 Log.i(TAG, "identity source=${identity.source} known=${identity.known} buildId=${identity.buildId.orEmpty()}")
@@ -139,26 +141,23 @@ object UltraInstalledIdentityProbe {
 
     /** A local completion event never starts another helper/SDK read. */
     fun completedReadback(context: Context): InstalledIdentity? {
-        val fingerprint = keyFingerprint(context)
+        val fingerprint = ownerFingerprint(context)
         val bootId = UltraEnvironmentAutoSetup.currentBootId()
         val identity = cache.peek(fingerprint, bootId)
-        return identity?.takeIf { fingerprint == keyFingerprint(context) &&
+        return identity?.takeIf { fingerprint == ownerFingerprint(context) &&
             bootId == UltraEnvironmentAutoSetup.currentBootId() }
     }
 
-    private fun keyFingerprint(context: Context): String? {
-        val key = UltraSdkCredentials.read(context)
+    private fun ownerFingerprint(context: Context): String? {
         val observation = UltraEnvironmentProbe.currentSnapshot(context)
-        return identityFingerprint(key, observation.managerOwnerIdentity?.takeIf { it.fullUid == android.os.Process.myUid() },
-            UltraEnvironmentAutoSetup.currentBootId(),
-            System.identityHashCode(observation.modeActivation))
+        return identityFingerprint(observation.managerOwnerIdentity?.takeIf { it.fullUid == android.os.Process.myUid() },
+            UltraEnvironmentAutoSetup.currentBootId(), System.identityHashCode(observation.modeActivation))
     }
 
-    /** Identity partitions cached file evidence; none of these fields grant Root. */
-    internal fun identityFingerprint(key: String?, owner: UltraRuntimeClient.ManagerOwnerIdentity?,
-                                     bootId: String?, activation: Int): String? {
-        if (bootId.isNullOrBlank() || key == null && owner == null) return null
-        val material = "key:$key:owner:${owner?.fullUid}:${owner?.epoch}:${owner?.hostInstance}:$bootId:$activation"
+    /** Cache scope is an installation observation, never authorization. */
+    internal fun identityFingerprint(owner: UltraRuntimeClient.ManagerOwnerIdentity?, bootId: String?, activation: Int): String? {
+        if (bootId.isNullOrBlank() || owner == null) return null
+        val material = "owner:${owner.fullUid}:${owner.epoch}:${owner.hostInstance}:$bootId:$activation"
         return MessageDigest.getInstance("SHA-256").digest(material.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 255) }
     }
@@ -216,10 +215,10 @@ object UltraInstalledIdentityProbe {
 
     private fun readFromDevice(context: Context, client: UltraRuntimeClient, timeoutMillis: Int,
                                failure: (NativeReceipt?) -> Unit): InstalledIdentity? {
-        val helperPath = installedHelperPath(UltraSdkCredentials.read(context))
-        val offset = keySlotOffset()
+        val fingerprint = ownerFingerprint(context) ?: return null
+        val helperPath: String? = null
         // Read the installed length, including helpers from an older build.
-        val line = locateInstalledHelper(client, helperPath, offset, timeoutMillis, failure)
+        val line = locateInstalledHelper(client, helperPath, timeoutMillis, failure)
             ?: return null
         if (helperPath != null && line.path != helperPath || line.size <= 0) return null
         return InstalledIdentity(
@@ -229,12 +228,12 @@ object UltraInstalledIdentityProbe {
             buildId = buildIdFor(line.sha256, readPersisted(context)),
             bootId = UltraEnvironmentAutoSetup.currentBootId(),
             source = Source.Readback,
-        )
+        ).also { if (fingerprint == ownerFingerprint(context)) locatedHelper = fingerprint to it }
     }
 
-    private fun locateInstalledHelper(client: UltraRuntimeClient, path: String?, offset: Long?, timeoutMillis: Int,
+    private fun locateInstalledHelper(client: UltraRuntimeClient, path: String?, timeoutMillis: Int,
                                       failure: (NativeReceipt?) -> Unit): Readback? {
-        val result = try { client.readInstalledHelper(path, offset, timeoutMillis) }
+        val result = try { client.readInstalledHelper(path, timeoutMillis) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: InterruptedException) { Thread.currentThread().interrupt(); throw CancellationException("IDENTITY_READBACK_INTERRUPTED") }
         catch (error: Exception) { Log.w(TAG, "identity readback threw ${error.javaClass.simpleName}"); null }
@@ -259,8 +258,8 @@ object UltraInstalledIdentityProbe {
             Log.i(TAG, UltraSdkLogging.redact("identity readback unavailable sdkError=${result?.sdkError} $diagnostics"))
             return null
         }
-        val readback = if (path == null) parseOwnerReadback(result, offset, android.os.Process.myUid())
-            else parseReadback(result, path, offset)
+        val readback = if (path == null) parseOwnerReadback(result, android.os.Process.myUid())
+            else parseReadback(result, path)
         if (readback == null) failure(result)
         else Log.i(TAG, "identity readback complete timeoutMillis=$timeoutMillis " +
             listOf("admissionUs", "forkUs", "authenticationUs", "sourceUs", "receiveUs", "waitUs", "elapsedUs")
@@ -277,9 +276,9 @@ object UltraInstalledIdentityProbe {
     fun persist(context: Context, identity: InstalledIdentity): Boolean {
         val sha = normalizeSha(identity.helperSha256) ?: return false
         if (identity.source != Source.Readback) return false
-        val fingerprint = keyFingerprint(context) ?: return false
+        val fingerprint = ownerFingerprint(context) ?: return false
         return context.ultraPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_CREDENTIAL, fingerprint)
+            .putString(KEY_OWNER_FINGERPRINT, fingerprint)
             .putString(KEY_SHA, sha)
             .putString(KEY_PATH, identity.helperPath)
             .putLong(KEY_SIZE, identity.helperSize ?: -1L)
@@ -294,11 +293,9 @@ object UltraInstalledIdentityProbe {
     fun readPersisted(context: Context): InstalledIdentity? {
         val prefs = context.ultraPreferences(PREFS, Context.MODE_PRIVATE)
         val sha = normalizeSha(prefs.getString(KEY_SHA, null)) ?: return null
-        val fingerprint = prefs.getString(KEY_CREDENTIAL, null)
-        val currentFingerprint = keyFingerprint(context) ?: return null
-        val expectedPath = installedHelperPath(UltraSdkCredentials.read(context))
-        if (fingerprint != null && fingerprint != currentFingerprint) return null
-        if (fingerprint == null && (expectedPath == null || prefs.getString(KEY_PATH, null) != expectedPath)) return null
+        val fingerprint = prefs.getString(KEY_OWNER_FINGERPRINT, null)
+        val currentFingerprint = ownerFingerprint(context) ?: return null
+        if (fingerprint != currentFingerprint) return null
         return InstalledIdentity(
             helperSha256 = sha,
             helperPath = prefs.getString(KEY_PATH, null),
@@ -319,6 +316,7 @@ object UltraInstalledIdentityProbe {
     /** 身份不再可信时（卸载/身份冲突）清掉持久化，下次读回失败会回到 Unknown。 */
     fun clear(context: Context) {
         cache.invalidate()
+        locatedHelper = null
         context.ultraPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
     }
 
@@ -334,10 +332,6 @@ object UltraInstalledIdentityProbe {
     /** 随包 helper 字节数；未知 → null，仅作随包身份信息。 */
     fun bundledHelperSizeBytes(): Long? = UltraSdkBuild.HELPER_SIZE.takeIf { it > 0 }
         ?: bridgeIdentity()?.int("helperSize")?.toLong()?.takeIf { it > 0 }
-
-    /** helper 内嵌 rootKey 槽的偏移；未知 → null（不做清零，摘要按原样比较）。 */
-    fun keySlotOffset(): Long? = UltraSdkBuild.KEY_SLOT_OFFSET.takeIf { it > 0 }
-        ?: bridgeIdentity()?.int("helperKeySlotOffset")?.toLong()?.takeIf { it > 0 }
 
     /** 桥侧随包身份（只读，不调用 SDK）。失败/不可用一律 null。 */
     fun bridgeReceipt(): NativeReceipt? = bridgeIdentity()
@@ -395,19 +389,17 @@ object UltraInstalledIdentityProbe {
 
     // --- 纯函数（主机可测） ---------------------------------------------------------
 
-    /** Matches the SDK's get_kernel_file_dir_path; never enumerate its hidden directory. */
-    fun installedHelperPath(rootKey: String?): String? = rootKey
-        ?.takeIf { it.matches(Regex("[A-Za-z0-9]{48}")) }
-        ?.let { "/data/${it.take(16)}/init" }
+    /** Only a complete authenticated namespace readback may publish a helper path. */
+    fun installedHelperPath(): String? {
+        val owner = UltraEnvironmentProbe.currentSnapshot().managerOwnerIdentity
+        val fingerprint = identityFingerprint(owner, UltraEnvironmentAutoSetup.currentBootId(),
+            System.identityHashCode(dev.maplesu.manager.workmode.ModeRuntime.activation)) ?: return null
+        return locatedHelper?.takeIf { it.first == fingerprint }?.second?.helperPath?.takeIf(HELPER_PATH::matches)
+    }
 
-    /** A prefix digest or a persisted/legacy shell receipt is not a completed native read. */
-    fun parseReadback(receipt: NativeReceipt?, expectedPath: String, slotOffset: Long?): Readback? =
-        parseReadback(receipt, expectedPath, slotOffset, null)
-
-    internal fun parseOwnerReadback(receipt: NativeReceipt?, slotOffset: Long?, fullUid: Int): Readback? =
-        parseReadback(receipt, null, slotOffset, fullUid)
-
-    private fun parseReadback(receipt: NativeReceipt?, expectedPath: String?, slotOffset: Long?, fullUid: Int?): Readback? {
+    fun parseReadback(receipt: NativeReceipt?, expectedPath: String): Readback? = parseReadback(receipt, expectedPath, null)
+    internal fun parseOwnerReadback(receipt: NativeReceipt?, fullUid: Int): Readback? = parseReadback(receipt, null, fullUid)
+    private fun parseReadback(receipt: NativeReceipt?, expectedPath: String?, fullUid: Int?): Readback? {
         if (receipt == null || !receipt.succeeded || expectedPath != null && !HELPER_PATH.matches(expectedPath)) return null
         val json = runCatching { JSONObject(receipt.raw) }.getOrNull() ?: return null
         fun integer(objectValue: JSONObject, field: String): Long? = when (val value = objectValue.opt(field)) {
@@ -442,12 +434,10 @@ object UltraInstalledIdentityProbe {
                 deployment.opt("handle") as? String != "0000000000000000") return null
         }
         val size = integer(data, "size") ?: return null
-        val offset = slotOffset?.takeIf { it > 0 } ?: 0L
         if (integer(data, "abiVersion") != 1L || data.opt("complete") as? Boolean != true ||
             data.opt("rootVerified") as? Boolean != true || expectedPath != null && path != expectedPath ||
             !SHA256.matches(sha) || size !in 4096L..9_007_199_254_740_991L ||
-            integer(data, "bytesRead") != size || integer(data, "normalizedOffset") != offset ||
-            offset > size || 4096L > size - offset) return null
+            integer(data, "bytesRead") != size || integer(data, "normalizedOffset") != 0L) return null
         return Readback(sha, path, size)
     }
 

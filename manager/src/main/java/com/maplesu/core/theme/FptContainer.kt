@@ -41,11 +41,15 @@ internal object FptContainer {
         val iv = readFully(bounded, 16) ?: error("Incomplete FPT container")
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.DECRYPT_MODE, key, IvParameterSpec(iv))
+        return readZip(ThemeDecryptedStream(bounded, cipher), directory)
+    }
+
+    internal fun readZip(input: InputStream, directory: File, maxConfig: Long = MAX_CONFIG,
+        maxEntry: Long = MAX_TOTAL, maxTotal: Long = MAX_TOTAL): Pair<JSONObject, Map<String, File>> {
         check(directory.mkdirs() || directory.isDirectory)
         val entries = linkedMapOf<String, File>()
         var total = 0L
-        val plain = DecryptedStream(bounded, cipher)
-        ZipInputStream(BufferedInputStream(plain)).use { zip ->
+        ZipInputStream(BufferedInputStream(input)).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
                 val name = entry.name
@@ -53,7 +57,7 @@ internal object FptContainer {
                     name !in setOf(".", "..", "original.json", "applied.json") &&
                     '/' !in name && '\\' !in name && '\u0000' !in name) { "Unsafe ZIP entry: $name" }
                 require(name !in entries && entries.size < MAX_ENTRIES) { "Duplicate or excessive ZIP entries" }
-                val budget = minOf(MAX_TOTAL - total, if (name == "theme.json") MAX_CONFIG else MAX_TOTAL)
+                val budget = minOf(maxTotal - total, if (name == "theme.json") maxConfig else maxEntry)
                 val written = copyBounded(zip, File(directory, name), budget)
                 require(written > 0) { "Empty ZIP entry: $name" }
                 total += written
@@ -62,9 +66,9 @@ internal object FptContainer {
                 entry = zip.nextEntry
             }
             // The zip reader stops at the central directory; pull the rest of the stream so the
-            // cipher validates its final block. Invalid length or padding fails preparation;
-            // the import service removes the staging directory. CBC is not authenticated.
-            drain(plain)
+            // cipher validates its final block/tag. A truncated or tampered package fails
+            // preparation; the import service removes the staging directory.
+            drain(input)
         }
         val config = entries.remove("theme.json") ?: error("theme.json is missing")
         return JSONObject(config.readText(Charsets.UTF_8)) to entries
@@ -164,11 +168,10 @@ internal class BoundedInputStream(source: InputStream, private val limit: Long) 
 }
 
 /**
- * Sequential AES-CBC reader that never holds the whole payload: it decrypts as the zip reader
- * pulls, and surfaces a bad final block (truncated, misaligned or tampered ciphertext) as an
- * exception. It does not own [source]; the caller closes that stream.
+ * Sequential cipher reader. In addition to CBC padding this surfaces GCM authentication
+ * failures at EOF; the ZIP reader always drains it. The caller owns the source stream.
  */
-private class DecryptedStream(source: InputStream, private val cipher: Cipher) : InputStream() {
+internal class ThemeDecryptedStream(source: InputStream, private val cipher: Cipher) : InputStream() {
     private val source = BufferedInputStream(source)
     private val encrypted = ByteArray(64 * 1024)
     private var plain = ByteArray(0)

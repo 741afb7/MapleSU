@@ -85,8 +85,7 @@ void* g_handler = nullptr;   // kernel_module::WebUIHttpHandler*
 void* g_server = nullptr;    // CivetServer*
 uint32_t g_server_port = 0;  // last successfully listening port
 
-KModErr unsafe_module_start_web_ui_server(const char* root_key,
-                                          const char* module_private_dir,
+KModErr unsafe_module_start_web_ui_server(const char* module_private_dir,
                                           const char* module_webroot_dir,
                                           const char* mod_id32,
                                           kernel_module::WebUIHttpHandler* handler,
@@ -97,21 +96,13 @@ KModErr unsafe_module_start_web_ui_server(const char* root_key,
     if (handler == nullptr && !file_utils::file_exists(module_webroot_dir)) {
         return KModErr::ERR_MODULE_WEB_UI_SERVER_NOT_EXIST;
     }
-    if (root_key == nullptr) {
-        return KModErr::ERR_MODULE_ROOT_KEY;
-    }
-    const size_t root_key_length = strnlen(root_key, 1024);
-    if (root_key_length < 16 || root_key_length >= 1024) {
-        return KModErr::ERR_MODULE_ROOT_KEY;
-    }
-    __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
     __set_current_module_id32_1b0494ae8a788541db46b82cc1f0577c(mod_id32);
     PerfCoreKit::optimize_current_thread();
     g_handler = handler;
     g_server_port = static_cast<uint32_t>(port);
     std::string port_text = std::to_string(port);
     if (handler != nullptr) {
-        handler->onPrepareCreate(root_key, module_private_dir, static_cast<uint32_t>(port));
+        handler->onPrepareCreate(module_private_dir, static_cast<uint32_t>(port));
     }
     std::vector<std::string> option_storage;
     option_storage.reserve(12);

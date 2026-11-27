@@ -61,7 +61,7 @@ static const char* const kAnrchorDirs[] = {"/data/unencrypted", "/data/bootchart
 static KModErr validate_purge_context(const std::string& init_path) {
     maplesu::storage::StorageContext context;
     RETURN_IF_ERROR(maplesu::storage::current_context(context));
-    const char* prefix = kernel_module::maplesu_request_owner_mode() ? "/data/" : "";
+    const char* prefix = "/data/";
     if ((std::filesystem::path(std::string(prefix) + context.locator.kernel_component) /
         "init").string() != init_path) {
         errno = ESTALE;
@@ -445,7 +445,7 @@ static KModErr get_runtime_paths(std::string& duplicate_path, std::string& init_
     duplicate_path.clear();
     init_path.clear();
     RETURN_IF_ERROR(maplesu::storage::current_context(context));
-    const char* prefix = kernel_module::maplesu_request_owner_mode() ? "/data/" : "";
+    const char* prefix = "/data/";
     duplicate_path = (std::filesystem::path(std::string(prefix) +
         context.locator.system_component) /
         "duplicate_qMEOYbxeWgEZAhAEY2Bg8rDn1rcLrvn4").string();

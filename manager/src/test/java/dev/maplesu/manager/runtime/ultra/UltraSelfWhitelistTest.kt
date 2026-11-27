@@ -7,12 +7,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * 自白名单（`su_auth` 写入本应用包名）的成功 / 失败 / 幂等矩阵（JVM，fake [SuAuthPort]）。
- *
- * <p>这是「重装管理器后不认主」自愈的**前置条件**：只有管理器自己在 `su_auth` 里，
- * 重装后没有 key 也能经 su 拿到 uid 0 去读回 root 备份。
- */
+/** Package-port fixtures retain write receipts and distinguish membership from delivery. */
+private fun whitelistReceipt(error: String = "OK") = NativeReceipt(
+    1, UltraRuntimeClient.BACKEND, 1, "su_auth", error == "OK", error,
+    if (error == "OK") 0 else -1, null, null, "",
+)
+
 class UltraSelfWhitelistTest {
 
     private class FakePort(
@@ -29,16 +29,16 @@ class UltraSelfWhitelistTest {
             return snapshot
         }
 
-        override fun add(packageName: String): String {
+        override fun add(packageName: String): NativeReceipt {
             adds += packageName
             if (addResult == "OK") snapshot = (snapshot.orEmpty() + packageName).distinct()
-            return addResult
+            return whitelistReceipt(addResult)
         }
 
-        override fun remove(packageName: String): String {
+        override fun remove(packageName: String): NativeReceipt {
             removes += packageName
             snapshot = snapshot.orEmpty().filterNot { it == packageName }
-            return removeResult
+            return whitelistReceipt(removeResult)
         }
     }
 
@@ -50,12 +50,12 @@ class UltraSelfWhitelistTest {
         var writes = 0
         val port = object : SuAuthPort {
             override fun snapshot() = packages
-            override fun add(packageName: String): String {
+            override fun add(packageName: String): NativeReceipt {
                 writes++
                 packages = listOf(packageName)
-                return "ERR_SU_DELIVERY_INCOMPLETE"
+                return whitelistReceipt("ERR_SU_DELIVERY_INCOMPLETE")
             }
-            override fun remove(packageName: String) = "UNEXPECTED"
+            override fun remove(packageName: String) = whitelistReceipt("UNEXPECTED")
         }
         val result = UltraSelfWhitelist.ensure(port, pkg)
         assertTrue(result.inList)
@@ -70,8 +70,8 @@ class UltraSelfWhitelistTest {
     fun okReceiptWithoutPersistedEntryIsNotAConfirmedGrant() {
         val port = object : SuAuthPort {
             override fun snapshot() = emptyList<String>()
-            override fun add(packageName: String) = "OK"
-            override fun remove(packageName: String) = "OK"
+            override fun add(packageName: String) = whitelistReceipt()
+            override fun remove(packageName: String) = whitelistReceipt()
         }
         val result = UltraSelfWhitelist.ensure(port, pkg)
         assertFalse(result.inList)
@@ -91,8 +91,8 @@ class UltraSelfWhitelistTest {
         var reads = 0
         val port = object : SuAuthPort {
             override fun snapshot(): List<String>? = if (reads++ == 0) emptyList() else null
-            override fun add(packageName: String) = "OK"
-            override fun remove(packageName: String) = "OK"
+            override fun add(packageName: String) = whitelistReceipt()
+            override fun remove(packageName: String) = whitelistReceipt()
         }
         val result = UltraSelfWhitelist.ensure(port, pkg)
         assertFalse(result.inList)
@@ -223,16 +223,15 @@ class UltraSelfWhitelistTest {
 }
 
 /**
- * 安装成功后自动白名单 + key 备份的编排（需求 1 / 3）。
+ * 已提交安装的授权维护编排。
  *
  * <p>[UltraEnvironmentInstaller.afterInstall] 是纯编排：安装回执是否成功决定要不要动手；
- * 白名单/备份失败**绝不**把安装改判失败（需求 1 的「失败只记录不阻断安装」）。
+ * 授权维护失败保留真实诊断，不改变已提交的安装结果。
  */
 class UltraEnvironmentInstallerAfterInstallTest {
 
     private class Calls {
         var whitelist = 0
-        var backup = 0
     }
 
     private fun whitelistOk() = UltraSelfWhitelist.Result(
@@ -244,25 +243,23 @@ class UltraEnvironmentInstallerAfterInstallTest {
     )
 
     @Test
-    fun failedInstallDoesNotWhitelistOrBackUp() {
+    fun failedInstallDoesNotWhitelist() {
         val calls = Calls()
         val outcome = UltraEnvironmentInstaller.afterInstall(
             succeeded = false,
             sdkError = "-1",
             reason = "NOT_INSTALLED",
             whitelist = { calls.whitelist++; whitelistOk() },
-            backup = { calls.backup++; "OK" },
         )
 
         assertFalse(outcome.ok)
         assertEquals(0, calls.whitelist)
-        assertEquals(0, calls.backup)
         assertEquals("-1", outcome.sdkError)
         assertEquals("NOT_INSTALLED", outcome.reason)
     }
 
     @Test
-    fun successfulInstallWhitelistsThenBacksUpKey() {
+    fun successfulInstallWhitelistsOnce() {
         val calls = Calls()
         val order = mutableListOf<String>()
         val outcome = UltraEnvironmentInstaller.afterInstall(
@@ -270,18 +267,15 @@ class UltraEnvironmentInstallerAfterInstallTest {
             sdkError = "OK",
             reason = null,
             whitelist = { order += "whitelist"; calls.whitelist++; whitelistOk() },
-            backup = { order += "backup"; calls.backup++; "OK" },
         )
 
         assertTrue(outcome.ok)
         assertEquals(1, calls.whitelist)
-        assertEquals(1, calls.backup)
-        assertEquals(listOf("whitelist", "backup"), order)
-        assertEquals("OK", outcome.backup)
+        assertEquals(listOf("whitelist"), order)
     }
 
     @Test
-    fun whitelistFailureKeepsInstallSuccessfulAndStillBacksUp() {
+    fun whitelistFailureKeepsInstallSuccessful() {
         val calls = Calls()
         val outcome = UltraEnvironmentInstaller.afterInstall(
             succeeded = true,
@@ -298,47 +292,25 @@ class UltraEnvironmentInstallerAfterInstallTest {
                     failure = "ADD_FAILED:-7",
                 )
             },
-            backup = { calls.backup++; "OK" },
         )
 
         // 安装本身仍然成功；白名单失败只记录。
         assertTrue(outcome.ok)
         assertEquals(1, calls.whitelist)
-        // 备份使用内核 Key 通道，与 su_auth 刷新结果独立。
-        assertEquals(1, calls.backup)
-        assertEquals("OK", outcome.backup)
         assertTrue(outcome.whitelist.orEmpty().contains("ADD_FAILED:-7"))
     }
 
     @Test
-    fun whitelistExceptionKeepsInstallSuccessfulAndStillBacksUp() {
-        val calls = Calls()
+    fun whitelistExceptionKeepsInstallSuccessful() {
         val outcome = UltraEnvironmentInstaller.afterInstall(
             succeeded = true,
             sdkError = "OK",
             reason = null,
             whitelist = { throw IllegalStateException("jni gone") },
-            backup = { calls.backup++; "OK" },
         )
 
         assertTrue(outcome.ok)
-        assertEquals(1, calls.backup)
-        assertEquals("OK", outcome.backup)
         assertEquals("EXCEPTION:WHITELIST", outcome.whitelist)
-    }
-
-    @Test
-    fun backupExceptionKeepsInstallSuccessful() {
-        val outcome = UltraEnvironmentInstaller.afterInstall(
-            succeeded = true,
-            sdkError = "OK",
-            reason = null,
-            whitelist = { whitelistOk() },
-            backup = { throw IllegalStateException("no root") },
-        )
-
-        assertTrue(outcome.ok)
-        assertEquals("EXCEPTION:IllegalStateException", outcome.backup)
     }
 
     @Test
@@ -348,7 +320,6 @@ class UltraEnvironmentInstallerAfterInstallTest {
             sdkError = "OK",
             reason = null,
             whitelist = { whitelistOk() },
-            backup = { UltraRecoveryKeyStore.REASON_OK },
         )
 
         assertFalse(UltraSdkLogging.containsKeyLike(outcome.summary))

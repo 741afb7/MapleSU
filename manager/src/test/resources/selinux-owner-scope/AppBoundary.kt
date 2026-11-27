@@ -1,3 +1,3 @@
 package com.maplesu.core
 
-val ksuApp = Any()
+val ksuApp = android.content.Context()

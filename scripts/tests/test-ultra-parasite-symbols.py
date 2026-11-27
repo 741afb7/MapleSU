@@ -1,13 +1,13 @@
-"""Check the legacy parasite ABI in the Ultra archive or linked bridge."""
+"""Check the keyless parasite ABI in the Ultra object, archive or linked bridge."""
 import argparse
 import json
 from pathlib import Path
 import subprocess
 
 SYMBOLS = [
-    '_ZN11kernel_root29parasite_precheck_app_with_cbEPKcS1_PFvS1_NS_15AppDynlibStatusEE',
-    '_ZN11kernel_root20parasite_implant_appEPKcS1_S1_',
-    '_ZN11kernel_root23parasite_implant_su_envEPKcS1_S1_S1_',
+    '_ZN11kernel_root29parasite_precheck_app_with_cbEPKcPFvS1_NS_15AppDynlibStatusEE',
+    '_ZN11kernel_root20parasite_implant_appEPKcS1_',
+    '_ZN11kernel_root23parasite_implant_su_envEPKcS1_S1_',
 ]
 
 def main():

@@ -194,7 +194,7 @@ class WebViewInterface private constructor(
                 // @JavascriptInterface 边界。改成先判 null：拿不到就当空字符串。
                 val value = if (env.isNull(key)) "" else env.optString(key)
                 require('\u0000' !in value) { "Invalid environment value" }
-                sb.append("export ${key}=${ShellUtils.escapedString(value)} || exit $?; ")
+                sb.append("export ${key}=${value};")
             }
         }
     }

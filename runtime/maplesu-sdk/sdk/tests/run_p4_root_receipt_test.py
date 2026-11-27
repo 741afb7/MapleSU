@@ -51,7 +51,7 @@ def main():
         "bool write_errcode_from_child(", "bool read_errcode_from_child(",
         "bool write_transfer_data_from_child(", "bool read_transfer_data_from_child(",
         "bool write_string_from_child(", "bool read_string_from_child("))
-    assert "if (owner || result.root_transition.credentials_managed) close_command_owner(result);" in source
+    assert "if (result.root_transition.credentials_managed) close_command_owner(result);" in source
     fixture = fixture_path.read_text(encoding="utf-8").replace("// EXACT_ROOT_FUNCTIONS", root_functions)
     fixture = fixture.replace("// EXACT_FORK_FUNCTIONS", fork_functions)
     generated = out / "p4_root_receipt.cpp"

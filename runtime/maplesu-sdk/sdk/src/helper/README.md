@@ -1,51 +1,30 @@
-# `helper/autorun_bootstrap` — source candidate
+# `helper/autorun_bootstrap`
 
-The current sources build the native helper candidate against the real SDK
-archive. The r7 candidate restores the original vector / `PatchDoExecve` /
-64-bit control ABI, native SDK initialization, module worker and single-module
-entry, boot session handling, and paired policy loader. Its status is
-`source-candidate-unvalidated-device`; host and artifact checks do not establish
-Android boot or kernel behavior.
+The selected helper authenticates its installed executable through the existing
+EarlyHelper lease. It reads the public deployment namespace from the authenticated
+installation record and requires its own path to match `/data/<namespace16>/init`.
+There is no embedded RootKey, token slot or installer byte substitution.
 
-The implementation and evidence are recorded in
-[`HELPER-SOURCE-INTEGRATION.md`](../../../../../docs/dual-mode/impl/_work/2026-11-15-p1/HELPER-SOURCE-INTEGRATION.md).
-The original gap assessment remains a historical record. Its “not implemented”
-rows and the frozen manifest's `status=partial` / `acceptance.pending` wording
-predate this integration; use the integration report for the actual tested
-scope. The manifest stayed unchanged after r7 froze its source closure.
+Boot/session receipts, safe mode and exact original-target argv/env handoff retain
+their existing semantics. One existing boot worker owns each phase's session:
+fixed early operations use the helper lease; generic kernel work uses a fresh
+session after the same task has actually become Root. Every mode change drains
+and destroys the old storage/session scope before creating a new one. This adds
+no process, daemon, polling loop or ordinary-application probe.
 
-The r7 helper is 1,369,296 bytes, SHA-256
-`a06a900dcd4370b00550197372a44355d939ff9e1f8c5312f6faa899eab43250`.
-The actual helper, generated payload, and staged candidate have identical bytes.
-The old reference at `runtime/maplesu-sdk/helper/autorun_bootstrap` is preserved
-and is not a source build input. Its byte identity is not an acceptance target.
+`manifest.json` lists the selected production units. `tools/build_helper.py`
+requires the SDK archive and paired backend from the same source generation.
+The only dynamic exports remain `maplesu_helper_su_exec` and
+`maplesu_helper_su_write`; both take module identity without a Key argument.
 
-The native host fixture runs the actual module runtime, metadata parser, module
-state implementation, ABI adapter, bootstrap orchestration and policy loader:
+Focused validation commands:
 
 ```powershell
-py runtime/maplesu-sdk/sdk/tools/tests/helper_native/run.py --out .tmp/helper-native-tests
+py -3 runtime/maplesu-sdk/sdk/tools/tests/p6_boot/run.py --out OUTPUT_DIRECTORY
+py -3 runtime/maplesu-sdk/sdk/tools/tests/p6_boot/run_single_close.py --out NEW_OUTPUT_DIRECTORY
+py -3 runtime/tests/ultra_exec_protocol_test.py --out OUTPUT_DIRECTORY
 ```
 
-The recorded run passes 137 assertions (module runtime 37, original ABI 43,
-bootstrap order 57) and four paired-loader cases. The 14 artifact audit checks
-independently verify the final r7 helper and its 35 captured input hashes. See
-`evidence/helper-native-source-r1` beside the integration report for commands,
-source hashes and logs. The earlier 78 wasm checks targeted the replaced
-experimental ABI and do not represent this implementation. The earlier 17 POSIX
-adapter checks remain evidence of that adapter only.
-
-`tools/build_helper.py` requires an explicit SDK archive and backend pairing:
-
-```powershell
-py runtime/maplesu-sdk/sdk/tools/build_helper.py `
-  --sdk-archive PATH_TO_ARCHIVE `
-  --backend-identity PATH_TO_PAIRING_DIRECTORY `
-  --out PATH_TO_CANDIDATE --report PATH_TO_REPORT
-```
-
-The manifest lists 12 native translation units, including maintained backend,
-identity, disable-gate and finish sources. The build compiles with exceptions
-and static libc++, exports exactly `maplesu_helper_su_exec` and
-`maplesu_helper_su_write`, strips the result, checks the paired backend, and
-records compiler dependencies. Device acceptance remains a separate result.
+These are source/host/fixture checks. They do not establish a built release,
+Android boot, no-Manager cold boot, or device side-channel behavior. Historical
+hashes and pre-keyless fixture counts belong to their original evidence records.

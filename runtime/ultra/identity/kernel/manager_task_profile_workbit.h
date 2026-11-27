@@ -9,13 +9,14 @@
 struct msu_profile_work_program {
     const u32 *code;
     const s32 *jump_targets;
-    unsigned long address, tracepoint, tracepoint_funcs, iterators[2];
+    unsigned long address, tracepoint, tracepoint_funcs, iterators[2], trace_helper;
     u32 words, task_work_offset;
     int initial_work_register;
 };
 struct msu_profile_work_state {
     s32 registers[31];
-    u8 seen, queued, candidate;
+    unsigned long addresses[31];
+    u8 seen, queued, candidate, reference;
 };
 
 static int msu_profile_work_index(const struct msu_profile_work_program *p,
@@ -72,36 +73,63 @@ static int msu_profile_work_edges(const struct msu_profile_work_program *p,
     return count;
 }
 
-static bool msu_profile_work_reference(const struct msu_profile_work_program *p, u32 at)
+static u8 msu_profile_work_reference_step(const struct msu_profile_work_program *p,
+    u32 at, unsigned long addresses[31])
 {
-    u32 word = p->code[at], next, reg;
+    u32 word = p->code[at], rd = word & 31, rn = word >> 5 & 31, rm = word >> 16 & 31, i;
     unsigned long pc = p->address + at * 4, target;
     s32 displacement;
+    u8 reference = 0;
     if ((word & 0xfc000000U) == 0x94000000U) {
         target = msu_profile_work_branch(pc, word, 26);
-        return (p->iterators[0] && target == p->iterators[0]) ||
-            (p->iterators[1] && target == p->iterators[1]);
-    }
-    if ((word & 0x9f000000U) != 0x10000000U &&
-        (word & 0x9f000000U) != 0x90000000U) return false;
-    displacement = (s32)((((word >> 5 & 0x7ffffU) << 2) | (word >> 29 & 3)) << 11) >> 11;
-    if (!(word & 0x80000000U)) return pc + displacement == p->tracepoint ||
-        (p->tracepoint_funcs && pc + displacement == p->tracepoint_funcs);
-    if (at + 1 >= p->words) return false;
-    next = p->code[at + 1];
-    reg = word & 31;
-    target = (pc & ~4095UL) + (long)displacement * 4096;
-    if ((next & 0xffc003ffU) == (0x91000000U | reg << 5 | reg)) {
-        target += next >> 10 & 4095;
-        return target == p->tracepoint || (p->tracepoint_funcs && target == p->tracepoint_funcs);
-    }
-    /* Clang also materializes the callback array with ADRP + LDR X directly
-     * from tracepoint.funcs, without an intermediate ADD or LDAR. */
-    if ((next & 0xffc003e0U) == (0xf9400000U | reg << 5)) {
-        target += (next >> 10 & 4095) * 8;
-        return p->tracepoint_funcs && target == p->tracepoint_funcs;
-    }
-    return false;
+        if ((p->iterators[0] && target == p->iterators[0]) ||
+            (p->iterators[1] && target == p->iterators[1])) reference = 1;
+        if (p->trace_helper && target == p->trace_helper) reference = 2;
+        for (i = 0; i <= 18; ++i) addresses[i] = 0;
+    } else if ((word & 0x9f000000U) == 0x10000000U ||
+        (word & 0x9f000000U) == 0x90000000U) {
+        displacement = (s32)((((word >> 5 & 0x7ffffU) << 2) | (word >> 29 & 3)) << 11) >> 11;
+        target = word & 0x80000000U ? (pc & ~4095UL) + (long)displacement * 4096 : pc + displacement;
+        if (rd < 31) addresses[rd] = target;
+        if (!(word & 0x80000000U) && (target == p->tracepoint ||
+            (p->tracepoint_funcs && target == p->tracepoint_funcs))) reference = 1;
+    } else if ((word & 0xff000000U) == 0x91000000U) {
+        target = rn < 31 && addresses[rn] ? addresses[rn] +
+            ((word >> 10 & 4095UL) << ((word & (1U << 22)) ? 12 : 0)) : 0;
+        if (rd < 31) addresses[rd] = target;
+        if (target == p->tracepoint || (p->tracepoint_funcs && target == p->tracepoint_funcs)) reference = 1;
+    } else if ((word & 0xffe0ffe0U) == 0xaa0003e0U) {
+        if (rd < 31) addresses[rd] = rm < 31 ? addresses[rm] : 0;
+    } else if ((word & 0xffc00000U) == 0xf9400000U) {
+        target = rn < 31 && addresses[rn] ? addresses[rn] + (word >> 10 & 4095) * 8 : 0;
+        if (p->tracepoint_funcs && target == p->tracepoint_funcs) reference = 1;
+        if (rd < 31) addresses[rd] = 0;
+    } else if ((word & 0xfffffc1fU) == 0xd63f0000U) {
+        for (i = 0; i <= 18; ++i) addresses[i] = 0;
+    } else if ((word & 0x7c000000U) == 0x14000000U ||
+        (word & 0xff000010U) == 0x54000000U ||
+        (word & 0x7e000000U) == 0x34000000U || (word & 0x7e000000U) == 0x36000000U ||
+        (word & 0xfffff01fU) == 0xd503201fU || (word & 0xfff00000U) == 0xd5100000U ||
+        (word & 0xfffffc1fU) == 0xd65f0000U || (word & 0xffe0001fU) == 0xd4200000U) {
+    } else if ((word & 0x3b000000U) == 0x39000000U || (word & 0x3b200c00U) == 0x38200800U) {
+        if ((word >> 22 & 3) && rd < 31) addresses[rd] = 0;
+    } else if ((word & 0x3b200000U) == 0x38000000U) {
+        if ((word >> 22 & 3) && rd < 31) addresses[rd] = 0;
+        i = word >> 10 & 3;
+        if ((i == 1 || i == 3) && rn < 31) addresses[rn] = 0;
+    } else if ((word & 0x3e000000U) == 0x28000000U) {
+        if (word & (1U << 22)) {
+            if (rd < 31) addresses[rd] = 0;
+            i = word >> 10 & 31;
+            if (i < 31) addresses[i] = 0;
+        }
+        i = word >> 23 & 3;
+        if ((i == 1 || i == 3) && rn < 31) addresses[rn] = 0;
+    } else if ((word & 0x1c000000U) == 0x10000000U || (word & 0x0e000000U) == 0x0a000000U ||
+        (word & 0xfff00000U) == 0xd5300000U) {
+        if (rd < 31) addresses[rd] = 0;
+    } else for (i = 0; i < 31; ++i) addresses[i] = 0;
+    return reference;
 }
 
 static int msu_profile_work_reach(const struct msu_profile_work_program *p,
@@ -124,13 +152,13 @@ static int msu_profile_work_reach(const struct msu_profile_work_program *p,
     return 0;
 }
 
-static int msu_profile_work_decode(const struct msu_profile_work_program *p,
-    struct msu_profile_work_state *states, u32 *pending, u8 *set, u8 *clear,
-    u32 *output)
+static int msu_profile_work_flow(const struct msu_profile_work_program *p,
+    struct msu_profile_work_state *states, u32 *pending)
 {
     s32 registers[31];
-    u32 count = 0, iterations = 0, at, word, rd, rn, rm, i, j, bit, selected = ~0U;
-    int edges[2], n, error;
+    unsigned long addresses[31];
+    u32 count = 0, iterations = 0, at, word, rd, rn, rm, i, j, bit;
+    int edges[2], n;
     bool changed;
     if (!p->words || p->words > 4096 || p->initial_work_register >= 31 ||
         p->initial_work_register < -1) return -EINVAL;
@@ -146,9 +174,11 @@ static int msu_profile_work_decode(const struct msu_profile_work_program *p,
         states[at].queued = 0;
         states[at].candidate = 0;
         memcpy(registers, states[at].registers, sizeof(registers));
+        memcpy(addresses, states[at].addresses, sizeof(addresses));
         word = p->code[at]; rd = word & 31; rn = word >> 5 & 31; rm = word >> 16 & 31;
         n = msu_profile_work_edges(p, at, edges);
         if (n < 0) return n;
+        states[at].reference = msu_profile_work_reference_step(p, at, addresses);
         if ((word & 0xffffffe0U) == 0xd5384100U) { /* MRS SP_EL0 */
             if (rd < 31) registers[rd] = 0;
         } else if ((word & 0xff000000U) == 0x91000000U) {
@@ -213,15 +243,32 @@ static int msu_profile_work_decode(const struct msu_profile_work_program *p,
             changed = !to->seen;
             if (!to->seen) {
                 memcpy(to->registers, registers, sizeof(registers));
+                memcpy(to->addresses, addresses, sizeof(addresses));
                 to->seen = 1;
             } else for (j = 0; j < 31; ++j) {
                 if (to->registers[j] == registers[j] || to->registers[j] == MSU_PROFILE_REG_UNKNOWN) continue;
                 to->registers[j] = MSU_PROFILE_REG_UNKNOWN;
                 changed = true;
             }
+            if (to->seen) for (j = 0; j < 31; ++j) {
+                if (to->addresses[j] == addresses[j] || !to->addresses[j]) continue;
+                to->addresses[j] = 0;
+                changed = true;
+            }
             if (changed && !to->queued) { to->queued = 1; pending[count++] = edges[i]; }
         }
     }
+    return 0;
+}
+
+static int msu_profile_work_decode(const struct msu_profile_work_program *p,
+    struct msu_profile_work_state *states, u32 *pending, u8 *set, u8 *clear,
+    u32 *output)
+{
+    u32 at, word, i, bit, selected = ~0U;
+    int edges[2], n, error = msu_profile_work_flow(p, states, pending);
+    bool clear_helper;
+    if (error) return error;
     for (at = 0; at < p->words; ++at) {
         if (!states[at].candidate) continue;
         word = p->code[at];
@@ -231,8 +278,12 @@ static int msu_profile_work_decode(const struct msu_profile_work_program *p,
         error = msu_profile_work_reach(p, edges[(word >> 24 & 1) ? 0 : 1], at, set, pending);
         if (!error) error = msu_profile_work_reach(p, edges[(word >> 24 & 1) ? 1 : 0], at, clear, pending);
         if (error) return error;
+        clear_helper = false;
+        for (i = 0; i < p->words; ++i)
+            if (clear[i] && states[i].reference == 2) clear_helper = true;
         for (i = 0; i < p->words; ++i) {
-            if (!set[i] || clear[i] || !msu_profile_work_reference(p, i)) continue;
+            if (!set[i] || clear[i] || !states[i].reference ||
+                (states[i].reference == 2 && clear_helper)) continue;
             bit = states[at].candidate - 1;
             if (selected != ~0U && bit != selected) return -EPROTO;
             selected = bit;

@@ -1,4 +1,5 @@
 #include "su_uid_copies.h"
+#include "maplesu_storage_private.h"
 #include "module_base_kernel_mem.h"
 #include <algorithm>
 #include <cerrno>
@@ -152,9 +153,11 @@ KModErr read_uids(uint64_t control, std::vector<uint32_t>& uids) {
 }
 }
 
-extern "C" KModErr maplesu_freeze_su_copies(const char* key) {
-    if (!key || strnlen(key, 49) != 48) return KModErr::ERR_MODULE_PARAM;
-    const std::string name = std::string(key, 16) + key[0];
+extern "C" KModErr maplesu_freeze_su_copies() {
+    maplesu::storage::StorageContext context;
+    const auto located = maplesu::storage::current_context(context);
+    if (is_failed(located)) return located;
+    const std::string name = context.locator.system_component;
     Fd data{open("/data", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
     Fd root{data.value < 0 ? -1 : openat(data.value, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
     struct stat st{};
@@ -182,13 +185,12 @@ extern "C" KModErr maplesu_freeze_su_copies(const char* key) {
 
 extern "C" void maplesu_thaw_su_copies() { frozen = false; }
 
-extern "C" KModErr maplesu_sync_su_copies(const char* key, const std::vector<uint32_t>& uids) {
-    if (!key || strnlen(key, 49) != 48) return KModErr::ERR_MODULE_PARAM;
-    for (size_t i = 0; i < 48; ++i)
-        if (!((key[i] >= 'a' && key[i] <= 'z') || (key[i] >= 'A' && key[i] <= 'Z') ||
-              (key[i] >= '0' && key[i] <= '9'))) return KModErr::ERR_MODULE_PARAM;
+extern "C" KModErr maplesu_sync_su_copies(const std::vector<uint32_t>& uids) {
     Fd data{open("/data", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
-    const std::string name = std::string(key, 16) + key[0];
+    maplesu::storage::StorageContext context;
+    const auto located = maplesu::storage::current_context(context);
+    if (is_failed(located)) return located;
+    const std::string name = context.locator.system_component;
     Fd root{data.value < 0 ? -1 : openat(data.value, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
     struct stat st{};
     if (root.value < 0 || fstat(root.value, &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != 0 ||
@@ -220,19 +222,22 @@ extern "C" KModErr maplesu_sync_su_copies(const char* key, const std::vector<uin
     return fsync(root.value) == 0 ? KModErr::OK : KModErr::ERR_MODULE_WRITE_FILE;
 }
 
-extern "C" KModErr maplesu_sync_su_copies_from_control(const char* key, uint64_t control) {
+extern "C" KModErr maplesu_sync_su_copies_from_control(uint64_t control) {
     std::vector<uint32_t> uids;
     const auto error = read_uids(control, uids);
     if (is_failed(error)) return error;
-    return maplesu_sync_su_copies(key, uids);
+    return maplesu_sync_su_copies(uids);
 }
 
-extern "C" KModErr maplesu_open_su_copies_from_control(const char* key, uint64_t control) {
-    if (!frozen || !key || strnlen(key, 49) != 48) return KModErr::ERR_MODULE_PARAM;
+extern "C" KModErr maplesu_open_su_copies_from_control(uint64_t control) {
+    if (!frozen) return KModErr::ERR_MODULE_PARAM;
     std::vector<uint32_t> uids;
     const auto error = read_uids(control, uids);
     if (is_failed(error)) return error;
-    const std::string name = std::string(key, 16) + key[0];
+    maplesu::storage::StorageContext context;
+    const auto located = maplesu::storage::current_context(context);
+    if (is_failed(located)) return located;
+    const std::string name = context.locator.system_component;
     Fd data{open("/data", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
     Fd root{data.value < 0 ? -1 : openat(data.value, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
     struct stat source{};

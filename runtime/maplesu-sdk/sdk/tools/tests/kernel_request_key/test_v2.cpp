@@ -40,7 +40,10 @@ void check(bool value, const char* message) {
     ++checks;
     if (!value) { ++failures; std::fprintf(stderr, "FAIL: %s\n", message); }
 }
-void reset() { state = {}; }
+void reset() {
+    state = {};
+    kernel_module::maplesu_request_set_auth_mode(kernel_module::RequestAuthMode::LegacyKey);
+}
 KModErr probe(bool& supported, maplesu_response_v2& response) {
     return kernel_module::maplesu_request_v2_probe(response, supported);
 }

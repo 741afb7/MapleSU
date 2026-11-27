@@ -29,16 +29,15 @@ void print_escaped(const char* text) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::printf("{\"probe\":\"module\",\"ok\":false,\"error\":\"usage: %s <zip> [root-key]\"}\n",
+    if (argc != 2) {
+        std::printf("{\"probe\":\"module\",\"ok\":false,\"error\":\"usage: %s <zip>\"}\n",
                     argv[0]);
         return 2;
     }
     const char* zip = argv[1];
-    const char* key = argc >= 3 ? argv[2] : "";
 
     maplesu::sdk::module_desc desc{};
-    const KModErr err = maplesu::sdk::parse_module_desc_from_zip_file(key, zip, desc);
+    const KModErr err = maplesu::sdk::parse_module_desc_from_zip_file(zip, desc);
 
     std::printf("{\"probe\":\"maplesu-ultra-module\",\"schemaVersion\":1,\"zip\":");
     print_escaped(zip);

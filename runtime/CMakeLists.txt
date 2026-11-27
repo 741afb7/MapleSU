@@ -4,33 +4,15 @@ if(NOT ANDROID OR NOT ANDROID_ABI STREQUAL "arm64-v8a")
     message(FATAL_ERROR "The MapleSU runtime target requires Android ARM64")
 endif()
 add_subdirectory(ultra/boot/ultra-init EXCLUDE_FROM_ALL)
-add_library(maplesu_root_runtime STATIC
-    upstream/src/jni/rootkit_command.cpp
-    upstream/src/jni/rootkit_fork_helper.cpp)
-target_include_directories(maplesu_root_runtime PUBLIC upstream/include PRIVATE upstream/src/jni)
-target_compile_features(maplesu_root_runtime PUBLIC cxx_std_20)
-# Upstream omits these includes in its fork helper; keep imported bytes intact.
-target_compile_options(maplesu_root_runtime PRIVATE "SHELL:-include utility" "SHELL:-include fcntl.h"
-    -ffunction-sections -fdata-sections "$<$<CONFIG:Release>:-g0>")
-add_executable(maplesu-runtime src/exec_main.cpp src/su_session.cpp)
-# The upstream kit is a superset of the two sources imported above: it also carries
-# get_root, run_root_cmd_with_cb and the parasite primitives. Linking both would define
-# those symbols twice, so this executable links the kit alone - which is also the more
-# faithful "reuse upstream bytes" choice.
-target_link_libraries(maplesu-runtime PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/upstream/lib/libkernel_root_kit_static.a)
-target_include_directories(maplesu-runtime PRIVATE upstream/include)
+add_executable(maplesu-runtime src/exec_main.cpp src/su_session.cpp src/ultra_admission.cpp
+    src/path_injection.cpp)
+target_link_libraries(maplesu-runtime PRIVATE z log dl)
+target_compile_features(maplesu-runtime PRIVATE cxx_std_20)
 target_compile_options(maplesu-runtime PRIVATE -Wall -Wextra -Werror "$<$<CONFIG:Release>:-g0>")
 target_link_options(maplesu-runtime PRIVATE -Wl,--gc-sections -Wl,-z,relro,-z,now)
 
 add_executable(maplesu-su src/su_main.cpp)
-# A delivered image admits itself: it carries the application's credential in a trailer
-# and calls get_root directly, so it needs the same upstream kit as the runtime. That is
-# what removes the Binder helper, the directory owner and the root service from the
-# request path for an already-authorised application.
-target_link_libraries(maplesu-su PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/upstream/lib/libkernel_root_kit_static.a)
-target_include_directories(maplesu-su PRIVATE upstream/include)
+# The keyless su executable uses the existing Binder bootstrap and libc only.
 target_compile_features(maplesu-su PRIVATE cxx_std_20)
 target_compile_options(maplesu-su PRIVATE -Wall -Wextra -Werror)
 target_link_options(maplesu-su PRIVATE -Wl,--gc-sections -Wl,-z,relro,-z,now)
@@ -61,23 +43,22 @@ target_link_options(maplesu-modules PRIVATE -Wl,-z,relro,-z,now)
 
 # --- Selected Ultra SDK delivery -------------------------------------------------
 # Source builds are staged as a complete SDK directory with their headers, archive
-# and identity. The default remains the retained delivery until candidate acceptance.
-# The Ultra and Lite archives expose different products and are linked separately.
-#
-# The bridge target is deliberately separate from every Lite target. The reference
-# Manager bridge is not compiled at all - see ultra/reference/native-lib.cpp and
-# ultra/bridge/native_lib_ultra.cpp, which returns structured JSON instead of text.
+# and identity. Standard Ultra consumers require the keyless source delivery.
+# Standard runtime and JNI consumers link the same selected SDK archive.
+# The selected bridge returns structured JSON for verified Manager operations.
 add_library(maplesu_ultra_sdk STATIC IMPORTED)
 set(MAPLESU_ULTRA_SDK_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/maplesu-sdk" CACHE PATH "Verified Ultra SDK archive and build identity")
 set_target_properties(maplesu_ultra_sdk PROPERTIES
     IMPORTED_LOCATION "${MAPLESU_ULTRA_SDK_DIRECTORY}/lib/arm64-v8a/libkernel_module_kit_static.a"
     INTERFACE_INCLUDE_DIRECTORIES "${MAPLESU_ULTRA_SDK_DIRECTORY}/include")
+target_link_libraries(maplesu-runtime PRIVATE maplesu_ultra_sdk)
 
 # Candidate boot backend. Keep it outside packaging until the synchronous SDK
 # entry and real-device kernel-hook acceptance are complete.
 add_library(maplesu_policy_boot SHARED EXCLUDE_FROM_ALL
     ultra/policy/environment_policy.cpp ultra/policy/kernel_policy_gate.cpp
     ultra/policy/module_policy_config.cpp ultra/boot/su-isolation/helper_su_backend.cpp)
+target_include_directories(maplesu_policy_boot PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/maplesu-sdk/sdk/include")
 target_compile_features(maplesu_policy_boot PRIVATE cxx_std_20)
 target_compile_options(maplesu_policy_boot PRIVATE -Wall -Wextra -Werror -fexceptions -fno-rtti
     -ffunction-sections -fdata-sections)
@@ -113,15 +94,10 @@ target_compile_options(maplesu_policy_dispatch_probe PRIVATE -Wall -Wextra -Werr
 target_link_options(maplesu_policy_dispatch_probe PRIVATE -Wl,--no-undefined -Wl,--gc-sections)
 target_link_libraries(maplesu_policy_dispatch_probe PRIVATE maplesu_ultra_sdk z log dl)
 
-# --- Bundled build identity (5.0.5) --------------------------------------------
-# SDK-IDENTITY.cmake is written by scripts/import-ultra-sdk-505.ps1 from
-# evidence/ultra-sdk-505/sdk/sdk-build.json, only after that script has verified the
-# archive/bootstrap/release/provenance digests. The include is OPTIONAL and every
-# variable is defaulted here: a checkout that has not imported an SDK still
-# configures and builds, and the bridge then reports the "unknown" sentinel instead
-# of a false identity. The values are baked in as compile definitions so the bridge
-# reports the identity of the bytes that were actually linked in, not a source
-# constant that can drift away from the archive.
+# --- Selected source SDK build identity --------------------------------------
+# The staging entry writes this identity after validating the archive/helper and
+# source delivery. Gradle verifies the same selected SDK before Release packaging.
+# Unknown defaults support isolated native configuration; they are not release evidence.
 include("${MAPLESU_ULTRA_SDK_DIRECTORY}/SDK-IDENTITY.cmake" OPTIONAL)
 if(NOT DEFINED MAPLESU_ULTRA_SDK_BUILD_ID)
     set(MAPLESU_ULTRA_SDK_BUILD_ID "unknown")
@@ -140,9 +116,6 @@ if(NOT DEFINED MAPLESU_ULTRA_HELPER_BUILD_ID)
 endif()
 if(NOT DEFINED MAPLESU_ULTRA_HELPER_SIZE)
     set(MAPLESU_ULTRA_HELPER_SIZE -1)
-endif()
-if(NOT DEFINED MAPLESU_ULTRA_KEY_SLOT_OFFSET)
-    set(MAPLESU_ULTRA_KEY_SLOT_OFFSET -1)
 endif()
 if(NOT DEFINED MAPLESU_APP_VERSION)
     set(MAPLESU_APP_VERSION "unknown")
@@ -167,7 +140,7 @@ target_include_directories(maplesu_ultra_bridge PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra/third_party/cJSON
     ${CMAKE_CURRENT_SOURCE_DIR}/ultra/third_party/include)
 target_compile_features(maplesu_ultra_bridge PRIVATE cxx_std_20)
-# Bundled build identity: the same values the 5.0.5 BuildConfig fields carry (see
+# Bundled build identity: the same values the current BuildConfig fields carry (see
 # manager/build.gradle.kts). getSdkBuildIdentity reports them from the linked bytes.
 target_compile_definitions(maplesu_ultra_bridge PRIVATE
     # The archive's existing su installer already defines the legacy writer.
@@ -179,7 +152,6 @@ target_compile_definitions(maplesu_ultra_bridge PRIVATE
     MAPLESU_ULTRA_HELPER_SHA256="${MAPLESU_ULTRA_HELPER_SHA256}"
     MAPLESU_ULTRA_HELPER_BUILD_ID="${MAPLESU_ULTRA_HELPER_BUILD_ID}"
     MAPLESU_ULTRA_HELPER_SIZE=${MAPLESU_ULTRA_HELPER_SIZE}
-    MAPLESU_ULTRA_KEY_SLOT_OFFSET=${MAPLESU_ULTRA_KEY_SLOT_OFFSET}
     MAPLESU_APP_VERSION="${MAPLESU_APP_VERSION}")
 # -fexceptions is explicit: the bridge converts C++ exceptions into error receipts and
 # must not rely on an inherited default.
@@ -188,16 +160,14 @@ set(MAPLESU_UNINSTALL_CALLBACK_SYMBOL
     maplesu_module_uninstall_callback)
 target_link_options(maplesu_ultra_bridge PRIVATE
     -Wl,--wrap=${MAPLESU_UNINSTALL_CALLBACK_SYMBOL}
-    -Wl,--wrap=__set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW
-    -Wl,--wrap=__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW
     -Wl,--wrap=syscall
     -Wl,--wrap=fork -Wl,--wrap=pipe2 -Wl,--wrap=close -Wl,--wrap=waitpid
     -Wl,--no-undefined -Wl,--gc-sections -Wl,-z,relro,-z,now)
-# dlsym alone does not extract archive members. Retain the three legacy exports.
+# dlsym alone does not extract archive members. Retain the three current keyless exports.
 set(MAPLESU_PARASITE_SYMBOLS
-    _ZN11kernel_root29parasite_precheck_app_with_cbEPKcS1_PFvS1_NS_15AppDynlibStatusEE
-    _ZN11kernel_root20parasite_implant_appEPKcS1_S1_
-    _ZN11kernel_root23parasite_implant_su_envEPKcS1_S1_S1_)
+    _ZN11kernel_root29parasite_precheck_app_with_cbEPKcPFvS1_NS_15AppDynlibStatusEE
+    _ZN11kernel_root20parasite_implant_appEPKcS1_
+    _ZN11kernel_root23parasite_implant_su_envEPKcS1_S1_)
 foreach(symbol IN LISTS MAPLESU_PARASITE_SYMBOLS)
     target_link_options(maplesu_ultra_bridge PRIVATE "-Wl,--undefined=${symbol}")
 endforeach()
@@ -242,5 +212,6 @@ target_link_libraries(maplesu-ultra-module PRIVATE maplesu_ultra_sdk z log dl)
 
 # NDK r26 defaults to 4 KB; all packaged runtime entries also load on 16 KB pages.
 foreach(target maplesu-runtime maplesu-su maplesu_bootstrap maplesu_parasite maplesu_ultra_bridge)
-    target_link_options(${target} PRIVATE -Wl,-z,max-page-size=16384,-z,common-page-size=16384)
+    target_link_options(${target} PRIVATE -Wl,-z,max-page-size=16384,-z,common-page-size=16384
+        "-Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/${target}.map")
 endforeach()

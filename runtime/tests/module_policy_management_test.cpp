@@ -2,6 +2,7 @@
 #include "module_policy_config.h"
 #include "module_err_def.h"
 #include "maplesu_sdk/maplesu_root.h"
+#include "maplesu_storage_private.h"
 #include <cassert>
 #include <cerrno>
 #include <cstdio>
@@ -15,23 +16,60 @@
 #include <unistd.h>
 
 static const char* scenario;
-static constexpr const char* key = "ABCDEFGHIJKLMNOP0123456789ABCDEFGHIJKLMNOP012345";
+static pid_t session_process;
+static unsigned forks = 0;
 static bool interrupted = false;
 static unsigned requested = 1;
 static bool is(const char* value) { return strcmp(scenario, value) == 0; }
 
-namespace maplesu::sdk {
-KModErr get_root(const char* value) {
-    assert(strcmp(value, key) == 0);
-    return is("root_error") ? KModErr::ERR_MODULE_ROOT_KEY : KModErr::OK;
+namespace default_modules::module_root {
+KModErr set_current_root(bool owner) {
+    assert(owner == !is("helper_success"));
+    if (is("root_error")) return KModErr::ERR_MODULE_ROOT_KEY;
+    session_process = getpid();
+    return KModErr::OK;
 }
+}
+namespace kernel_module {
+KModErr maplesu_request_worker_admission() { return is("admission_error") ? KModErr::ERR_MODULE_ROOT_KEY : KModErr::OK; }
+uint64_t maplesu_request_auth_state() {
+    if (is("invalid_auth")) return 0;
+    if (is("exhausted_auth")) return UINT64_MAX;
+    return is("helper_success") ? 3 : 1;
+}
+bool maplesu_request_owner_binding_matches(const RequestOwnerBinding& binding) {
+    return binding.process == uint64_t(getpid()) && session_process == getpid();
+}
+bool maplesu_request_owner_lifetime_capture(RequestOwnerLifetimeToken&) { return false; }
+KModErr maplesu_request_owner_close() {
+    const bool active = session_process == getpid();
+    session_process = 0;
+    return active && (is("close_error") || is("store_close_error")) ? KModErr::ERR_MODULE_ROOT_KEY : KModErr::OK;
+}
+KModErr maplesu_request_helper_open() { session_process = getpid(); return KModErr::OK; }
+KModErr maplesu_request_owner_deployment(RequestDeploymentNamespace& out) {
+    assert(session_process == getpid());
+    memcpy(out.record.name, "0123456789abcdef", 16);
+    out.binding.process = getpid();
+    out.binding.actual_uid = getuid();
+    return KModErr::OK;
+}
+CleanupReceiptScope::CleanupReceiptScope() noexcept : saved_errno_(errno), saved_process_(getpid()), saved_reply_{} {}
+CleanupReceiptScope::~CleanupReceiptScope() noexcept { errno = saved_errno_; }
+}
+namespace maplesu::storage {
+StorageScope::StorageScope(const StorageLocator& locator, const char* module_id) {
+    assert(!module_id && !strcmp(locator.kernel_component, "0123456789abcdef"));
+    error_ = KModErr::OK;
+}
+StorageScope::~StorageScope() {}
 }
 // The real IPC path runs; only the SDK and policy store are fixtures.
 namespace maplesu::module_policy {
 Store::Store(int directory) : directory_(directory) {}
 Store::~Store() {}
 Store Store::open(bool create) {
-    if (is("store_error")) throw std::runtime_error("MODULE_POLICY_CONFIG_TEST");
+    if (is("store_error") || is("store_close_error")) throw std::runtime_error("MODULE_POLICY_CONFIG_TEST");
     assert(create == (strncmp(scenario, "save_", 5) == 0));
     return Store(-1);
 }
@@ -55,6 +93,7 @@ extern "C" int __wrap_pipe2(int* fds, int flags) {
 }
 extern "C" pid_t __real_fork();
 extern "C" pid_t __wrap_fork() {
+    ++forks;
     if (is("fork_error")) { errno = EAGAIN; return -1; }
     return __real_fork();
 }
@@ -92,16 +131,11 @@ int main(int argc, char** argv) {
     assert(argc == 2);
     scenario = argv[1];
     int request = -1;
-    const char* input = key;
-    const std::string long_key(1024, 'S');
-    if (is("missing_key")) input = nullptr;
-    if (is("short_key")) input = "short";
-    if (is("long_key")) input = long_key.c_str();
     if (is("invalid_request")) request = 2;
     if (strncmp(scenario, "save_", 5) == 0) request = scenario[5] - '0';
-    const auto result = maplesu::module_policy::manage(input, request);
+    const auto result = maplesu::module_policy::manage(request);
     std::string expected;
-    if (strstr(scenario, "_key") || is("invalid_request")) expected = "MODULE_POLICY_INVALID:0";
+    if (is("invalid_auth") || is("exhausted_auth") || is("invalid_request")) expected = "MODULE_POLICY_INVALID:0";
     else if (is("pipe_error")) expected = "MODULE_POLICY_PIPE:" + std::to_string(EMFILE);
     else if (is("fork_error")) expected = "MODULE_POLICY_FORK:" + std::to_string(EAGAIN);
     else if (is("poll_timeout")) expected = "MODULE_POLICY_POLL_TIMEOUT:3000";
@@ -113,20 +147,22 @@ int main(int argc, char** argv) {
     else if (is("wait_mismatch")) expected = "MODULE_POLICY_WAIT:";
     else if (is("child_signal")) expected = "MODULE_POLICY_CHILD_SIGNAL:" + std::to_string(SIGTERM);
     else if (is("child_exit")) expected = "MODULE_POLICY_CHILD_EXIT:17";
-    else if (is("root_error")) expected = "MODULE_POLICY_ROOT:" + std::to_string(static_cast<int64_t>(KModErr::ERR_MODULE_ROOT_KEY));
-    else if (is("store_error")) expected = "MODULE_POLICY_CONFIG_TEST";
+    else if (is("root_error") || is("admission_error")) expected = "MODULE_POLICY_ROOT:" + std::to_string(static_cast<int64_t>(KModErr::ERR_MODULE_ROOT_KEY));
+    else if (is("close_error")) expected = "MODULE_POLICY_CLOSE:" + std::to_string(static_cast<int64_t>(KModErr::ERR_MODULE_ROOT_KEY));
+    else if (is("store_error") || is("store_close_error")) expected = "MODULE_POLICY_CONFIG_TEST";
     if (!expected.empty()) {
         const bool matches = is("wait_mismatch") ? strncmp(result.reason, expected.c_str(), expected.size()) == 0 : result.reason == expected;
-        if (!matches || result.error != (is("root_error") ? static_cast<int64_t>(KModErr::ERR_MODULE_ROOT_KEY) : -1)) {
+        if (!matches || result.error != ((is("root_error") || is("admission_error") || is("close_error")) ? static_cast<int64_t>(KModErr::ERR_MODULE_ROOT_KEY) : -1)) {
             fprintf(stderr, "FAIL %s: error=%lld reason=%s expected=%s\n", scenario, static_cast<long long>(result.error), result.reason, expected.c_str());
             return 1;
         }
-        assert(!strstr(result.reason, key) && !strchr(result.reason, '/'));
+        assert(!strchr(result.reason, '/'));
     } else {
         assert(result.error == 0 && result.reason[0] == '\0');
         assert(result.requested == static_cast<unsigned>(request < 0 ? 1 : request == 7 ? 3 : request));
         assert(result.effective == 3 && result.capabilities == 42);
         assert(result.unverified_hide && result.can_try_unverified && result.hide_failed);
     }
+    assert(forks == ((is("invalid_auth") || is("exhausted_auth") || is("invalid_request") || is("pipe_error") || is("admission_error")) ? 0u : 1u));
     printf("PASS module policy management %s\n", scenario);
 }

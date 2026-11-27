@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include <cstdint>
 #include "third_party/civetweb-1.16/include/CivetServer.h"
@@ -14,11 +14,10 @@ class WebUIHttpHandler : public CivetHandler {
 public:
     /***************************************************************************
      * WebUI 服务器启动前回调
-     * 参数: root_key           ROOT权限密钥文本
      *      module_private_dir  模块私有目录（用于存放受保护的资源文件）
      *      port                WebUI 服务器监听端口
      ***************************************************************************/
-    virtual void onPrepareCreate(const char* root_key, const char* module_private_dir, uint32_t port) {}
+    virtual void onPrepareCreate(const char* module_private_dir, uint32_t port) {}
 
     /***************************************************************************
      * WebUI 服务器创建后回调

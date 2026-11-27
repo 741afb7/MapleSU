@@ -161,10 +161,11 @@ def run(args):
     check('alias-offset-overrun', lambda d, o, s: struct.pack_into('<Q', d, o[5], 12), expected_error='DIRECT_RELOCATION')
     check('alias-no-calls', lambda d, o, s: struct.pack_into('<Q', d, o[5] + 8, (3 << 32) | 283), expected_error='CALL_REQUIRED')
     check('ordinary-crc-mismatch-still-fails', lambda d, o, s: struct.pack_into('<Q', d, o[7] + 64, 3), package_error='IMPORT_CRC:ordinary_export')
-    data, offsets, shoff = fixture(extra=('reference_prepare_creds', 'reference___vmalloc_node_range', 'ref___d_path'))
+    data, offsets, shoff = fixture(extra=('reference_prepare_creds', 'reference___vmalloc_node_range', 'ref___d_path',
+        'reference_environment_release', 'reference_vmalloc_segmented_range'))
     required, optional = kmi.native_private_symbols(data)
     assert required == ['__vmalloc_node_range', 'prepare_creds'] and optional == ['__d_path']
-    rows.append({'case': 'compiled-sdk-reference-names-included-direct-native-ref-names-excluded',
+    rows.append({'case': 'compiled-sdk-reference-names-included-module-adapters-and-direct-native-ref-names-excluded',
                  'privateSymbols': required, 'optionalPrivateSymbols': optional})
     table = types.SimpleNamespace(all_offsets=lambda name: [0] if name == '__module_address' else [4])
     targets, marker = kmi.direct_native_targets(fixture()[0], b'\0' * 8, table)

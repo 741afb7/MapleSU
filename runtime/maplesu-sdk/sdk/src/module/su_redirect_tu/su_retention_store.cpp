@@ -1,4 +1,5 @@
 #include "su_retention_store.h"
+#include "maplesu_storage_private.h"
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -7,8 +8,6 @@
 #include <sys/xattr.h>
 #include <unistd.h>
 
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-extern "C" const char* __get_current_module_id32_1b0494ae8a788541db46b82cc1f0577c();
 
 namespace {
 constexpr const char* record = "uid_retention_budget.20261105";
@@ -53,12 +52,12 @@ bool synchronize(int fd) {
 KModErr maplesu_store_su_retention(const void* ledger, uint64_t size) {
     if (!ledger || size != 64 || static_cast<const unsigned char*>(ledger)[0] != 1)
         return KModErr::ERR_MODULE_STORAGE_TYPE;
-    const char* key = __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-    const char* module = __get_current_module_id32_1b0494ae8a788541db46b82cc1f0577c();
-    if (!identifier(key, 48) || !identifier(module, 32)) return KModErr::ERR_MODULE_PARAM;
-    char owner[18]{};
-    memcpy(owner, key, 16);
-    owner[16] = key[0];
+    maplesu::storage::StorageContext storage_context;
+    const auto located = maplesu::storage::current_context(storage_context);
+    if (is_failed(located)) return located;
+    const char* module = storage_context.module_id.c_str();
+    if (!identifier(module, 32)) return KModErr::ERR_MODULE_PARAM;
+    const char* owner = storage_context.locator.system_component;
     Descriptor data(open("/data", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     // /data is Android-owned and may be group-writable; validate the private
     // component and every descendant before using descriptor-relative paths.

@@ -39,9 +39,11 @@ class T3InjectProbeAndroidTest {
         val uid = context.packageManager.getApplicationInfo(probe, 0).uid
         val original = DirectPolicy.hasGrantStrict(context, uid)
         DirectPolicy.grant(context, uid)
-        SuPublication.publish(context)
-        val directory = SuPublication.suDirectory(context)
         try {
+            assertTrue("SU publication failed", SuPublication.publish(context))
+            val directory = requireNotNull(SuPublication.suDirectory(context)) {
+                "SU publication returned no verified directory"
+            }
             shell("am force-stop $probe")
             Thread.sleep(800)
             shell("logcat -c")

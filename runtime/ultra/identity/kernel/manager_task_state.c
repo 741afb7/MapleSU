@@ -347,7 +347,8 @@ static bool msu_task_profile_target_ready(void)
         (root->offset & (__alignof__(unsigned long) - 1)) ||
         root->offset > root->owner_bytes || root->bytes > root->owner_bytes - root->offset) return false;
     if (source == MSU_TASK_PROFILE_TARGET_IMAGE) {
-        if (binding->proof_mask != MSU_TASK_PROFILE_TARGET_PROOFS ||
+        if ((binding->proof_mask != MSU_TASK_PROFILE_TARGET_PROOFS &&
+             binding->proof_mask != MSU_TASK_PROFILE_TARGET_LEGACY_PROOFS) ||
             !msu_task_profile_hash_present(binding->target_sha256) ||
             !msu_task_profile_hash_present(binding->config_sha256) ||
             !msu_task_profile_hash_present(binding->proof_sha256)) return false;

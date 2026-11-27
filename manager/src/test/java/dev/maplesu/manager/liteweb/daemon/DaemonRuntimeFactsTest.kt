@@ -17,7 +17,7 @@ class DaemonRuntimeFactsTest {
     }
 
     @Test fun sdkErrorsNeverFallBackToSameBootNormal() {
-        for (state in listOf(DaemonUltraState.UNKNOWN, DaemonUltraState.NO_KEY, DaemonUltraState.FAULT)) {
+        for (state in listOf(DaemonUltraState.UNKNOWN, DaemonUltraState.FAULT)) {
             assertEquals(state.name, "UNKNOWN", DaemonRuntimePolicy.resolve(state, normal, "boot-now").mode)
         }
     }

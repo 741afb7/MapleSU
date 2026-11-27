@@ -13,7 +13,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char*);
 
 namespace maplesu::module_policy {
 namespace {
@@ -57,14 +56,17 @@ Reply execute(int request) {
     return reply;
 }
 }
-Reply manage(const char* key, int request) {
+Reply manage(int request) {
     Reply result;
     const auto auth = kernel_module::maplesu_request_auth_state();
     if (!kernel_module::maplesu_request_auth_usable(auth) ||
-        (kernel_module::maplesu_request_auth_authenticated(auth) ? key != nullptr :
-            (!key || strnlen(key, 1024) < 16 || strnlen(key, 1024) == 1024)) ||
         (request != -1 && request != 7 && !valid_mode(static_cast<unsigned>(request)))) return failed("INVALID", 0);
-    if (key) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key);
+    const auto admission = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(admission)) {
+        auto rejected = failed("ROOT", static_cast<int64_t>(admission));
+        rejected.error = static_cast<int64_t>(admission);
+        return rejected;
+    }
     int pipes[2];
     if (pipe2(pipes, O_CLOEXEC)) return failed("PIPE", errno);
     pid_t pid = fork();

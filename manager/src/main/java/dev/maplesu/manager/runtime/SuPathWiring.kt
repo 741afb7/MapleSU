@@ -3,6 +3,7 @@ package dev.maplesu.manager.runtime
 import android.content.Context
 import android.util.Log
 import dev.maplesu.manager.runtime.authorization.DirectPolicy
+import dev.maplesu.manager.runtime.ultra.UltraSdkCredentials
 import dev.maplesu.manager.workmode.superuser.ImplantPreparation
 import dev.maplesu.manager.workmode.superuser.LiteImplantCodes
 import dev.maplesu.manager.workmode.superuser.LiteImplantQuiesceGate
@@ -12,8 +13,7 @@ import java.io.File
 /**
  * Persistent `su` PATH wiring for one authorised application.
  *
- * <p>This is the upstream MapleSU Lite primitive, not a reimplementation: the vendored
- * static library (`upstream/lib/libkernel_root_kit_static.a`, Lite 2026-09-14) patches
+ * <p>The selected source SDK patches
  * one of the target's own JNI libraries to carry a `DT_NEEDED` entry for a side library
  * it writes next to it, and that side library prepends the published `su` directory to
  * `PATH` from its constructor. Therefore:
@@ -38,9 +38,7 @@ import java.io.File
  */
 object SuPathWiring {
     /** Exit codes of the native helper, mirrored for readable diagnostics. */
-    private const val FRAME_REQUIRED = 65
     private const val PRECHECK_REJECTED = 66
-    private const val IMPLANT_REJECTED = 67
 
     /**
      * [reason] is the machine-readable outcome, [detail] is for a human. Callers branch on
@@ -55,9 +53,11 @@ object SuPathWiring {
         const val UNKNOWN_PACKAGE = "UNKNOWN_PACKAGE"
         const val AUTH_NOT_GRANTED = "AUTH_NOT_GRANTED"
         const val AUTH_DISABLED = "AUTH_DISABLED"
+        const val AUTH_STATE_UNAVAILABLE = "AUTH_STATE_UNAVAILABLE"
         const val NOT_RUNNING = "NOT_RUNNING"
         const val RUNTIME = "RUNTIME"
-        const val CREDENTIAL = "CREDENTIAL"
+        const val IDENTITY = "SDK_IDENTITY_SCOPE_CHANGED"
+        const val PUBLICATION = "SU_PUBLICATION_UNAVAILABLE"
         const val CLIENT = "SU_CLIENT_NOT_DELIVERED"
         const val PRECHECK = "PRECHECK"
         /** The package ships no JNI library at all: the case PATH injection exists for. */
@@ -81,8 +81,7 @@ object SuPathWiring {
     /**
      * Wires [packageName] so that its own processes resolve a bare `su`.
      *
-     * @return a result whose [Result.detail] is safe to show: it never contains the
-     *   credential, and it reports the upstream error code instead of a stack trace.
+     * @return the actual helper stage and error, without reusable admission material.
      */
     fun wire(context: Context, packageName: String): Result {
         val application = context.applicationContext
@@ -99,10 +98,9 @@ object SuPathWiring {
         // Single authority, read immediately before the operation (never a cached UI
         // value), through a short-lived root tool so wiring does not start a resident
         // executor.
-        if (DirectPolicy.hasGrantStrict(application, uid) != true)
-            return Result(false, 0, "AUTH_NOT_GRANTED", Reason.AUTH_NOT_GRANTED)
-        if (DirectPolicy.isEnabled(application) != true)
-            return Result(false, 0, "AUTH_DISABLED", Reason.AUTH_DISABLED)
+        authorizationFailure(application, uid)?.let { return Result(false, 0, it, it) }
+        val current = UltraSdkCredentials.captureOwnerMarker(application)
+        if (!current()) return Result(false, 0, Reason.IDENTITY, Reason.IDENTITY)
         // Refuse to implant twice. Each implant appends another side library and another
         // DT_NEEDED entry to the target's own library; stacking them grew one test target
         // from 5,368 to 984,089 bytes until its own native code faulted (SIGILL), and grew
@@ -116,25 +114,16 @@ object SuPathWiring {
         val executable = File(application.applicationInfo.nativeLibraryDir, "libmaplesu_runtime.so")
         if (!executable.isFile || !executable.canExecute())
             return Result(false, 0, "runtime image unavailable", Reason.RUNTIME)
-        // PATH must point at the directory that actually holds this application's own
-        // client: the image delivered into its library directory. The old global
-        // publication is retired, and pointing PATH at it would silently wire a bare `su`
-        // to a path that no longer exists.
+        // The shared forwarder resolves u/<fullUID>/su to this delivered entry.
         val delivered = SuDelivery.deliveredPath(application, packageName)
             ?: return Result(false, 0, "unknown package", Reason.UNKNOWN_PACKAGE)
         if (!File(delivered).isFile)
             return Result(false, 0, "SU_CLIENT_NOT_DELIVERED", Reason.CLIENT)
-        // MapleSU implants a directory the target can execute from. The application's own
-        // library directory is not on the PATH the loader hands to the process (Android
-        // never adds it), so pointing there only worked for applications that load our
-        // patched library. The shared deployment directory works for every wired app.
         val suDirectory = SuPublication.suDirectory(context)
-
-        val credential = runCatching { MapleSuCredentialStore(application).load() }.getOrNull()
-            ?: return Result(false, 0, "no paired credential", Reason.CREDENTIAL)
-        try {
+            ?: return Result(false, 0, Reason.PUBLICATION, Reason.PUBLICATION)
+        run {
             Log.i("MapleSU", "SU_WIRING_STAGE package=$packageName stage=precheck cmdline=[$cmdline]")
-            val precheck = invoke(executable, credential, "--wire-su-precheck", cmdline)
+            val precheck = invoke(executable, current, "--wire-su-precheck", cmdline)
             Log.i("MapleSU", "SU_WIRING_STAGE package=$packageName stage=precheck_done code=${precheck.code}")
             if (precheck.code != 0)
                 return Result(false, precheck.code, describe(precheck, "precheck"), Reason.PRECHECK)
@@ -160,6 +149,8 @@ object SuPathWiring {
                 ?: usable.firstOrNull { it.status == RUNNING_STATUS }
                 ?: usable.firstOrNull()
                 ?: return Result(false, PRECHECK_REJECTED, "no patchable JNI library", Reason.NO_PATCHABLE)
+            val chosenDirectory = File(chosen.path).parent
+                ?: return Result(false, PRECHECK_REJECTED, "invalid JNI library path", Reason.NO_PATCHABLE)
             Log.i("MapleSU", "SU_WIRING_STAGE package=$packageName stage=choose mapped=${mapped.size} chosen=${chosen.path}")
             // W19：**修改前**备份被 patch 的原库并登记（fail closed：备份失败则不植入）。
             val recorder = LiteImplantRecorderProvider.current()
@@ -173,7 +164,7 @@ object SuPathWiring {
                         targetLibraryPath = chosen.path,
                         deliverPath = delivered,
                         deliverSha256 = deliverSha,
-                        createdDirs = listOf(File(chosen.path).parent.orEmpty()),
+                        createdDirs = listOf(chosenDirectory),
                         now = System.currentTimeMillis(),
                     )
                 }.getOrElse {
@@ -183,14 +174,16 @@ object SuPathWiring {
                     return Result(false, 0, preparation.code, Reason.BACKUP)
                 }
             }
-            val implant = invoke(executable, credential, "--wire-su-env", cmdline, chosen.path, suDirectory)
+            if (!current()) return Result(false, 0, Reason.IDENTITY, Reason.IDENTITY)
+            authorizationFailure(application, uid)?.let { return Result(false, 0, it, it) }
+            val implant = invoke(executable, current, "--wire-su-env", cmdline, chosen.path, suDirectory)
             if (implant.code == 0) {
                 // The upstream implant creates the side library world-writable and
                 // root-owned. Nothing needs to write it after it is installed, so tighten
                 // it to the mode the application's own libraries use.
                 // The manager does not know the random name of the side library, so tighten
                 // whichever root-owned libraries are present: the implant writes them 0777.
-                DirectRoot.run(context, "/system/bin/find " + quote(File(chosen.path).parent) +
+                DirectRoot.run(context, "/system/bin/find " + quote(chosenDirectory) +
                     " -maxdepth 1 -name 'lib*' -user 0 -exec /system/bin/chmod 0755 {} + 2>/dev/null")
                 if (preparation != null) {
                     runCatching { recorder?.afterWiring(preparation) }
@@ -202,8 +195,6 @@ object SuPathWiring {
             } else {
                 Result(false, implant.code, describe(implant, "implant"), Reason.IMPLANT)
             }
-        } finally {
-            credential.fill(0)
         }
     }
 
@@ -233,14 +224,6 @@ object SuPathWiring {
     private data class Invocation(val code: Int, val out: String, val err: String)
 
     /**
-     * Runs the native helper with the credential on stdin only.
-     *
-     * <p>The frame is the same one the rest of the runtime uses: four-byte big-endian
-     * length followed by the 48 alphanumeric bytes. Nothing secret is placed in argv or
-     * the environment, so it cannot be read back from `/proc/<pid>/cmdline` or
-     * `/proc/<pid>/environ`.
-     */
-    /**
      * Runs one native helper step.
      *
      * <p>Both streams are drained on their own threads: reading stdout to completion before
@@ -248,31 +231,45 @@ object SuPathWiring {
      * exactly how the wiring test appeared to hang. A timeout also turns "stuck" into a
      * result instead of an unending wait.
      */
-    private fun invoke(executable: File, credential: ByteArray, vararg arguments: String): Invocation {
+    private fun invoke(executable: File, current: () -> Boolean, vararg arguments: String): Invocation {
+        if (!current()) return Invocation(-1, "", Reason.IDENTITY)
         val process = ProcessBuilder(listOf(executable.absolutePath) + arguments)
             .redirectErrorStream(false)
             .start()
         try {
-            process.outputStream.use { input ->
-                input.write(byteArrayOf(0, 0, 0, 48))
-                input.write(credential)
-                input.flush()
-            }
+            process.outputStream.close()
         } catch (error: java.io.IOException) {
             process.destroyForcibly()
-            return Invocation(-1, "", "frame write failed")
+            runCatching { process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) }
+            return Invocation(-1, "", "stdin close failed")
         }
-        val out = StringBuilder()
-        val err = StringBuilder()
+        val out = StringBuffer()
+        val err = StringBuffer()
         val outThread = Thread { runCatching { process.inputStream.bufferedReader().use { out.append(it.readText()) } } }
             .apply { isDaemon = true; start() }
         val errThread = Thread { runCatching { process.errorStream.bufferedReader().use { err.append(it.readText()) } } }
             .apply { isDaemon = true; start() }
-        val finished = process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
-        if (!finished) process.destroyForcibly()
-        outThread.join(2_000)
-        errThread.join(2_000)
-        return Invocation(if (finished) process.exitValue() else -1, out.toString(), err.toString())
+        try {
+            val finished = process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+            }
+            outThread.join(2_000)
+            errThread.join(2_000)
+            val code = if (finished) process.exitValue() else -1
+            if (code == 0 && !current()) return Invocation(-1, out.toString(), Reason.IDENTITY)
+            if (code == 0 && (outThread.isAlive || errThread.isAlive))
+                return Invocation(-1, out.toString(), "stream drain incomplete")
+            return Invocation(code, out.toString(), err.toString())
+        } catch (_: InterruptedException) {
+            process.destroyForcibly()
+            Thread.currentThread().interrupt()
+            return Invocation(-1, out.toString(), "helper interrupted")
+        } finally {
+            runCatching { process.inputStream.close() }
+            runCatching { process.errorStream.close() }
+        }
     }
 
 
@@ -354,13 +351,19 @@ object SuPathWiring {
         LiteImplantQuiesceGate.blockedCode()?.let { code ->
             return Result(false, 0, code, Reason.QUIESCING)
         }
+        if (packageName == application.packageName)
+            return Result(false, 0, "refusing to wire the manager itself", Reason.SELF)
+        val uid = runCatching { application.packageManager.getApplicationInfo(packageName, 0).uid }
+            .getOrNull() ?: return Result(false, 0, "unknown package", Reason.UNKNOWN_PACKAGE)
+        authorizationFailure(application, uid)?.let { return Result(false, 0, it, it) }
+        val current = UltraSdkCredentials.captureOwnerMarker(application)
+        if (!current()) return Result(false, 0, Reason.IDENTITY, Reason.IDENTITY)
         val runtime = File(application.applicationInfo.nativeLibraryDir, "libmaplesu_runtime.so")
         if (!runtime.isFile || !runtime.canExecute())
             return Result(false, 0, "runtime image unavailable", Reason.RUNTIME)
-        val credential = runCatching { MapleSuCredentialStore(application).load() }.getOrNull()
-            ?: return Result(false, 0, "no paired credential", Reason.CREDENTIAL)
         val directory = SuPublication.suDirectory(context)
-        try {
+            ?: return Result(false, 0, Reason.PUBLICATION, Reason.PUBLICATION)
+        run {
             if (runningCommandLine(application, packageName) == null &&
                 !ensureRunning(application, packageName, waitMs.toLong())) {
                 Log.i("MapleSU", "SU_INJECT_PATH package=$packageName ok=false reason=no-process")
@@ -369,7 +372,9 @@ object SuPathWiring {
             var last = Result(false, 69, "injection rejected", Reason.INJECT)
             repeat(INJECT_ATTEMPTS) { attempt ->
                 if (attempt > 0) Thread.sleep(INJECT_RETRY_DELAY_MS)
-                val attemptResult = invokeInject(runtime, credential, packageName, directory, waitMs)
+                if (!current()) return Result(false, 0, Reason.IDENTITY, Reason.IDENTITY)
+                authorizationFailure(application, uid)?.let { return Result(false, 0, it, it) }
+                val attemptResult = invokeInject(runtime, current, packageName, uid, directory, waitMs)
                 if (attemptResult.ok) {
                     // W19：瞬态 PATH 注入无持久修改，登记 PATH_INJECTION（originalAbsent）。
                     recordPathInjection(application, packageName)
@@ -378,8 +383,19 @@ object SuPathWiring {
                 last = attemptResult
             }
             return last
-        } finally {
-            credential.fill(0)
+        }
+    }
+
+    private fun authorizationFailure(context: Context, uid: Int): String? {
+        when (DirectPolicy.hasGrantStrict(context, uid)) {
+            true -> Unit
+            false -> return Reason.AUTH_NOT_GRANTED
+            null -> return Reason.AUTH_STATE_UNAVAILABLE
+        }
+        return when (DirectPolicy.isEnabled(context)) {
+            true -> null
+            false -> Reason.AUTH_DISABLED
+            null -> Reason.AUTH_STATE_UNAVAILABLE
         }
     }
 
@@ -398,13 +414,14 @@ object SuPathWiring {
 
     private fun invokeInject(
         runtime: File,
-        credential: ByteArray,
+        current: () -> Boolean,
         packageName: String,
+        uid: Int,
         directory: String,
         waitMs: Int
     ): Result {
         val invocation = invoke(
-            runtime, credential, "--inject-path", packageName, directory, waitMs.toString())
+            runtime, current, "--inject-path", packageName, uid.toString(), directory, waitMs.toString())
         val injected = INJECTED.find(invocation.out)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val ok = invocation.code == 0 && injected > 0
         android.util.Log.i("MapleSU", "SU_INJECT_PATH package=$packageName ok=$ok count=$injected " +

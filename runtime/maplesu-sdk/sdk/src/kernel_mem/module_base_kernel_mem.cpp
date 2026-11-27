@@ -2,7 +2,6 @@
 //
 #include "kernel_module_kit_umbrella.h"
 
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -18,14 +17,9 @@
 #include "maplesu_request_identity.h"
 #include "../../../../ultra/authorization/kernel_read_metadata.h"
 
-namespace kernel_module {
-//   从 ROOT 密钥里解析出内核基址偏移，写进 int32_t。
-void parser_root_key_info(const char* root_key, int32_t& out_info);
-//   本模块在安装包里被追加的数据段偏移（用于把探测到的地址折算回内核基址）。
-KModErr get_append_package_data_offset(uint32_t& out_offset);
-// 相邻的 icache 成员（ordinal 34）导出的入口，无公开头文件。
-KModErr icache_invalidate_all_cpus();
-}  // namespace kernel_module
+
+
+namespace kernel_module { KModErr icache_invalidate_all_cpus(); }
 
 // 内核地址下界：低于此值一定不是内核线性映射区。
 constexpr uint64_t kKernelAddressFloor = 0xffff000000000000ull;
@@ -56,20 +50,17 @@ static KModErr exec_kernel_shellcode_no_result(std::function<KModErr(Assembler*)
 // body(a, result_reg) 负责把结果写进 result_reg（初值 x0），
 // 之后 arm64_module_asm_func_end(a, result_reg) 用它当返回值。
 static KModErr get_kernel_shellcode_u64_result(
-    std::function<KModErr(Assembler*, GpX&)> body, uint64_t& output,
-    bool legacy_locator = false) {
+    std::function<KModErr(Assembler*, GpX&)> body, uint64_t& output) {
     aarch64_asm_ctx asm_ctx = init_aarch64_asm();
     Assembler* a = asm_ctx.assembler();
     if (!a) return KModErr::ERR_MODULE_ASM;
 
-    if (legacy_locator) kernel_module::maplesu_legacy_asm_func_start(a);
-    else kernel_module::arm64_module_asm_func_start(a);
+    kernel_module::arm64_module_asm_func_start(a);
     GpX result_reg = x0;
     const KModErr emit_error = body(a, result_reg);
     if (is_failed(emit_error)) return emit_error;
     GpX return_reg = result_reg;
-    if (legacy_locator) kernel_module::maplesu_legacy_asm_func_end(a, return_reg);
-    else kernel_module::arm64_module_asm_func_end(a, return_reg);
+    kernel_module::arm64_module_asm_func_end(a, return_reg);
 
     return kernel_module::execute_kernel_asm_func(aarch64_asm_to_bytes(a), output);
 }
@@ -188,6 +179,8 @@ static KModErr set_memory_x_protection(uint64_t kaddr, uint64_t size) {
 }
 
 
+
+
 static KModErr patch_kernel_static_code(uint64_t kaddr, const void* buf, uint32_t size) {
     if (kaddr & 3) {
         return KModErr::ERR_MODULE_ADDR_NOT_ALGIN4;
@@ -293,14 +286,14 @@ KModErr alloc_kernel_mem(uint32_t size, uint64_t& out_kaddr) {
 }
 
 KModErr free_kernel_mem(uint64_t kaddr) {
-    if (maplesu_request_owner_mode() || maplesu_request_managed_allocation(kaddr))
-        return static_cast<KModErr>(maplesu_release_staging(kaddr));
     if (kaddr == 0) {
         return KModErr::ERR_MODULE_PARAM;
     }
     if (!is_kernel_address(kaddr)) {
         return KModErr::ERR_MODULE_NOT_KADDR;
     }
+    if (maplesu_request_owner_mode() || maplesu_request_managed_allocation(kaddr))
+        return static_cast<KModErr>(maplesu_release_staging(kaddr));
     // 6.12 起模块内存改由 execmem 分配器管理，释放符号因此不同。
     const bool use_execmem = !is_kernel_version_less("6.12.0");
     return exec_kernel_shellcode_no_result([kaddr, use_execmem](Assembler* a) {
@@ -491,62 +484,46 @@ KModErr set_kernel_mem_protection(uint64_t kaddr, uint64_t size, KernMemProt pro
 }
 
 KModErr get_kernel_base_vaddr(uint64_t& result) {
+    void parser_root_key_info(const char*, int&);
+    KModErr get_append_package_data_offset(uint32_t&);
     RequestIdentity operation;
     if (!operation.capture()) return KModErr::ERR_MODULE_ROOT_KEY;
     RequestMetadataFacts facts{};
     bool supported = false;
-    const auto metadata_error = maplesu_kernel_metadata_facts(facts, supported);
-    if (is_failed(metadata_error)) return metadata_error;
+    const auto error = maplesu_kernel_metadata_facts(facts, supported);
+    if (is_failed(error)) return error;
     if (!operation.matches()) return KModErr::ERR_MODULE_ROOT_KEY;
     if (supported) {
         result = facts.kernel_base;
         return KModErr::OK;
     }
-    if (operation.auth_state & 1) return KModErr::ERR_MODULE_TEST_CHANNEL;
+    if (!maplesu_request_auth_legacy(operation.auth_state)) return KModErr::ERR_MODULE_TEST_CHANNEL;
 
-    std::array<char, 1024> identity{};
-    const char* key = current_module_root_key();
-    const size_t length = key ? strnlen(key, identity.size()) : 0;
-    if (!length || length == identity.size()) return KModErr::ERR_MODULE_ROOT_KEY;
-    std::memcpy(identity.data(), key, length + 1);
-    const auto process = getpid();
-    const auto same_identity = [&] {
-        const char* current = current_module_root_key();
-        return current && strnlen(current, identity.size()) == length &&
-            !std::memcmp(identity.data(), current, length + 1) && getpid() == process && operation.matches();
-    };
-
-    // ROOT 密钥里编码了“调用点到 _text 的偏移”，解析成一个 int32 立即数。
     int32_t base_delta = 0;
-    parser_root_key_info(identity.data(), base_delta);
-    if (!same_identity()) return KModErr::ERR_MODULE_ROOT_KEY;
-
+    parser_root_key_info(operation.key.data(), base_delta);
+    if (!operation.matches()) return KModErr::ERR_MODULE_ROOT_KEY;
+    auto context = init_aarch64_asm();
+    auto a = context.assembler();
+    maplesu_legacy_asm_func_start(a);
+    a->mov(x11, x30);
+    a->sub(x11, x11, Imm(4));
+    aarch64_asm_mov_x(a, x12, static_cast<uint64_t>(static_cast<int64_t>(base_delta)));
+    a->add(x11, x11, x12);
+    maplesu_legacy_asm_func_end(a, x11);
+    const auto code = aarch64_asm_to_bytes(a);
+    if (context.has_error() || code.empty()) return KModErr::ERR_MODULE_ASM;
     uint64_t probed = 0;
-    if (!same_identity()) return KModErr::ERR_MODULE_ROOT_KEY;
-    const KModErr error = get_kernel_shellcode_u64_result(
-        [base_delta](Assembler* a, GpX& result_reg) {
-            // x11 = LR(= 本 shellcode 的返回地址)，-4 指向调用它的 BLR 指令
-            a->mov(x11, x30);
-            a->sub(x11, x11, Imm(4));
-            // 加上“BLR 指令地址 -> 内核 _text”的固定偏移
-            aarch64_asm_mov_x(a, x12, static_cast<uint64_t>(static_cast<int64_t>(base_delta)));
-            a->add(x11, x11, x12);
-            result_reg = x11;
-            return KModErr::OK;
-        },
-        probed, true);
-    if (is_failed(error)) {
-        return error;
-    }
-    if (!same_identity()) return KModErr::ERR_MODULE_ROOT_KEY;
+    if (!operation.matches()) return KModErr::ERR_MODULE_ROOT_KEY;
+    const auto execution_error = execute_kernel_asm_func(code, probed);
+    if (is_failed(execution_error)) return execution_error;
+    if (!operation.matches()) return KModErr::ERR_MODULE_ROOT_KEY;
     uint64_t candidate = 0;
     if (!maplesu_kernel_read::metadata_address(probed, 0, 1, candidate))
         return KModErr::ERR_MODULE_INTERNAL_APPEND;
-
     uint32_t append_offset = 0;
-    const KModErr offset_error = get_append_package_data_offset(append_offset);
+    const auto offset_error = get_append_package_data_offset(append_offset);
     if (is_failed(offset_error)) return offset_error;
-    if (!same_identity()) return KModErr::ERR_MODULE_ROOT_KEY;
+    if (!operation.matches()) return KModErr::ERR_MODULE_ROOT_KEY;
     if (!maplesu_kernel_read::metadata_address(probed,
             -static_cast<int64_t>(append_offset), 1, candidate))
         return KModErr::ERR_MODULE_INTERNAL_APPEND;

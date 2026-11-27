@@ -22,10 +22,9 @@ internal fun installerFailureDiagnostic(error: Throwable?, recorded: String = ""
     val messages = generateSequence(error) { it.cause }.take(8).mapNotNull { it.message }.toList() + recorded
     messages.firstOrNull { it.startsWith("INSTALLER_SERVICE_") &&
         it.matches(Regex("INSTALLER_SERVICE_[A-Z0-9_]{1,100}")) }?.let { return it }
-    return messages.asSequence().map { it.substringBefore(':') }
-        .firstOrNull {
-            it == "PRODUCE_KSud_FAILED" ||
-                it.matches(Regex("(?:INSTALLER|VR_BOOTSTRAP|ULTRA_KERNEL|ULTRA_INIT|BASELINE|SWITCH|MODE_SWITCH|KSU|PRODUCE|ULTRA_ENV|HIDDEN|SUPERUSER|MOVE)_[A-Z0-9_]{1,100}"))
-        }
-        ?: "INSTALLER_OPERATION_FAILED"
+    val stableCode = Regex("(?<![A-Za-z0-9_])((?:INSTALLER|VR_BOOTSTRAP|ULTRA_KERNEL|ULTRA_INIT|BASELINE|SWITCH|MODE_SWITCH|KSU|PRODUCE|ULTRA_ENV|HIDDEN|SUPERUSER|MOVE)_[A-Z0-9_]{1,100})(?![A-Za-z0-9_])")
+    return messages.asSequence().mapNotNull { message ->
+        val legacy = message.substringBefore(':').takeIf { it == "PRODUCE_KSud_FAILED" }
+        legacy ?: stableCode.find(message)?.value
+    }.firstOrNull() ?: "INSTALLER_OPERATION_FAILED"
 }

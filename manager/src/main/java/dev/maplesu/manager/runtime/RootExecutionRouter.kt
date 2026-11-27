@@ -10,23 +10,8 @@ import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import dev.maplesu.manager.runtime.ultra.UltraSdkCredentials
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
-import java.io.File
 
-/**
- * 根执行后端（真机 P0，2026-10-30）：
- *
- * 设备根来源可能是 **Ultra 环境**（Ultra su_auth，管理器自身不注入 PATH）而不是 Lite 内核凭据，
- * 于是 `getRootShell()`/`DirectRoot` 在「Lite UI + Ultra root」组合下都会失败。本路由器按顺序尝试
- * 可用后端，失败**绝不伪造成功**：
- *
- * 1. [RootBackend.LITE_KERNEL]：既有 `DirectRoot` + `MapleSuCredentialStore` 的 Lite 凭据；
- * 2. [RootBackend.ULTRA_ENV]：Ultra 已 Running 时 `UltraRuntimeClient.runRootCommand`（Ultra su_auth）；
- * 3. [RootBackend.NONE]：结构化失败（带最后失败原因），调用方据此禁用/提示。
- *
- * 已验证 Ultra 身份只用 Ultra；Ultra 临时 Hook 使用当次 Gate，其余按当前工作模式选择后端。
- * 每次 execute 都真实执行，不缓存结果。
- * [capability] 只用于 UI/能力展示，短 TTL 缓存以避免组合期反复探测，但**执行永不读缓存**。
- */
+/** Current Ultra/Hook or KSU route; unknown modes never use a stored credential. */
 enum class RootBackend {
     LITE_KERNEL,
     ULTRA_ENV,
@@ -84,23 +69,6 @@ interface RootExecutor {
     fun run(script: String): RootExecResult
 }
 
-/** Lite 内核后端：既有 DirectRoot（credential 只在 stdin，不进 argv/日志）。 */
-class LiteKernelRootExecutor(private val context: Context) : RootExecutor {
-    override val backend: RootBackend = RootBackend.LITE_KERNEL
-
-    override fun available(): Boolean {
-        val application = context.applicationContext
-        val runtime = File(application.applicationInfo.nativeLibraryDir, "libmaplesu_runtime.so")
-        if (!runtime.isFile || !runtime.canExecute()) return false
-        return runCatching { MapleSuCredentialStore(application).load() != null }.getOrDefault(false)
-    }
-
-    override fun run(script: String): RootExecResult {
-        val result = DirectRoot.run(context.applicationContext, script)
-        return RootExecResult(RootBackend.LITE_KERNEL, result.code, result.output)
-    }
-}
-
 /** Ultra `run_root_cmd` 的一次结果（与 org.json 回执解耦，主机可测）。 */
 data class UltraRootCommandResult(
     val ok: Boolean,
@@ -115,7 +83,7 @@ fun interface UltraRootCommandRunner {
 }
 
 /**
- * Ultra 环境后端：生产能力来自当前 Key/boot 的探针；命令始终经实际 SDK 回执确认。
+ * Ultra 环境后端：生产能力来自当前安装身份/boot 的探针；命令始终经实际 SDK 回执确认。
  * 输出由生产 runner 从回执 `data.result`（URL-encoded）解码后传入。
  */
 class UltraEnvRootExecutor(
@@ -152,7 +120,6 @@ class UltraEnvRootExecutor(
 }
 
 class RootExecutionRouter(
-    private val liteKernel: RootExecutor?,
     private val ultraEnv: RootExecutor?,
     private val modeProvider: () -> WorkMode? = { ModeRuntime.active },
     private val clock: () -> Long = { System.nanoTime() / 1_000_000L },
@@ -173,10 +140,10 @@ class RootExecutionRouter(
             if (runCatching { hook?.available() == true }.getOrDefault(false)) return listOfNotNull(hook)
         }
         return when (mode) {
-            WorkMode.LITE -> listOfNotNull(ultraEnv, liteKernel)
-            // KSU：真机形态下 Lite 内核凭据不存在，排除它；KSU 缺失时只剩 Ultra（显式失败）。
-            WorkMode.KSU -> listOfNotNull(ksuProvider(), ultraEnv)
-            null -> listOfNotNull(liteKernel, ultraEnv)
+            WorkMode.LITE -> listOfNotNull(ultraEnv)
+            // KSU is selected only through the registered KSU source.
+            WorkMode.KSU -> listOfNotNull(ksuProvider())
+            null -> emptyList()
         }
     }
 
@@ -195,13 +162,13 @@ class RootExecutionRouter(
             runCatching { hook?.available() == true }.getOrDefault(false)
         ) return RootBackend.HOOK
         return when (mode) {
-            WorkMode.LITE -> if (ultraEnv != null) RootBackend.ULTRA_ENV else RootBackend.LITE_KERNEL
+            WorkMode.LITE -> if (ultraEnv != null) RootBackend.ULTRA_ENV else RootBackend.NONE
             WorkMode.KSU -> if (runCatching { ksuProvider() }.getOrNull() != null) {
                 RootBackend.KSU
             } else {
-                RootBackend.ULTRA_ENV
+                RootBackend.NONE
             }
-            null -> RootBackend.LITE_KERNEL
+            null -> RootBackend.NONE
         }
     }
 
@@ -220,7 +187,7 @@ class RootExecutionRouter(
         val selected = select()
         // Hook commands own independent fork/pipe/waitpid sessions. Serializing
         // them behind installs or SDK startup starves policy and inventory reads.
-        // SDK and legacy transports keep their existing exclusive admission.
+        // SDK transports keep their existing exclusive admission.
         if (selected.singleOrNull()?.backend == RootBackend.HOOK) return executeOn(script, selected)
         val lockBudget = deadline?.let { it - System.nanoTime() } ?: budget
         if (lockBudget <= 0) return RootExecResult(RootBackend.NONE, -1, "", "ROOT_EXECUTION_BUSY")
@@ -288,16 +255,12 @@ class RootExecutionRouter(
         }
     }
 
-    /** 生产装配：Lite 凭据后端 + Ultra 已 Running 后端（Ultra rootKey 缺失时不可用）。 */
+    /** Production routes use the current installation identity and live backend evidence. */
     companion object {
         fun production(context: Context): RootExecutionRouter {
             val application = context.applicationContext
             val ultraClient by lazy {
-                UltraRuntimeClient(
-                    rootKeyProvider = {
-                        runCatching { UltraSdkCredentials.read(application) }.getOrNull()
-                    },
-                )
+                UltraSdkCredentials.client(application)
             }
             val ultraRunner = UltraRootCommandRunner { script ->
                 val command = UltraRootCommandReceipt(script)
@@ -305,13 +268,12 @@ class RootExecutionRouter(
                 command.decodeSdk(receipt, ultraClient::decodeText)
             }
             return RootExecutionRouter(
-                liteKernel = LiteKernelRootExecutor(application),
                 hook = HookRootExecutor.production(application),
                 ultraEnv = UltraEnvRootExecutor(
                     runner = ultraRunner,
                     running = { UltraEnvironmentProbe.isRootAvailable(application) },
                     prepare = {
-                        // The paired key selects this transport; the command receipt proves root.
+                        // The current installation identity selects this transport; the command receipt proves root.
                         // Reprobing before every command consumes the caller's admission budget.
                         Looper.myLooper() != Looper.getMainLooper() &&
                             ModeRuntime.active != WorkMode.KSU &&

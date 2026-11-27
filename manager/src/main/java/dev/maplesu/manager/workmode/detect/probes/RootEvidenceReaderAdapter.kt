@@ -4,7 +4,6 @@ import android.content.Context
 import com.topjohnwu.superuser.Shell
 import dev.maplesu.manager.installer.InstallerRootSourceRegistry
 import dev.maplesu.manager.runtime.RootManagement
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import dev.maplesu.manager.workmode.control.ControlPaths
@@ -113,7 +112,7 @@ class ShellRootEvidenceSession(
 }
 
 /**
- * 真机装配：Lite 走凭据 shell，Ultra 走真实 SDK；KSU 走 installer 注册的 Mode B 通道。
+ * 真机装配：旧 Lite 走隔离的凭据 shell，Ultra 走当前安装身份 SDK；KSU 走 installer 注册的 Mode B 通道。
  * 任何失败（未接线的 JNI、未注册通道、主线程约束、无凭据）→ null。
  */
 class AndroidRootShellOpener(
@@ -125,7 +124,7 @@ class AndroidRootShellOpener(
                 .getOrNull()?.let(::LibsuRootShellSession)
         RootChannelKind.LITE_ULTRA -> runCatching {
             val application = context.applicationContext
-            val client = UltraRuntimeClient { UltraRootKeyStore.read(application) }
+            val client = dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.client(application)
             UltraRootShellSession.open(
                 running = { UltraEnvironmentProbe.currentSnapshot(application).rootAvailable },
                 sdk = RootShellRunner { command ->

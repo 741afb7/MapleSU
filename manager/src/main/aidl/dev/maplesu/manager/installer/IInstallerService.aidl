@@ -53,7 +53,7 @@ interface IInstallerService {
     // Fixed identity protocol, authenticated Manager only. Existing transaction IDs stay stable.
     Bundle readUltraIdentity(boolean withBuild);
     // Rebuild the saved package allowlist's current UIDs; adds no package grants.
-    String refreshUltraAuthorization(String rootKey);
+    String refreshUltraAuthorization();
 
     // Opt-in AVB batch: companions share PRE, write-ahead journal and reverse rollback.
     Bundle prepareNativeSignedInstall(String taskId, String targetMode, String partition,

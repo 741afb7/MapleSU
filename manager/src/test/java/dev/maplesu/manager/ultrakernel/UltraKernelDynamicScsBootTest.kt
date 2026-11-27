@@ -61,7 +61,7 @@ class UltraKernelDynamicScsBootTest {
         val entry = requireNotNull(symbols.offsetOf("do_execveat_common"))
         UltraKernelA64.writeLe32(changed, entry + 4, 0x90000000L) // PC-relative ADRP cannot be copied.
         val failure = assertThrows(UltraKernelGenerateException::class.java) {
-            UltraKernelSpecGenerator().generate(changed, credential)
+            UltraKernelSpecGenerator().generate(changed)
         }
         assertEquals(UltraKernelGenerateCodes.SITE, failure.code)
         assertEquals("HOOK_FRAME_UNSUPPORTED:do_execveat_common", failure.detail)
@@ -69,17 +69,17 @@ class UltraKernelDynamicScsBootTest {
 
     @Test
     fun managerFlowBuildsTheSameCorrectedKernelFromTheSelectedOriginal() {
-        val (kernel, symbols, plan) = fixture()
+        val (kernel, symbols, _) = fixture()
         val workspace = Files.createTempDirectory("ultrakernel-dynamic-scs-").toFile()
         val before = UltraKernelSpec.sha256(boot)
         try {
             val flow = UltraKernelFlow(workspace, UltraKernelFileAssets(File("src/main/assets")))
-            val preparation = flow.prepare(boot, credential)
+            val preparation = flow.prepare(boot)
             assertTrue(preparation.generated)
             assertFalse(preparation.alreadyInstalled)
             val candidate = requireNotNull(preparation.candidate)
             assertEquals(boot.length(), candidate.image.length())
-            assertArrayEquals(plan.apply(kernel).kernel, UltraKernelPlan.readKernel(candidate.image))
+            assertArrayEquals(flow.generatePlan(boot).apply(kernel).kernel, UltraKernelPlan.readKernel(candidate.image))
             val entry = requireNotNull(symbols.offsetOf("do_execveat_common"))
             assertEquals(UltraKernelA64.PACIA1716,
                 UltraKernelA64.le32Bits(UltraKernelPlan.readKernel(candidate.image), entry))
@@ -102,14 +102,13 @@ class UltraKernelDynamicScsBootTest {
 
     companion object {
         private val boot = File("../Log_Reference/11.6/Original.img")
-        private val credential = UltraKernelCredential.of("Aa1".repeat(16))
         private val decoded by lazy {
             val kernel = UltraKernelPlan.readKernel(boot)
             assertEquals("ddecb86ddcd2f9ab3e27f9f5f051083af19bf89c7575779161ca6aa942a5129a",
                 UltraKernelSpec.sha256(kernel))
             val symbols = UltraKernelKallsymsTable.decode(kernel)
             assertTrue(symbols.offsetOf("__pi_scs_patch") != null)
-            Triple(kernel, symbols, UltraKernelSpecGenerator().generate(kernel, credential))
+            Triple(kernel, symbols, UltraKernelSpecGenerator().generate(kernel))
         }
     }
 }

@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.maplesu.core.Natives
 import com.maplesu.core.R
+import com.maplesu.core.theme.ThemeImportPolicy
 import com.maplesu.core.data.repository.SettingsRepositoryImpl
 import com.maplesu.core.ksuApp
 import com.maplesu.core.ui.component.dialog.rememberConfirmDialog
@@ -196,7 +197,13 @@ fun IntentDispatcher(intentChannel: ReceiveChannel<Intent>) {
             Intent.ACTION_SEND_MULTIPLE -> IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
             else -> listOfNotNull(intent.data)
         }.filter { it.scheme in setOf("content", "file") }
-        val themes = themeUris.filter { runCatching { getDisplayName(it).endsWith(".fpt", ignoreCase = true) }.getOrDefault(false) }
+        val themes = withContext(Dispatchers.IO) {
+            themeUris.filter { uri ->
+                val name = runCatching { getDisplayName(uri) }.getOrDefault("")
+                val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull() ?: intent.type
+                ThemeImportPolicy.accepts(name, mime)
+            }
+        }
         if (themes.isNotEmpty()) {
             if (themeUris.size == 1) {
                 if (Route.Wallpaper in navigator.backStack) navigator.popUntil { it == Route.Wallpaper }

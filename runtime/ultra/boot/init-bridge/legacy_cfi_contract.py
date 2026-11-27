@@ -547,6 +547,25 @@ class ModuleChecker:
     def canonical(self,name):
         body=self.symbol(name); expected=self.address(name)
         rows=self.symbols.get_symbol_by_name('__cfi_jt_'+name) or self.symbols.get_symbol_by_name(name+'.cfi_jt') or []
+        if len(rows)==1 and rows[0]['st_info']['type']=='STT_OBJECT':
+            # Native module headers retain __cfi_jt_init_module as a typed
+            # pointer; the compiler's executable entry is init_module.cfi_jt.
+            pointer=rows[0]; section=pointer['st_shndx']; at=pointer['st_value']
+            code=self.symbols.get_symbol_by_name(name+'.cfi_jt') or []
+            relocations=[row for (owner,offset),row in self.relocations.items()
+                         if owner==section and at<=offset<at+8]
+            if (section not in self.bases or self.elf.get_section(section)['sh_flags']&4 or
+                    pointer['st_size']!=8 or len(code)!=1 or code[0]['st_shndx'] not in self.bases or
+                    not self.elf.get_section(code[0]['st_shndx'])['sh_flags']&4 or
+                    len(relocations)!=1 or (section,at) not in self.relocations):
+                raise ValueError('LEGACY_CFI_CANONICAL_POINTER:'+name)
+            relocation,target=relocations[0]
+            entry=self.bases[code[0]['st_shndx']]+code[0]['st_value']
+            if (relocation['r_info_type']!=257 or target['st_shndx']!=code[0]['st_shndx'] or
+                    target['st_value']+relocation['r_addend']!=code[0]['st_value'] or
+                    int.from_bytes(self.read(self.bases[section]+at,8),'little')!=entry):
+                raise ValueError('LEGACY_CFI_CANONICAL_POINTER:'+name)
+            rows=code
         if not rows:
             routes=[]
             checker=self.symbol('__cfi_check')

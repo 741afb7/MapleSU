@@ -30,7 +30,7 @@ class UltraKernelBootCompatibilityTest(
         assertEquals(execve, symbols.offsetOf("do_execveat_common"))
         assertEquals(avc, symbols.offsetOf("avc_denied"))
 
-        val plan = UltraKernelSpecGenerator().generate(kernel, UltraKernelCredential.of("Aa1".repeat(16)))
+        val plan = UltraKernelSpecGenerator().generate(kernel)
         val exec = plan.records.single { it.role == "do_execveat_common+0x0" }
         assertEquals(execve + 4L, exec.offset)
         assertArrayEquals(kernel.copyOfRange(exec.offset.toInt(), exec.offset.toInt() + 4), exec.original)

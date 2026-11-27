@@ -2,6 +2,8 @@ package dev.maplesu.manager.runtime.ultra
 
 import java.io.File
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /** Both retained pages must receive SDK transitions independently of their full page probes. */
@@ -15,7 +17,10 @@ class UltraSafeModeObservationWiringTest {
         for (page in listOf("HomeViewModel", "ModuleViewModel")) {
             val text = source("com/maplesu/core/ui/viewmodel/$page.kt")
             assertTrue("$page must receive Fault -> Running even after a page timeout",
-                text.contains("UltraEnvironmentProbe.states.collect"))
+                if (page == "ModuleViewModel") {
+                    text.contains("combine(UltraEnvironmentProbe.states, ModeRuntime.detectionRevision)") &&
+                        text.contains(".collectLatest { state ->")
+                } else text.contains("UltraEnvironmentProbe.states.collect"))
         }
     }
 
@@ -40,21 +45,26 @@ class UltraSafeModeObservationWiringTest {
 
     @Test fun aRecoveredVisibleModulePageRetriesAnEarlierReadFailure() {
         val text = source("com/maplesu/core/ui/viewmodel/ModuleViewModel.kt")
-        val observer = text.substringAfter("UltraEnvironmentProbe.states.collect").substringBefore("previous = state")
+        val observer = text.substringAfter("combine(UltraEnvironmentProbe.states, ModeRuntime.detectionRevision)")
+            .substringBefore("previous = state")
         assertTrue(observer.contains("state == UltraEnvironmentProbe.State.Running && previous != state"))
+        assertTrue(observer.contains("withEnvironmentDisplayState(request, environment)"))
+        assertTrue(observer.contains("environmentRequests.isCurrent(request)"))
         assertTrue(observer.contains("WorkMode.LITE"))
         assertTrue(observer.contains("isCurrentPage && _uiState.value.loadError != null"))
         assertTrue(observer.contains("fetchModuleList(checkUpdate = false)"))
         assertTrue(observer.contains("fetchJob?.isActive != true"))
     }
 
-    @Test fun blockingAndBackgroundQueriesShareTheBoundedReadRecovery() {
+    @Test fun blockingAndBackgroundQueriesUseOneIdentityBoundObservation() {
         val text = source("dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt")
-        assertTrue(text.substringAfter("fun requestRefresh(").substringBefore("fun refresh(")
-            .contains("probeWithRetry(appContext, force = false)"))
-        assertTrue(text.substringAfter("fun refresh(").substringBefore("private fun probeWithRetry(")
-            .contains("probeWithRetry(context.applicationContext, force)"))
-        assertTrue(text.substringAfter("private fun probeWithRetry(").substringBefore("internal fun readUntilConfirmed(")
-            .contains("readUntilConfirmed(force, { probe(context, it) }"))
+        val background = text.substringAfter("fun requestRefresh(").substringBefore("fun refresh(")
+        assertTrue(background.contains("refresh(app, force = false)"))
+        val refresh = text.substringAfter("fun refresh(").substringBefore("private fun publish(")
+        assertEquals(1, Regex("client\\.environmentState\\(\\)").findAll(refresh).count())
+        assertTrue(refresh.contains("client.queryManagerOwnerIdentity()"))
+        assertTrue(refresh.contains("UltraRuntimeClient().scoped(::current)"))
+        assertFalse(text.contains("probeWithRetry("))
+        assertFalse(text.contains("readUntilConfirmed("))
     }
 }

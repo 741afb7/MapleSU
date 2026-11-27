@@ -37,8 +37,11 @@ command = ['g++', '-std=c++17', '-O2', '-ffunction-sections', '-fdata-sections',
            '-I/case', '-I/repo/runtime/ultra/bridge', '-I/repo/runtime/maplesu-sdk/sdk/include',
            '-I/repo/runtime/maplesu-sdk/include', *sources,
            '/repo/runtime/tests/ultra_raw_root_worker_tls_test.cpp',
+           '/repo/runtime/maplesu-sdk/sdk/src/module/module_current_identity.cpp',
            '-Wl,--wrap=__cxa_thread_atexit',
            '-Wl,--wrap=_ZN13kernel_module29maplesu_request_set_auth_modeENS_15RequestAuthModeE',
+           '-Wl,--wrap=_ZN13kernel_module32maplesu_request_worker_admissionEv',
+           '-Wl,--wrap=pipe2', '-Wl,--wrap=fork',
            '-Wl,--gc-sections', '-pthread', '-lrt', '-o', 'raw-worker-tls']
 compiled = subprocess.run(docker + command, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=90)
 (build / 'compile.log').write_text(compiled.stdout + compiled.stderr, encoding='utf-8')
@@ -48,7 +51,7 @@ output = result.stdout + result.stderr
 (build / 'run.log').write_text(output, encoding='utf-8')
 receipt = dict(exitCode=result.returncode, coldControl=args.cold_control, coldThreads=6,
                workersPerThread=2, deviceOperations=0, sdkRebuilds=0, sources=records,
-               scope='Actual parent/worker/framing/deadline and actual request TLS/mode setter; fixture returns auth error after selection, no ROOT or helper bytes.',
+               scope='Actual parent/worker/framing/deadline and actual request TLS/mode setter; admission is a fixture seam: denied Manager/Helper callers have zero pipe/fork/ROOT and restore parent mode, admitted workers return auth error after child selection; no ROOT or helper bytes.',
                output=output)
 (build / 'RESULT.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
 print(output, end='')

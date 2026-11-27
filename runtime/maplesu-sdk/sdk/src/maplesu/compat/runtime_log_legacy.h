@@ -8,8 +8,8 @@
 #include "fork_legacy_abi.h"
 
 namespace skroot_env {
-KModErr read_skroot_log_cb(const char* root_key, void (*callback)(const char*));
-KModErr set_skroot_log_enabled(const char* root_key, bool enable);
-bool is_skroot_log_enabled(const char* root_key);
-KModErr clear_skroot_log(const char* root_key);
+KModErr read_skroot_log_cb(void (*callback)(const char*));
+KModErr set_skroot_log_enabled(bool enable);
+bool is_skroot_log_enabled();
+KModErr clear_skroot_log();
 }  // namespace skroot_env

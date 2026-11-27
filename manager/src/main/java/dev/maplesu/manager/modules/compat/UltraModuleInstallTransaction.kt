@@ -342,7 +342,7 @@ class UltraModuleInstallTransaction(
                 !install.operationCompleted && install.data == null && when (install.sdkError) {
                     "MAPLESU_SDK_BUSY" -> install.sdkErrorCode in setOf(-1001, -1005)
                     "MAPLESU_SDK_INTERRUPTED", "MAPLESU_BRIDGE_UNAVAILABLE",
-                    "MAPLESU_ULTRA_ROOT_KEY_ABSENT", "SDK_CREDENTIAL_SCOPE_CHANGED" -> install.sdkErrorCode == -1001
+                    "SDK_INSTALLATION_SCOPE_CHANGED" -> install.sdkErrorCode == -1001
                     else -> false
                 }
             val uncertain = !rolledBack && !notSubmitted

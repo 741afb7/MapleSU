@@ -91,9 +91,8 @@ KModErr current_context(StorageContext& out) {
     const uint64_t auth = kernel_module::maplesu_request_auth_state();
     if (!kernel_module::maplesu_request_auth_usable(auth)) return KModErr::ERR_MODULE_ROOT_KEY;
     StorageContext candidate;
-    if (!(auth & 1)) {
-        const auto error = compat::current_legacy_storage_context(candidate);
-        if (is_failed(error)) return error;
+    if (kernel_module::maplesu_request_auth_legacy(auth)) {
+        RETURN_IF_ERROR(compat::current_legacy_storage_context(candidate));
     } else {
         const auto* scope = selected_scope;
         if (!scope || !scope->selected_ || is_failed(scope->error_)) return KModErr::ERR_MODULE_PARAM;

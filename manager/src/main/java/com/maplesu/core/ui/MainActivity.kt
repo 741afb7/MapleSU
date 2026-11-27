@@ -630,11 +630,8 @@ class MainActivity : ComponentActivity() {
             val uapiOk = runCatching {
                 Natives.kernelUAPIVersion >= Natives.managerUAPIVersion
             }.getOrDefault(false)
-            // 🛑 Ultra 环境：`install()` = `RuntimeDeployment` → `MapleSuCredentialStore` /
-            //    `MapleSuCommandExecutor` → `libmaplesu_runtime.so`。在 MapleSU Ultra 内核上那条
-            //    路径会触发系统重启（2026-10-29 实测），而 Ultra 的部署完全由 SDK 自己负责
-            //    （设置页「安装/激活环境」）。这里用缓存的 Ultra 探针结果挡住它：
-            //    `Natives.isManager` 现在在 Ultra Running 时也为 true，所以必须在这里再拦一次。
+            // Ultra 部署由设置页的免 Key SDK 安装流程负责；启动预热只读取后端缓存。
+            // Ultra Running 时 Natives.isManager 也为 true，故保留此独立路由门控。
             val ultraRunning = runCatching { ultraProbe.usesUltraBackend(this) }.getOrDefault(false)
             if (uapiOk && !ultraRunning) {
                 modeRuntime.runIfLite {

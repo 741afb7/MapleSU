@@ -5,6 +5,20 @@ import org.junit.Test
 import java.io.IOException
 
 class SELinuxCheckerTest {
+    @Test fun ordinaryFactDoesNotWaitForBackendOrOwnerIdentity() {
+        // These reads succeed without initializing Android, an SDK or a root source.
+        assertEquals("Enforcing", getSELinuxStatusRaw { "1\n" })
+        assertEquals("Permissive", getSELinuxStatusRaw { "0\n" })
+    }
+
+    @Test fun unresolvedModeLocalReadKeepsKnownStatusAndDeniedReadUnknown() {
+        assertEquals("Enforcing", getSELinuxStatusLocal { "1\n" })
+        assertEquals("Permissive", getSELinuxStatusLocal { "0\n" })
+        assertEquals("Unknown", getSELinuxStatusLocal { throw IOException("Permission denied") })
+        assertEquals("Unknown", getSELinuxStatusLocal { "" })
+        assertEquals("Unknown", getSELinuxStatusLocal { "2" })
+    }
+
     @Test fun readsEnforcingAndPermissiveWithoutStartingAShell() {
         assertEquals("Enforcing", resolveSELinuxStatus({ "1\n" }, { error("Unexpected shell") }))
         assertEquals("Permissive", resolveSELinuxStatus({ "0\n" }, { error("Unexpected shell") }))

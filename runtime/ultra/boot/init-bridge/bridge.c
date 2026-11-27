@@ -19,9 +19,6 @@
 #include "native_lookup.h"
 #include "native_sdk.h"
 
-static char credential[49];
-module_param_string(credential, credential, 49, 0);
-
 static char deployment_namespace[17];
 module_param_string(deployment_namespace, deployment_namespace, 17, 0);
 
@@ -41,8 +38,21 @@ static int bridge_deployment_record(struct msu_deployment_namespace_record *reco
     return msu_deployment_namespace_valid(record) ? 0 : -EINVAL;
 }
 
+int msu_init_bridge_deployment_namespace(char output[16])
+{
+    struct msu_deployment_namespace_record deployment;
+    int error;
+
+    if (!output) return -EINVAL;
+    if (!deployment_namespace[0]) return -EOPNOTSUPP;
+    error = bridge_deployment_record(&deployment);
+    if (!error) memcpy(output, deployment.name, sizeof deployment.name);
+    memzero_explicit(&deployment, sizeof deployment);
+    return error;
+}
+
 int msu_init_bridge_host_start(unsigned long image, const void *append,
-    unsigned int bytes, const char *credential)
+    unsigned int bytes)
 {
     struct msu_deployment_namespace_record deployment;
     int error = bridge_deployment_record(&deployment);
@@ -54,14 +64,14 @@ int msu_init_bridge_host_start(unsigned long image, const void *append,
         struct msu_resident_config_v2 config = {
             .version = 2, .config_bytes = sizeof(config), .append_bytes = bytes,
             .namespace_record_bytes = sizeof(deployment), .image = (void *)image,
-            .append = append, .credential = credential, .namespace_record = &deployment,
+            .append = append, .credential = NULL, .namespace_record = &deployment,
         };
 
         error = msu_manager_resident_init((const struct msu_resident_config *)&config);
     } else {
         struct msu_resident_config config = {
             .version = 1, .append_bytes = bytes,
-            .image = (void *)image, .append = append, .credential = credential,
+            .image = (void *)image, .append = append, .credential = NULL,
         };
 
         error = msu_manager_resident_init(&config);
@@ -91,7 +101,6 @@ static int __init msu_init_bridge_start(void)
 #else
     unsigned int execmem_free = 0;
 #endif
-    unsigned int n;
     int error, events_cleanup = 0, native_cleanup = 0;
     bool events_attempted = false, native_attempted = false;
 
@@ -99,17 +108,6 @@ static int __init msu_init_bridge_start(void)
     if (!msu_runtime_layout_ready()) { error = -EPROTO; goto clear; }
     if (READ_ONCE(MSU_DYN_FIELD(current, task_struct, pid)) != 1) { error = -EPERM; goto clear; }
 #endif
-    if (strnlen(credential, sizeof credential) != MSU_BOOT_SDK_KEY_BYTES) {
-        error = -EINVAL;
-        goto clear;
-    }
-    for (n = 0; n < MSU_BOOT_SDK_KEY_BYTES; ++n) {
-        unsigned char c = credential[n];
-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
-            error = -EINVAL;
-            goto clear;
-        }
-    }
     error = bridge_deployment_record(&deployment);
     if (error) goto clear;
     error = msu_init_bridge_lookup_init();
@@ -149,8 +147,7 @@ static int __init msu_init_bridge_start(void)
         if (error) goto failed;
     }
     native_attempted = true;
-    error = msu_boot_sdk_native_start(&layout, credential);
-    memzero_explicit(credential, sizeof credential);
+    error = msu_boot_sdk_native_start(&layout);
     memzero_explicit(deployment_namespace, sizeof deployment_namespace);
     if (error) goto failed;
     /* Same host's published callbacks and event proxy are boot-owned. */
@@ -177,7 +174,6 @@ clear:
     if (error) msu_runtime_btf_release();
 #endif
     memzero_explicit(&deployment, sizeof deployment);
-    memzero_explicit(credential, sizeof credential);
     memzero_explicit(deployment_namespace, sizeof deployment_namespace);
     return error;
 }

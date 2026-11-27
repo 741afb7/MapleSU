@@ -12,8 +12,11 @@ class NormalWebUiCompatibilityTest {
         assertTrue(policy.contains("worker-src 'self' blob:"))
         assertTrue(policy.contains("frame-src 'self'"))
         assertTrue(policy.contains("object-src 'none'"))
-        assertEquals("frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; worker-src 'none'",
-            moduleDocumentCsp(false))
+        val ultraPolicy = moduleDocumentCsp(false)
+        assertTrue(ultraPolicy.contains("worker-src 'self' blob:"))
+        assertTrue(ultraPolicy.contains("frame-src 'self'"))
+        assertTrue(ultraPolicy.contains("object-src 'none'"))
+        assertEquals(policy, ultraPolicy)
     }
 
     @Test fun normalSupportsSimpleAndDottedCallbackReferences() {

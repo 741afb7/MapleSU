@@ -1,5 +1,6 @@
-"""Fixed-Kbuild argument regressions; no compiler or modpost process runs."""
+"""Fixed-Kbuild input and argument regressions; no compiler or modpost runs."""
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,6 +10,60 @@ HERE = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("legacy_modpost_flags", HERE / "legacy_direct_modpost.py")
 seam = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(seam)
+
+
+class DirectModpostSources(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="maplesu-modpost-sources-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.declared = self.write("declared-input", b"selected input")
+        self.selection = self.write("SOURCE-SELECTION.json", json.dumps({"inputs": [
+            {"staged": self.declared.name, "selected": seam.identity(self.declared)}]}).encode())
+
+    def write(self, name, data=b"input"):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def test_generated_compile_inputs_remain_frozen(self):
+        names = ("Kbuild", "Makefile", "selected-runtime.mk", "selected-core.mk",
+                 "boot_sdk_layout.h", "native_factory_bind.c", "native_factory_bind.h",
+                 "native-private/seccomp-release-source.c", "native-private/seccomp-release-header.h",
+                 "host/msu_resolver_build_config.h", "host/manager_task_state_native_facts.c",
+                 "generated.S", "generated.s", "generated.inc")
+        generated = [self.write(name) for name in names]
+        sources = seam.staged_sources(self.root)
+        self.assertEqual(set(sources), {self.selection, self.declared, *generated})
+        for path in sources:
+            before = seam.identity(path)
+            path.write_bytes(path.read_bytes() + b"changed")
+            with self.assertRaisesRegex(ValueError, "DIRECT_INPUT_CHANGED"):
+                seam.checked(before)
+            path.write_bytes(path.read_bytes()[:-7])
+
+    def test_cached_build_outputs_are_not_immutable_sources(self):
+        names = ("host/.manager_owner.o.cmd", "host/manager_owner.o", "Module.symvers",
+                 "maplesu_ultra_bridge.mod.c", "maplesu_ultra_bridge.mod.o",
+                 "maplesu_ultra_bridge.mod", "maplesu_ultra_bridge.o", "maplesu_ultra_bridge.lto.o",
+                 "maplesu_ultra_bridge.ko", "maplesu_ultra_bridge.lds", "modules.order",
+                 "preinit/runner.elf")
+        outputs = [self.write(name) for name in names]
+        sources = seam.staged_sources(self.root)
+        before = [seam.identity(path) for path in sources]
+        for path in outputs:
+            path.write_bytes(b"rebuilt output")
+        self.assertEqual(sources, [self.selection, self.declared])
+        self.assertEqual(before, [seam.identity(path) for path in seam.staged_sources(self.root)])
+
+    def test_selected_inputs_still_require_exact_identity_and_path(self):
+        self.declared.write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "STAGED_IDENTITY"):
+            seam.staged_sources(self.root)
+        self.selection.write_text(json.dumps({"inputs": [{"staged": "../outside", "selected": {}}]}))
+        with self.assertRaisesRegex(ValueError, "STAGED_MEMBER"):
+            seam.staged_sources(self.root)
 
 
 class DirectModpostArguments(unittest.TestCase):

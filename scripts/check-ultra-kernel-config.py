@@ -1,73 +1,64 @@
 #!/usr/bin/env python3
-"""检查最终 .config 的部分 BTF 配置依赖，并提示目标模块验证事项。
+"""Check configuration requirements for a selected Ultra build route.
 
-用法：python scripts/check-ultra-kernel-config.py path/to/.config [--target-kmi]
-只检查 DEBUG_INFO_BTF_MODULES 的 MODULES/DEBUG_INFO_BTF 依赖及
-MODULE_ALLOW_BTF_MISMATCH 的 DEBUG_INFO_BTF_MODULES 依赖。
---target-kmi 另核 target_kmi.py capture 路径既有的 MODVERSIONS=y 前置。
-完整配置仍由目标内核 Kconfig 生成；本检查不证明模块可加载或设备可启动。
-退出码：0=完成有限检查（可能有 WARN），1=配置关系错误，2=输入错误。
+A .config alone does not establish kernel/module BTF compatibility or bootability.
+Use --module-btf-mismatch only after checking the actual kernel/module pair.
 """
 from __future__ import annotations
 
 import argparse
-import sys
+from pathlib import Path
 
 
-def parse(path: str) -> dict[str, str]:
+def parse(path: str | Path) -> dict[str, str]:
     values: dict[str, str] = {}
-    with open(path, "r", encoding="utf-8-sig") as handle:
-        for line in handle:
-            line = line.strip()
-            if line.startswith("# CONFIG_") and line.endswith(" is not set"):
-                values[line.split()[1]] = "n"
-            elif line.startswith("CONFIG_") and "=" in line:
-                key, value = line.split("=", 1)
-                values[key] = value.strip()
-    if not values:
-        raise ValueError("未读到 CONFIG_ 配置项，请传入目标内核生成的最终 .config")
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if line.startswith("# CONFIG_") and line.endswith(" is not set"):
+            values[line.split()[1]] = "n"
+        elif line.startswith("CONFIG_") and "=" in line:
+            key, value = line.split("=", 1)
+            values[key] = value.strip().strip('"')
     return values
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("config", help="目标内核生成的最终 .config")
-    parser.add_argument("--target-kmi", action="store_true", help="检查 target_kmi.py capture 路径既有前置")
-    args = parser.parse_args(argv[1:])
+    parser.add_argument("config", type=Path)
+    parser.add_argument("--require-modversions", action="store_true",
+                        help="the selected module ABI requires symbol versions")
+    parser.add_argument("--require-btf", action="store_true",
+                        help="the selected layout producer requires vmlinux BTF")
+    parser.add_argument("--module-btf-mismatch", action="store_true",
+                        help="the actual kernel/module pair has a confirmed BTF mismatch")
+    args = parser.parse_args(argv)
     try:
         values = parse(args.config)
-    except (OSError, UnicodeError, ValueError) as error:
-        print(f"ULTRA_KERNEL_CONFIG_INPUT_ERROR: {error}", file=sys.stderr)
-        return 2
+    except OSError as error:
+        parser.error(str(error))
 
     problems: list[str] = []
-    if args.target_kmi and values.get("CONFIG_MODVERSIONS") != "y":
-        problems.append("target_kmi.py capture 路径要求 CONFIG_MODVERSIONS=y")
-    dependencies = {
-        "CONFIG_DEBUG_INFO_BTF_MODULES": ("CONFIG_MODULES", "CONFIG_DEBUG_INFO_BTF"),
-        "CONFIG_MODULE_ALLOW_BTF_MISMATCH": ("CONFIG_DEBUG_INFO_BTF_MODULES",),
-    }
-    for key, required in dependencies.items():
-        if values.get(key) == "y":
-            for dependency in required:
-                if values.get(dependency) != "y":
-                    problems.append(f"{key}=y 依赖 {dependency}=y")
-    if problems:
-        print("ULTRA_KERNEL_CONFIG_ERROR")
-        for problem in problems:
-            print(f"  ERROR: {problem}")
-        return 1
+    for required, key in ((args.require_modversions, "CONFIG_MODVERSIONS"),
+                          (args.require_btf, "CONFIG_DEBUG_INFO_BTF")):
+        if required and values.get(key) != "y":
+            problems.append(f"{key}=y is required by the selected route")
+    module_btf = values.get("CONFIG_DEBUG_INFO_BTF_MODULES") == "y"
+    allow_mismatch = values.get("CONFIG_MODULE_ALLOW_BTF_MISMATCH") == "y"
+    if args.module_btf_mismatch and module_btf and not allow_mismatch:
+        problems.append("confirmed module BTF mismatch: module BTF validation is enabled "
+                        "and CONFIG_MODULE_ALLOW_BTF_MISMATCH is disabled; rebuild matching "
+                        "kernel/modules or explicitly select the kernel's mismatch tolerance")
 
-    print("ULTRA_KERNEL_CONFIG_CHECKED")
-    if values.get("CONFIG_DEBUG_INFO_BTF_MODULES") == "y":
-        if values.get("CONFIG_MODULE_ALLOW_BTF_MISMATCH") == "y":
-            print("  WARN: 已允许模块 BTF 校验失败后跳过该模块 BTF；核对依赖模块 BTF 的功能。")
-        else:
-            print("  WARN: 若保留厂商模块且其 split BTF 与新 vmlinux 不匹配，模块可能被拒载；按目标评估兼容性。")
-    print("  NOTE: MODVERSIONS 须匹配目标模块构建合同；使用 live BTF 布局来源的路径须有可用内核 BTF。")
-    print("  NOTE: 仅完成上述配置关系检查；退出码 0 不证明模块可加载或设备可启动。")
-    return 0
+    print("ULTRA_KERNEL_CONFIG_UNSAFE" if problems else "ULTRA_KERNEL_CONFIG_OK")
+    print("Scope: requested configuration checks; module ABI and device boot remain separate.")
+    for problem in problems:
+        print(f"  - {problem}")
+    if module_btf and not args.module_btf_mismatch:
+        print("Module BTF compatibility: unknown; .config does not compare BTF data.")
+    elif args.module_btf_mismatch and module_btf and allow_mismatch:
+        print("Module BTF mismatch is tolerated; affected modules load without their BTF.")
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    raise SystemExit(main())

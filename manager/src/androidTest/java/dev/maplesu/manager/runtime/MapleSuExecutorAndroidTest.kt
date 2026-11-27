@@ -2,9 +2,8 @@ package dev.maplesu.manager.runtime
 
 import android.os.Process as AndroidProcess
 import androidx.test.platform.app.InstrumentationRegistry
-import com.topjohnwu.superuser.NoShellException
-import com.topjohnwu.superuser.Shell
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -96,33 +95,35 @@ class MapleSuExecutorAndroidTest {
         assertEquals("value with spaces", fields[1])
     }
 
-    @Test fun wrongMapleSuKeyDoesNotExecuteCommand() {
-        val fixture = "Aa0123456789".repeat(4).encodeToByteArray()
-        val result = collect(executor.start(fixture, listOf("/system/bin/printf", "COMMAND_MUST_NOT_RUN")))
+    @Test fun deniedUltraIdentityDoesNotExecuteCommand() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("verifyMapleSuDenied") == "true")
+        val result = collect(executor.start(listOf("/system/bin/printf", "COMMAND_MUST_NOT_RUN")))
         assertEquals(69, result.code)
         assertEquals(0, result.out.size)
-        assertFalse(result.err.decodeToString().contains(fixture.decodeToString()))
     }
 
-    @Test fun wrongMapleSuKeyCannotOpenRootShellOrUseExistingProvider() {
-        val fixture = "Aa0123456789".repeat(4).encodeToByteArray()
-        var shell: Shell? = null
-        try {
-            val error = assertThrows(NoShellException::class.java) {
-                shell = executor.openShell(fixture)
-            }
-            assertNull(shell)
-            assertFalse(error.message.orEmpty().contains(fixture.decodeToString()))
-        } finally {
-            shell?.close()
+    @Test fun deniedUltraIdentityDoesNotOpenRootShell() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("verifyMapleSuDenied") == "true")
+        val opened = runCatching { executor.openShell() }
+        opened.getOrNull()?.close()
+        assertTrue("Denied identity opened a root shell", opened.isFailure)
+    }
+
+    @Test fun ultraBinaryInputHasNoAdmissionPrefix() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("verifyMapleSuBoot") == "true")
+        for (input in listOf(byteArrayOf(), ByteArray(131072) { it.toByte() })) {
+            val result = collect(executor.start(listOf("/system/bin/cat")), input)
+            assertEquals(0, result.code)
+            assertArrayEquals(input, result.out)
+            assertEquals(0, result.err.size)
         }
     }
 
     @Test fun malformedRequestsFailBeforeStartingProcess() {
-        for (key in listOf(byteArrayOf(), ByteArray(48), ByteArray(49))) {
+        for (command in listOf(emptyList(), listOf("id"), listOf("/system/bin/id", "bad\u0000argument"))) {
             try {
-                executor.start(key, listOf("/system/bin/id"))
-                fail("Invalid credential accepted")
+                executor.start(command)
+                fail("Invalid command accepted")
             } catch (_: IllegalArgumentException) { }
         }
         try {

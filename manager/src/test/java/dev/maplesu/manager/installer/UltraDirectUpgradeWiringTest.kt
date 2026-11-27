@@ -11,12 +11,17 @@ class UltraDirectUpgradeWiringTest {
         val upgrade = source("dev/maplesu/manager/runtime/ultra/UltraEnvironmentUpgrade.kt")
         assertTrue(upgrade.indexOf("UltraKernelEnvironmentUpgrade.required(app)") <
             upgrade.indexOf("UltraInstalledIdentityProbe.invalidate()"))
-        assertTrue(upgrade.contains("installUltraKernelUpdate(taskId)"))
-        assertTrue(upgrade.contains("InstallerServiceClient.rebootAfterInstallation(context, taskId)"))
+        assertTrue(upgrade.contains("installUltraKernelUpdate(taskId, onTaskSelected = { selectedTask = it }"))
+        assertTrue(upgrade.contains("InstallerServiceClient.rebootAfterInstallation(context, selectedTask)"))
         val cli = source("com/maplesu/core/ui/util/KsuCli.kt")
         assertTrue(cli.contains("UltraKernelEnvironmentUpgrade.required(ksuApp)"))
-        assertTrue(cli.indexOf("UltraKernelUpdateRequirement.requirePreserved(") <
-            cli.indexOf("UltraInstallCredentials.retainCandidate("))
+        val kernelUpdate = cli.substringAfter("internal fun installUltraKernelUpdate(")
+            .substringBefore("private class InstallBuildStopped")
+        val observed = kernelUpdate.indexOf("InstallerServiceClient.observeBootChain(ksuApp)")
+        val carrier = kernelUpdate.indexOf("InstallerServiceClient.installedCarrierPartition(ksuApp, observed)")
+        val signing = kernelUpdate.indexOf("UltraKernelEnvironmentUpgrade.signingOptions(ksuApp)")
+        val install = kernelUpdate.indexOf("val first = install(partition, taskId)")
+        assertTrue(observed >= 0 && carrier > observed && signing > carrier && install > signing)
         val startup = source("dev/maplesu/manager/runtime/ultra/UltraEnvironmentAutoSetup.kt")
         assertFalse(startup.contains("UltraKernelEnvironmentUpgrade"))
         assertFalse(startup.contains("installUltraKernelUpdate"))
@@ -25,13 +30,14 @@ class UltraDirectUpgradeWiringTest {
     @Test fun explicitKernelUpgradeKeepsOnlyTheSigningReceiptForTheCurrentInstalledBoot() {
         val upgrade = source("dev/maplesu/manager/installer/UltraKernelEnvironmentUpgrade.kt")
         assertTrue(upgrade.contains("status.getString(\"partitionSha256\") == currentSha"))
-        assertTrue(upgrade.contains("status.getString(\"partition\") == \"boot\""))
+        assertTrue(upgrade.contains("status.getString(\"partition\") == partition"))
         assertTrue(upgrade.contains("status.getString(\"targetMode\") == \"LITE\""))
-        assertTrue(upgrade.contains("installedRecord(context, currentSha)?.getString(\"signingMode\")"))
+        assertTrue(upgrade.contains("installedRecord(context, currentSha, partition, snapshot.slotSuffix)?.getString(\"signingMode\")"))
         assertTrue(upgrade.contains("return status.takeIf { installed }"))
         val cli = source("com/maplesu/core/ui/util/KsuCli.kt")
             .substringAfter("internal fun installUltraKernelUpdate(").substringBefore("private class InstallBuildStopped")
-        assertTrue(cli.contains("lenovoSigning = dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.signingOptions(ksuApp)"))
+        assertTrue(cli.contains("dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.signingOptions(ksuApp)"))
+        assertTrue(cli.contains("lenovoSigning = signingOptions"))
     }
 
     @Test fun sdkRouteReturnsBeforeAnyBootTransactionAndDoesNotClaimWrittenBoot() {

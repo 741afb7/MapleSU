@@ -155,14 +155,17 @@ internal object StockInstallFlow {
                             "taskId=$taskId state=${result.getString("state")}\n$failures\n")
                     }.onFailure { android.util.Log.w("StockInstall", "I/O diagnostics persistence failed", it) }
                 }
-                dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(result)
+                dev.maplesu.manager.runtime.ultra.UltraInstallTransactions.observe(context,
+                    result.getString("taskId"), result.getString("state"), result.getString("candidateSha256"),
+                    result.getString("rebootSourceState"))
             }
         }, cancel = {
             InstallerServiceClient.withService(context, persistent = true, rootTarget = target) { it.cancelNativeInstall(taskId) }.also {
                 check(it.getString("taskId") == taskId && it.getString("state") == "CANCELLED") {
                     "INSTALLER_SERVICE_RESPONSE_INVALID"
                 }
-                dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(it)
+                dev.maplesu.manager.runtime.ultra.UltraInstallTransactions.observe(context,
+                    it.getString("taskId"), it.getString("state"), it.getString("candidateSha256"))
             }
         }, shouldCancel = { prepareAttempted }, failureAt = { phase, error ->
             val code = installerFailureDiagnostic(error).let {

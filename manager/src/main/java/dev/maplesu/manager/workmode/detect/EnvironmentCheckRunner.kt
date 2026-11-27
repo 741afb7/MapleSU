@@ -66,6 +66,7 @@ class EnvironmentCheckRunner(
     }
 
     private suspend fun execute(): EnvironmentCheckOutcome {
+        val startedAt = clock.nowMillis()
         val bootId = runCatching { bootIdSource.read() }.getOrDefault("")
         val budget = timeoutMillis.coerceAtLeast(1L)
         // 预算即"落盘许可"的边界：跑到超时之后才出结果的探测不得覆盖上次状态。
@@ -76,20 +77,21 @@ class EnvironmentCheckRunner(
         return when (ran) {
             is EnvironmentProbeResult.Completed -> ran.value
             EnvironmentProbeResult.TimedOut ->
-                unknown(bootId, EnvironmentCheckDetail.DEADLINE_EXCEEDED)
+                unknown(bootId, EnvironmentCheckDetail.DEADLINE_EXCEEDED, startedAt)
             EnvironmentProbeResult.Busy ->
-                unknown(bootId, EnvironmentCheckDetail.PROBE_STILL_RUNNING)
+                unknown(bootId, EnvironmentCheckDetail.PROBE_STILL_RUNNING, startedAt)
             is EnvironmentProbeResult.Failed ->
                 unknown(
                     bootId,
                     EnvironmentCheckDetail.PROBE_FAILED + ":" +
                         (ran.cause.message ?: ran.cause.javaClass.simpleName),
+                    startedAt,
                 )
         }
     }
 
     /** UNKNOWN：**保留**上次状态（[EnvironmentStateStore] 一个字节都不写）。 */
-    private fun unknown(bootId: String, detail: String): EnvironmentCheckOutcome {
+    private fun unknown(bootId: String, detail: String, startedAt: Long): EnvironmentCheckOutcome {
         val previous = store.snapshot()
         return EnvironmentCheckOutcome(
             verdict = EnvironmentVerdict.UNKNOWN,
@@ -98,7 +100,7 @@ class EnvironmentCheckRunner(
             trigger = null,
             detail = detail,
             bootId = bootId,
-            elapsedMillis = timeoutMillis,
+            elapsedMillis = (clock.nowMillis() - startedAt).coerceAtLeast(0L),
         )
     }
 

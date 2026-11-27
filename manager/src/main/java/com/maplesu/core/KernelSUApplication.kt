@@ -445,7 +445,10 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
         var bootReadiness: Boolean? = null
         var managerReason: String? = null
         var setupReason: String? = null
-        val pendingInstall = dev.maplesu.manager.runtime.ultra.UltraInstallCredentialRecovery.hasPendingInstallCredential(this)
+        val pendingInstall = dev.maplesu.manager.installer.InstallerServiceClient.lastTaskId(this)?.let { taskId ->
+            dev.maplesu.manager.installer.InstallerServiceClient.installTargetOf(this, taskId) ==
+                dev.maplesu.manager.installer.InstallTargetMode.ULTRA
+        } == true
         startupKind = if (live.rootAvailable && live.state == dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.State.Running)
             "healthy" else if (pendingInstall) "installation" else "recovery"
         val warmup = dev.maplesu.manager.runtime.ultra.UltraStartupWarmup.run(
@@ -453,7 +456,7 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
                 activeMode = ModeRuntime.active,
                 detectionSettled = ModeRuntime.detectionComplete && ModeRuntime.detectionFailure == null,
                 ksuResponded = detection?.trace?.firstOrNull { it.id == "S1" }?.ok,
-                pendingInstallCredential = pendingInstall,
+                pendingInstall = pendingInstall,
                 suspended = dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.suspended(this),
                 quiescing = dev.maplesu.manager.workmode.superuser.LiteImplantQuiesceGate.isBlocked(),
                 switchPending = dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.executing,
@@ -516,8 +519,7 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
             ensureActive()
             val activation = ModeRuntime.activation
             val bootId = dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.currentBootId()
-            val key = dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.read(this)
-            val rootCurrent = dev.maplesu.manager.modules.UltraRootKeyStore.captureOwnerMarker(this)
+            val rootCurrent = dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.captureOwnerMarker(this)
             val sessionCurrent = dev.maplesu.manager.runtime.ultra.UltraSdkSession.captureOwnerMarker(this)
             val owner = dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.currentSnapshot(this).managerOwnerIdentity
             val client = dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.client(this)
@@ -528,7 +530,6 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
             val versionReady = version.succeeded && !version.string("version").isNullOrBlank()
             val scopeCurrent = ModeRuntime.activation === activation && bootId != null &&
                 bootId == dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.currentBootId() &&
-                key == dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.read(this) &&
                 rootCurrent() && sessionCurrent() &&
                 (owner == null || client.queryManagerOwnerIdentity().identity == owner)
             val ready = moduleReady && versionReady && authorization.ok && scopeCurrent
@@ -542,9 +543,7 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
                 "startupElapsedMs=${android.os.SystemClock.elapsedRealtime() - ultraStartupTriggeredAt.get()}")
         }
         if (warmup.paired && dev.maplesu.manager.runtime.ultra.UltraSdkSession.current(this) == null) {
-            dev.maplesu.manager.modules.UltraRootKeyStore.read(this)?.let {
-                dev.maplesu.manager.runtime.ultra.UltraPairingMaintenance.request(this, it)
-            }
+            dev.maplesu.manager.runtime.ultra.UltraPairingMaintenance.request(this)
         }
         if (warmup.ran && dev.maplesu.manager.runtime.ultra.UltraSdkSession.current(this) != null) {
             ensureActive()

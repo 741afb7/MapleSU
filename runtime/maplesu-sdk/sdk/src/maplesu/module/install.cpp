@@ -122,7 +122,6 @@ static bool read_text_file(const char* path, std::string& text) {
 namespace maplesu::module_install {
 namespace {
 static KModErr root_worker(storage::WorkerScope& worker) {
-    if (!worker.owner_mode()) return maplesu_lock_module_root(true);
     RETURN_IF_ERROR(worker.root());
     return maplesu_lock_module_root(true);
 }
@@ -484,8 +483,8 @@ static InstallCompletion recover_interrupted_install(const InstallIdentity& iden
         }
         receipt.found = found;
         receipt.committed = committed;
-        receipt.cleaned = found && is_ok(result);
-        worker.close();
+        const auto closed = worker.close_checked();
+        receipt.cleaned = found && is_ok(result) && is_ok(closed);
         const bool sent = install_transfer(recovery.fd_child_to_parent_write, &receipt, sizeof(receipt), true);
         recovery.close_all();
         maplesu_module_worker_exit(sent ? 0 : 125);
@@ -540,24 +539,31 @@ static KModErr uninstall_module_contents(const char* id, bool callback, bool ret
     RETURN_IF_ERROR(compat::unsafe_reset_autorun_bootstrap_safe_flag());
     RETURN_IF_ERROR(module_state::remove(module_state::List::PendingRunOnce, std::string(id)));
     RETURN_IF_ERROR(module_state::remove(module_state::List::FinishedRunOnce, std::string(id)));
-    return retire_pending ? module_state::remove(module_state::List::PendingRemoval, std::string(id)) : KModErr::OK;
+    const auto result = retire_pending ? module_state::remove(module_state::List::PendingRemoval, std::string(id)) : KModErr::OK;
+    const auto closed = restored_worker ? restored_worker->close_checked() : KModErr::OK;
+    return is_failed(result) ? result : closed;
 }
 
 KModErr unsafe_uninstall_module_impl(const char* id, bool callback) {
     if (!module_paths::valid_id(id)) return KModErr::ERR_MODULE_PARAM;
     storage::WorkerScope worker(id);
-    RETURN_IF_ERROR(root_worker(worker));
-    std::string kernel_directory;
-    RETURN_IF_ERROR(storage::current_kernel_directory(kernel_directory));
-    ModuleMutation mutation(kernel_directory, id);
-    RETURN_IF_ERROR(mutation.error());
-    bool recovered = false;
-    RETURN_IF_ERROR(recover_installation_impl(id, recovered));
-    return uninstall_module_contents(id, callback);
+    const KModErr result = [&]() -> KModErr {
+        RETURN_IF_ERROR(root_worker(worker));
+        std::string kernel_directory;
+        RETURN_IF_ERROR(storage::current_kernel_directory(kernel_directory));
+        ModuleMutation mutation(kernel_directory, id);
+        RETURN_IF_ERROR(mutation.error());
+        bool recovered = false;
+        RETURN_IF_ERROR(recover_installation_impl(id, recovered));
+        return uninstall_module_contents(id, callback);
+    }();
+    const auto closed = worker.close_checked();
+    return is_failed(result) ? result : closed;
 }
 
 // parent waits even when its error-code frame could not be read.
 KModErr safe_uninstall_module_impl(const char* id) {
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     compat::InstallPipe pipe;
     KModErr err = KModErr::OK;
     if (compat::fork_pipe_child_process(pipe)) {
@@ -735,6 +741,7 @@ static KModErr run_single_module_command(const char* command) {
 KModErr safe_install_module_impl(const char* archive, bool run_once, std::string& reason,
                                 InstallCompletion& completion) {
     completion = {};
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     compat::InstallPipe pipe;
     KModErr err = KModErr::OK;
     if (compat::fork_pipe_child_process(pipe)) {
@@ -851,7 +858,8 @@ KModErr safe_install_module_impl(const char* archive, bool run_once, std::string
                 cleanup_pending = is_failed(cleanup);
             }
         }
-        worker.close();
+        const auto closed = worker.close_checked();
+        if (is_ok(err) && is_failed(closed)) err = closed;
         // Installation and its state are committed before the runtime takes
         // the same module owner. A failed immediate start keeps that install.
         if (committed && is_ok(err) && !cleanup_pending && !hotload_command.empty()) {

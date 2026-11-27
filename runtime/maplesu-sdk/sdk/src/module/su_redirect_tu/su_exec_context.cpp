@@ -1,6 +1,7 @@
 // The canonical image stays inside a root-only directory. Authorized native
 // sessions execute a held descriptor after applying their selected Profile.
 #include "module_err_def.h"
+#include "maplesu_storage_private.h"
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -29,7 +30,7 @@ KModErr prepare_inode(int fd, bool directory, bool normalize_mode = true) {
     if (fstat(fd, &st) != 0 || st.st_uid != 0 ||
         (directory ? !S_ISDIR(st.st_mode) : !S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_size == 0))
         return KModErr::ERR_MODULE_OPEN_FILE;
-    const mode_t mode = 0711;
+    const mode_t mode = directory ? 0711 : 0700;
     if (normalize_mode && (st.st_mode & 07777) != mode && fchmod(fd, mode) != 0)
         return KModErr::ERR_SET_FILE_SELINUX;
     if (!has_context(fd) && fsetxattr(fd, "security.selinux", system_context, sizeof(system_context), 0) != 0)
@@ -94,13 +95,9 @@ extern "C" KModErr maplesu_prepare_su_exec_directory(const char* system_director
     return fsync(helper.value) == 0 ? KModErr::OK : KModErr::ERR_MODULE_WRITE_FILE;
 }
 
-extern "C" KModErr maplesu_prepare_su_exec(const char* key) {
-    if (!key || strnlen(key, 49) != 48) return KModErr::ERR_MODULE_PARAM;
-    for (size_t i = 0; i < 48; ++i) {
-        const char c = key[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')))
-            return KModErr::ERR_MODULE_PARAM;
-    }
-    const std::string directory = "/data/" + std::string(key, 16) + key[0] + "/";
+extern "C" KModErr maplesu_prepare_su_exec() {
+    std::string directory;
+    const auto error = maplesu::storage::current_system_directory(directory);
+    if (is_failed(error)) return error;
     return maplesu_prepare_su_exec_directory(directory.c_str());
 }

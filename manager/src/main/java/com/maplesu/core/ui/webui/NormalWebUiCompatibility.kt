@@ -2,9 +2,9 @@ package com.maplesu.core.ui.webui
 
 import org.json.JSONObject
 
+@Suppress("UNUSED_PARAMETER")
 internal fun moduleDocumentCsp(normal: Boolean): String =
-    "frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; worker-src " +
-        if (normal) "'self' blob:" else "'none'"
+    "frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; worker-src 'self' blob:"
 
 /** Generates callbacks without evaluating caller-supplied JavaScript expressions. */
 internal class WebUiCallbackScripts(private val normal: Boolean) {

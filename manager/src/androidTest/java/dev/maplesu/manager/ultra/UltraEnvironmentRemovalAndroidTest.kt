@@ -1,39 +1,62 @@
 package dev.maplesu.manager.ultra
 
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.maplesu.manager.modules.UltraRootKeyStore
+import java.util.UUID
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
-/** Exercises real manager preferences without uninstalling the device environment. */
+/** Isolated preference migration and explicit removal lifecycle; no device uninstall. */
 class UltraEnvironmentRemovalAndroidTest {
     @Test fun removalKeepsTemporaryCredentialsAndRepairsLegacySuspension() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("environmentRemovalDevice") == "true")
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val prefs = context.getSharedPreferences("maplesu-ultra", 0)
-        val keys = listOf("rootKey", "rootKeySuspended", "environmentRemoval")
-        val before = keys.associateWith { prefs.getString(it, null) }
-        val fixtureKey = "a".repeat(48)
+        val base = InstrumentationRegistry.getInstrumentation().context
+        val prefix = "removal-identity-${UUID.randomUUID()}-"
+        val stores = mutableSetOf<String>()
+        val context = object : ContextWrapper(base) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
+                val isolated = prefix + name
+                stores += isolated
+                return base.getSharedPreferences(isolated, mode)
+            }
+        }
+        val prefs = context.getSharedPreferences("maplesu-ultra", Context.MODE_PRIVATE)
+        val exports = context.getSharedPreferences("maplesu-ultra-image-exports", Context.MODE_PRIVATE)
+        // Historical secrets are input fixtures for retirement, never standard Ultra credentials.
+        val retired = listOf("rootKey", "rootKeySuspended", "pendingKernelCredential", "previousInstallCredential",
+            "keyVerified", "keyVerifiedFor", "installCredentialTaskId", "installCredentialForKey",
+            "installCredentialSourceBoot", "installCredentialProvenance", "installAuthorizationObservedForKey")
         try {
-            assertTrue(prefs.edit().remove("rootKey").remove("environmentRemoval")
-                .putString("rootKeySuspended", fixtureKey).commit())
-            assertEquals(fixtureKey, UltraRootKeyStore.read(context))
-            assertFalse(prefs.contains("rootKeySuspended"))
+            assertTrue(prefs.edit().apply { retired.forEach { putString(it, "retired-fixture") } }.commit())
+            assertTrue(exports.edit().putString("old-export", "retired-fixture").commit())
+            UltraRootKeyStore.clearLegacy(context)
+            assertTrue("Legacy secret fields survived migration", retired.none(prefs::contains))
+            assertTrue("Legacy export credential store survived migration", exports.all.isEmpty())
+            assertFalse(UltraRootKeyStore.isSuspended(context))
+
             UltraRootKeyStore.recordRemoval(context, permanent = false)
-            assertEquals(fixtureKey, UltraRootKeyStore.read(context))
+            assertEquals("temporary", prefs.getString("environmentRemoval", null))
             assertTrue(UltraRootKeyStore.isSuspended(context))
+            UltraRootKeyStore.clearLegacy(context)
+            assertEquals("temporary", prefs.getString("environmentRemoval", null))
+            assertTrue("Cleanup must not reactivate an explicitly removed environment", UltraRootKeyStore.isSuspended(context))
             UltraRootKeyStore.allowEnvironmentInstall(context)
             assertFalse(UltraRootKeyStore.isSuspended(context))
-            assertEquals(fixtureKey, UltraRootKeyStore.read(context))
+            assertFalse(prefs.contains("environmentRemoval"))
+
             UltraRootKeyStore.recordRemoval(context, permanent = true)
-            assertNull(UltraRootKeyStore.read(context))
+            assertEquals("permanent", prefs.getString("environmentRemoval", null))
             assertTrue(UltraRootKeyStore.isSuspended(context))
-            assertEquals(fixtureKey, prefs.getString("rootKey", null))
+            assertTrue("Removal must not restore historical secrets", retired.none(prefs::contains))
+            UltraRootKeyStore.allowEnvironmentInstall(context)
+            assertFalse(UltraRootKeyStore.isSuspended(context))
         } finally {
-            assertTrue(prefs.edit().apply { before.forEach { (key, value) ->
-                if (value == null) remove(key) else putString(key, value)
-            } }.commit())
+            stores.forEach(base::deleteSharedPreferences)
         }
     }
 }

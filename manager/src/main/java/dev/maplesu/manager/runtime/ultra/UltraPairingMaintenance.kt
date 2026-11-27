@@ -6,7 +6,6 @@ import android.content.Context
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
@@ -49,43 +48,26 @@ internal object UltraPairingMaintenance {
         }, "maplesu-ultra-pairing-maintenance").apply { isDaemon = true }
     }, SystemClock::elapsedRealtime)
 
-    private fun allowed(context: Context, key: String, bootId: String) =
-        !Thread.currentThread().isInterrupted && UltraEnvironmentAutoSetup.currentBootId() == bootId &&
-            !UltraIdentityRecovery.blocked(context) &&
-            UltraRootKeyStore.read(context) == key &&
-            UltraKeyPairedStore.matchesVerifiedKey(context, key)
-
-    fun request(context: Context, key: String) {
+    fun request(context: Context) {
         val app = context.applicationContext
-        val bootId = UltraEnvironmentAutoSetup.currentBootId() ?: return
-        val identity = java.security.MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.US_ASCII))
-            .joinToString("") { "%02x".format(it.toInt() and 255) } + ":" + bootId
-        queue.request(identity, { allowed(app, key, bootId) }) work@{
-            val started = SystemClock.elapsedRealtime()
-            runCatching {
-                if (!allowed(app, key, bootId)) return@work false
-                val client = UltraSdkCredentials.client(app, key, bootId)
-                UltraSdkLogging.apply(client)
-                if (!allowed(app, key, bootId)) return@work false
-                // Save the verified key before su/Binder authorization work. A stale
-                // no-key UID grant must not prevent permanent recovery material.
-                val backup = UltraBackupMaintenance.refresh({ allowed(app, key, bootId) },
-                    { UltraEnvironmentInstaller.backupKey(app, key) })
-                app.ultraPreferences("ultra-identity-recovery", Context.MODE_PRIVATE).edit()
-                    .putString("backup", backup?.reason ?: "BACKUP_UNAVAILABLE")
-                    .putLong("backupAt", System.currentTimeMillis()).apply()
-                if (!allowed(app, key, bootId)) return@work false
-                val whitelist = UltraSelfWhitelist.ensureCurrentAuthority(app, client) { allowed(app, key, bootId) }
-                if (!whitelist.succeeded || !allowed(app, key, bootId)) return@work false
-                val restored = dev.maplesu.manager.installer.InstallerServiceClient.withService(app, persistent = true) {
-                    it.refreshUltraAuthorization(key)
-                }
-                if (!allowed(app, key, bootId)) return@work false
-                whitelist.succeeded && restored == "OK" && backup?.ok == true
-            }.onFailure { Log.w("MapleSUUltraPairing", "maintenance deferred: ${it.javaClass.simpleName}") }
-                .getOrDefault(false).also {
-                    Log.i("MapleSUUltraPairing", "maintenance ok=$it elapsedMs=${SystemClock.elapsedRealtime() - started}")
-                }
+        val observation = UltraEnvironmentProbe.currentSnapshot(app)
+        val owner = observation.managerOwnerIdentity
+        val boot = UltraEnvironmentAutoSetup.currentBootId() ?: return
+        val scope = UltraAuthorization.captureScope(app) ?: return
+        val current = scope.current
+        val identity = if (owner != null) "${owner.fullUid}:${owner.epoch}:${owner.hostInstance}:$boot"
+            else observation.legacyCredentialFingerprint?.takeIf { it == scope.client.legacyCredentialFingerprint }
+                ?.let { "$it:$boot" } ?: return
+        queue.request(identity, { current() && !UltraIdentityRecovery.blocked(app) }) work@{
+            val client = scope.client
+            UltraSdkLogging.apply(client)
+            if (!current()) return@work false
+            val whitelist = UltraSelfWhitelist.ensureCurrentAuthority(app, client, current)
+            if (!whitelist.succeeded || !current()) return@work false
+            val restored = dev.maplesu.manager.installer.InstallerServiceClient.withService(app, persistent = true) {
+                it.refreshUltraAuthorization()
+            }
+            current() && restored == "OK"
         }
     }
 }

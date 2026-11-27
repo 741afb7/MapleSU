@@ -6,7 +6,7 @@ import dev.maplesu.manager.liteweb.LiteWebRootBackendNames
 import dev.maplesu.manager.liteweb.LiteWebToggleView
 
 /** Observations belong to this daemon process, not the manager's process-local caches. */
-enum class DaemonUltraState { RUNNING, NOT_INSTALLED, NO_KEY, FAULT, UNKNOWN }
+enum class DaemonUltraState { RUNNING, NOT_INSTALLED, FAULT, UNKNOWN }
 
 data class DaemonCommittedMode(
     val bootId: String,
@@ -44,7 +44,7 @@ object UnavailableDaemonRuntimeSource : DaemonRuntimeSource {
     override fun ultraModules() = DaemonModulesSnapshot(error = "ULTRA_MODULES_UNAVAILABLE")
 }
 
-/** SDK errors/key absence never become permission to read another mode's module directory. */
+/** SDK identity errors never become permission to read another mode's module directory. */
 object DaemonRuntimePolicy {
     fun resolve(
         ultraState: DaemonUltraState,
@@ -66,7 +66,6 @@ object DaemonRuntimePolicy {
             )
         else -> DaemonRuntimeSnapshot(probe = when (ultraState) {
             DaemonUltraState.NOT_INSTALLED -> "NotInstalled"
-            DaemonUltraState.NO_KEY -> "NoKey"
             DaemonUltraState.FAULT -> "Fault"
             DaemonUltraState.UNKNOWN -> "Unknown"
             DaemonUltraState.RUNNING -> "Running"

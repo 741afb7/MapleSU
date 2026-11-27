@@ -56,7 +56,7 @@ class KernelCatalogTest {
     @Test fun everyPlantProfileIsRunnableAndCarriesNoAddressTable() {
         val catalog = catalog()
         val plants = catalog.profiles.filter { it.engine == KernelEngine.PLANT }
-        assertEquals(12, plants.size)
+        assertEquals(13, plants.size)
         for (profile in plants) {
             assertNotNull(profile.runner)
             assertNull(profile.addresses)
@@ -69,6 +69,32 @@ class KernelCatalogTest {
             assertNull(resolution.failureToken)
         }
         assertTrue("declared entries are now real profiles", catalog.declared.isEmpty())
+    }
+
+    @Test fun honorSixSixBuildResolvesToItsPackagedPlant() {
+        val release = "6.6.118-android15-8-ga812a1946391-abogki576098434-4k"
+        val resolution = KernelProfiles.resolve(release, catalog())
+        assertTrue(resolution is KernelResolution.Packaged)
+        val profile = (resolution as KernelResolution.Packaged).profile
+        assertEquals("plant-66118-a812a1946391", profile.id)
+        assertEquals("plant-66118", profile.runner)
+        assertEquals(KernelEngine.PLANT, profile.engine)
+        assertEquals("android15-6.6", profile.kmi)
+        assertNull(profile.addresses)
+    }
+
+    @Test fun honorPlantRequiresTheExactCommitBuildAndPageSize() {
+        val release = "6.6.118-android15-8-ga812a1946391-abogki576098434-4k"
+        val catalog = catalog()
+        val changed = listOf(
+            release.replace("a812a1946391", "a812a1946392"),
+            release.replace("576098434", "576098435"),
+            release.replace("-4k", "-16k"),
+        )
+        for (candidate in changed) {
+            assertTrue("unexpected profile for " + candidate,
+                KernelProfiles.resolve(candidate, catalog) is KernelResolution.Unsupported)
+        }
     }
 
     @Test fun generatedManifestKeepsPlantProfilesResolvable() {

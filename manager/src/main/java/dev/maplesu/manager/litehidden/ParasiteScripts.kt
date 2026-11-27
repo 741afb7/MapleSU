@@ -40,12 +40,8 @@ object ParasitePaths {
     const val LABEL_FILE = "label.txt"
 
     /**
-     * 撤销 su 授权所需的**身份材料**（App 作用域 `ANDROID_ID` + 包名 + uid）。
-     *
-     * 为什么必须落盘：App 侧用的是**应用作用域**的 `Settings.Secure.ANDROID_ID`（Android 8+ 每个
-     * 应用不同），daemon 用 `settings get secure android_id` 取到的是**系统值**，两者不等 ⇒
-     * rootkey 的 AES-GCM tag 校验失败、撤销步永远 409（2026-10-31 真机 D1）。这里只存
-     * **身份材料**，绝不存 rootKey 明文/token；解密仍在 daemon 内存里做。
+     * 恢复时核对管理器包名与 fullUID 的身份记录，保持既有应用作用域 ANDROID_ID 字段。
+     * 记录存于 root-only 恢复目录，不承载凭据；撤销由当前 Root/Owner 通道核验。
      */
     const val IDENTITY_FILE = "$RECOVERY/identity.json"
     const val IDENTITY_TEMP = "$IDENTITY_FILE.tmp"

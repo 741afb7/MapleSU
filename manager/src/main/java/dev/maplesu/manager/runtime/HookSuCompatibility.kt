@@ -5,6 +5,7 @@ import dev.maplesu.manager.runtime.ultra.ProcessSuExec
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup
 import dev.maplesu.manager.runtime.ultra.UltraBootSdkSession
 import dev.maplesu.manager.runtime.ultra.UltraSdkSession
+import dev.maplesu.manager.runtime.ultra.UltraSdkCredentials
 
 /** Hook clients use the SDK's existing UID-scoped exec redirect, without a global su mount. */
 internal object HookSuCompatibility {
@@ -14,6 +15,7 @@ internal object HookSuCompatibility {
     fun publish(context: Context, mode: SuEntryMode.Mode, prepareEnvironment: Boolean = true): RuntimeDeployment.Status {
         val app = context.applicationContext
         var sdkSession: UltraBootSdkSession? = null
+        var sessionCurrent: (() -> Boolean)? = null
         check(HookRootExecutor.production(app).available()) { "SU_GATE_NOT_ARMED" }
         ensurePublication(
             cleanup = {
@@ -35,6 +37,9 @@ internal object HookSuCompatibility {
                 if (mode == SuEntryMode.Mode.COOPERATIVE_MINIMAL) null else {
                     val result = if (prepareEnvironment) UltraEnvironmentAutoSetup.ensure(app) else null
                     sdkSession = UltraSdkSession.current(app)
+                    val bootCurrent = UltraSdkSession.captureOwnerMarker(app)
+                    val ownerCurrent = UltraSdkCredentials.captureOwnerMarker(app)
+                    sessionCurrent = { bootCurrent() && ownerCurrent() && SuEntryMode.read(app) == mode }
                     result?.takeUnless { it.installed }?.reason
                 }
             },
@@ -42,7 +47,7 @@ internal object HookSuCompatibility {
                 val expected = sdkSession
                 val observed = UltraSdkSession.current(app)
                 expected != null && observed != null && expected.bootId == observed.bootId &&
-                    expected.key == observed.key && HookRootExecutor.production(app).available() &&
+                    sessionCurrent?.invoke() == true && HookRootExecutor.production(app).available() &&
                     UltraEnvironmentAutoSetup.blockedReason(app, bootSession = true) == null
             }),
             probe = {
@@ -62,7 +67,8 @@ internal object HookSuCompatibility {
         }
         SuAuditLog.append(app, SuAuditEvent(backend = "hook", event = "entry",
             decision = "ready", detail = "uid-redirect:$STANDARD_PATH"))
-        return RuntimeDeployment.Status(standardPath = STANDARD_PATH, brokerReady = true)
+        return RuntimeDeployment.Status(standardPath = STANDARD_PATH, brokerReady = true,
+            entryCurrent = checkNotNull(sessionCurrent))
     }
 
     /** Verify the cooperative endpoint independently of SDK/traditional-entry preparation. */
@@ -93,6 +99,7 @@ internal object HookSuCompatibility {
     fun traditionalReady(context: Context): Boolean {
         val status = RuntimeDeployment.status()
         return status.brokerReady && status.error == null && status.standardPath == STANDARD_PATH &&
+            status.entryCurrent?.invoke() == true &&
             UltraSdkSession.current(context) != null
     }
 

@@ -279,12 +279,7 @@ def build_helper(tc: S.Toolchain, out_path: Path, record: dict[str, Any] | None 
         stripped = True
 
     surface = _dynamic_surface(tc, out_path)
-    token = (b"5d31494d2e18e3fdef2afaf740b0febc19229cb292f57ebc3bc1c96c6d70b709"
-             b"8d2dc1f356b733e8c999e6ac85bdca24c8c74f03ae7d5b2a402e96804576e925")
     image = out_path.read_bytes()
-    padded_token = token + bytes(4096 - len(token))
-    if image.count(padded_token) != 1:
-        raise HelperBuildError("helper must contain exactly one padded 4096-byte key slot", EXIT_VERIFY)
     expected_exports = sorted(record.get("exportedSymbols") or [])
     expected_needed = sorted(record.get("neededLibraries") or [])
     problems: list[str] = []
@@ -334,8 +329,7 @@ def build_helper(tc: S.Toolchain, out_path: Path, record: dict[str, Any] | None 
                     "noteOffset": offset, "noteHex": identity["noteHex"]},
         "sdkArchive": {"source": str(sdk_archive), "bytes": sdk_archive.stat().st_size,
                        "sha256": S.sha256_file(sdk_archive)},
-        "keySlot": {"offset": image.index(padded_token), "capacity": 4096,
-                    "keyLength": 48, "tokenBytes": len(token)},
+        "keyless": True,
         "manifest": S.rel(record.get("_manifest_path", MANIFEST)),
         "name": record.get("name"),
         "out": S.rel(out_path),

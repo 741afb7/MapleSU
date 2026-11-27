@@ -176,18 +176,19 @@ fun SettingPagerMaterial(
 
                 // Ultra 专属：MapleSU_Ultra工作环境（panel 为 null 时说明未获许可，连组合都不发生）。
                 AnimatedVisibility(
-                    visible = ultraPanel != null,
+                    visible = ultraPanel != null || uiState.installedKernelUpdateRequired,
                     enter = expandVertically(tween(160), expandFrom = Alignment.Top) + fadeIn(tween(120)),
                     exit = ExitTransition.None,
                 ) {
-                    ultraPanel?.let { panel ->
-                        SegmentedColumn(
-                            modifier = GroupPadding,
-                            content = buildList {
+                    SegmentedColumn(
+                        modifier = GroupPadding,
+                        content = buildList {
+                            ultraPanel?.let { panel ->
                                 add { UltraEnvironmentRowMaterial(panel) }
-                            },
-                        )
-                    }
+                            }
+                            if (uiState.installedKernelUpdateRequired) add { InstalledUltraUpgradeRowMaterial() }
+                        },
+                    )
                 }
 
                 if (uiState.jailbreakSelinuxHide.visible && !uiState.hiddenMasked) {

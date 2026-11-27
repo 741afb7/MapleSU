@@ -28,6 +28,7 @@ class UltraBootSdkInstallTest {
         var submitReceipt = receipt()
         var root = true
         var whitelist = true
+        var managerSu = true
         var modules = true
         var after: (String) -> Unit = {}
         private fun <T> observed(name: String, value: T): T = value.also {
@@ -53,8 +54,18 @@ class UltraBootSdkInstallTest {
         }
         override fun rootVerified() = observed("root", root)
         override fun whitelistVerified() = observed("whitelist", whitelist)
+        override fun managerSuVerified() = observed("manager-su", managerSu)
         override fun moduleListVerified() = observed("modules", modules)
         fun run() = UltraBootSdkInstall.ensure(guardStored, this)
+    }
+
+    @Test fun cancelledPreparationKeepsTheOriginalCancellationAndNeverSubmits() {
+        val port = Port()
+        val cancelled = java.util.concurrent.CancellationException("publication cancelled")
+        port.after = { if (it == "prepare") throw cancelled }
+        assertSame(cancelled, assertThrows(java.util.concurrent.CancellationException::class.java) { port.run() })
+        assertFalse(port.guardStored)
+        assertEquals(0, port.submissions)
     }
 
     @Test fun hotLoadIsGuardedAndAllReadbacksAreRequired() {
@@ -65,7 +76,7 @@ class UltraBootSdkInstallTest {
         assertEquals("RUNNING_VERIFIED", result.reason)
         assertTrue(requireNotNull(result.submission).succeeded)
         assertEquals(listOf("channel", "metadata", "state", "prepare", "guard", "submit",
-            "state", "root", "whitelist", "modules"), port.calls)
+            "state", "root", "whitelist", "manager-su", "modules"), port.calls)
         assertTrue(port.run().ready)
         assertEquals(1, port.submissions)
     }
@@ -206,7 +217,7 @@ class UltraBootSdkInstallTest {
     }
 
     @Test fun sessionChangesDuringReadyReadbacksNeverReportReady() {
-        for (boundary in listOf("state", "root", "whitelist", "modules")) {
+        for (boundary in listOf("state", "root", "whitelist", "manager-su", "modules")) {
             val port = Port().apply {
                 state = "Running"
                 after = { if (it == boundary) valid = false }
@@ -219,11 +230,12 @@ class UltraBootSdkInstallTest {
     }
 
     @Test fun missingRootWhitelistOrModulesNeverReportsReady() {
-        for (boundary in listOf("root", "whitelist", "modules")) {
+        for (boundary in listOf("root", "whitelist", "manager-su", "modules")) {
             val port = Port().apply {
                 state = "Running"
                 root = boundary != "root"
                 whitelist = boundary != "whitelist"
+                managerSu = boundary != "manager-su"
                 modules = boundary != "modules"
             }
             assertFalse(port.run().ready)
@@ -243,4 +255,23 @@ class UltraBootSdkInstallTest {
             Thread.interrupted()
         }
     }
+    @Test fun committedHotloadReplyLossDoesNotRollbackOrResubmitAcrossRefreshes() {
+        val port = Port().apply {
+            submitReceipt = receipt("HOTLOAD_REPLY_LOST", -21002)
+            stateAfterSubmit = "Unknown"
+        }
+        val pending = port.run()
+        assertFalse(pending.ready)
+        assertTrue(pending.submitted)
+        assertEquals(-21002, pending.submission?.sdkErrorCode)
+        repeat(3) { assertFalse(port.run().ready) }
+        assertEquals(1, port.submissions)
+        port.state = "NotInstalled"
+        assertEquals("HOTLOAD_RECONCILIATION_REQUIRED", port.run().reason)
+        assertEquals(1, port.submissions)
+        port.state = "Running"
+        assertTrue(port.run().ready)
+        assertEquals(1, port.submissions)
+    }
+
 }

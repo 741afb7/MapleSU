@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
-/** Published 5.1.8 identities must survive generation when their old caves contain live code. */
+/** Explicit legacy rendering preserves old identities; production upgrades generate without a Key. */
 class UltraKernelLegacyMetadataFlowTest {
     @Test
     fun historicalK22IdentityUsesACompatibilityCarrierInsteadOfOverwritingLiveCode() {
@@ -28,7 +28,7 @@ class UltraKernelLegacyMetadataFlowTest {
         } finally { key.fill(0) }
         val before = UltraKernelSpec.sha256(boot)
         val kernel = UltraKernelPlan.readKernel(boot)
-        val plan = UltraKernelSpecGenerator().generate(kernel, credential)
+        val plan = legacyPlan(kernel, credential)
         assertEquals(credential, plan.credential)
         assertEquals(credential.key16, plan.credential?.key16)
         val executor = plan.records.single { it.role == "__drm_printfn_coredump+0x0" }
@@ -42,7 +42,7 @@ class UltraKernelLegacyMetadataFlowTest {
     }
 
     @Test
-    fun historicalArchiveRecoveryAndProductionFlowKeepTheCompleteIdentity() {
+    fun historicalArchiveRecoveryFeedsKeylessProductionGeneration() {
         val sample = File("../MapleSU_Reference/Boots/OnePlusAce6_6.6/boot.img")
         assumeTrue("reference boot sample not available", sample.isFile)
         val before = UltraKernelSpec.sha256(sample)
@@ -52,7 +52,6 @@ class UltraKernelLegacyMetadataFlowTest {
         val specBytes = fileAssets.read(specPath)
         val archived = UltraKernelSpec.parse(specBytes.toString(Charsets.UTF_8))
         val oldRaw = archived.apply(raw).kernel
-        val credential = UltraKernelPlanFixtures.credential()
         val bytes = ByteArray((4096 + raw.size + 4095) / 4096 * 4096)
         ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("ANDROID!".toByteArray())
@@ -92,21 +91,42 @@ class UltraKernelLegacyMetadataFlowTest {
             assertNotNull("the published historical spec must recover its complete preimage", recovered)
             assertEquals(pristineSha, UltraKernelSpec.sha256(requireNotNull(recovered).image))
             val flow = UltraKernelFlow(File(workspace, "flow"), assets)
-            val plan = UltraKernelSpecGenerator().generate(raw, credential)
-            assertEquals(plan.derived?.patchedKernelSha256,
-                flow.generatePlan(installed, credential).derived?.patchedKernelSha256)
+            val plan = flow.generatePlan(installed)
+            assertEquals(UltraKernelSpec.sha256(raw), plan.baseKernelSha256)
+            assertEquals(null, plan.credential)
+            assertEquals(null, plan.slots)
             assertFalse("preview must not write its workspace", File(workspace, "flow").exists())
-            val prepared = flow.prepare(installed, credential)
+            val prepared = flow.prepare(installed)
             assertFalse(prepared.alreadyInstalled)
-            assertEquals(credential, prepared.credential)
+            assertTrue(prepared.generated)
+            val generated = prepared.variant as UltraKernelGeneratedAsset
+            assertEquals(null, generated.plan.credential)
+            assertEquals(null, generated.plan.slots)
             val candidate = requireNotNull(prepared.candidate)
             assertEquals(pristineSha, candidate.baseBootSha256)
             assertEquals(oldBootSha, UltraKernelSpec.sha256(installed))
-            assertTrue(plan.records.any { it.role == "metadata-rebase" })
+            assertFalse(plan.records.any { it.role == "metadata-rebase" })
             assertEquals(plan.derived?.patchedKernelSha256, candidate.kernelSha256)
             assertEquals(before, UltraKernelSpec.sha256(sample))
         } finally {
             workspace.deleteRecursively()
         }
+    }
+
+    private fun legacyPlan(kernel: ByteArray, credential: UltraKernelCredential): UltraKernelPlan {
+        val symbols = UltraKernelExecveEntry.resolve(UltraKernelKallsymsTable.decode(kernel), kernel)
+        val rendered = UltraKernelRecipe.k22().renderDetailed(symbols, kernel, credential,
+            preservedMetadataDisplacement = credential.metadataDisplacement)
+        val envelope = rendered.records.single { it.role == "free_initmem+0x0" }
+        val executor = rendered.records.single { it.role == "__drm_printfn_coredump+0x0" }
+        val displacement = credential.metadataDisplacement ?: Math.toIntExact(
+            envelope.site.toLong() + 4 - executor.site - UltraKernelBodies.EXECUTOR_CALL_OFFSET)
+        val records = rendered.records.map {
+            UltraKernelPlan.PatchRecord(it.role, it.site.toLong(), it.original, it.replacement)
+        }
+        val plan = UltraKernelPlan.fromRecords(UltraKernelSpec.releaseOf(kernel), records,
+            credential = credential, baseKernelSha256 = UltraKernelSpec.sha256(kernel),
+            sdkMetadataDisplacement = displacement, layout = rendered.layout).rebind(credential)
+        return plan.withDerived(plan.apply(kernel).derived)
     }
 }

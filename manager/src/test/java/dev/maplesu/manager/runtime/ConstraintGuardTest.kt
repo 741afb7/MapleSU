@@ -1,6 +1,8 @@
 package dev.maplesu.manager.runtime
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -54,7 +56,7 @@ class ConstraintGuardTest {
             source.contains("sideLibraryCount("))
     }
 
-    /** The shared client carries no credential; the per-application image does. */
+    /** Shared and per-application entries both use the same unmodified client. */
     @Test fun publicationShipsACredentialFreeSharedClient() {
         val source = read("manager/src/main/java/dev/maplesu/manager/runtime/SuPublication.kt")
         assertFalse("shared publication embeds the credential again", source.contains("MPLSUKEY"))
@@ -86,26 +88,40 @@ class ConstraintGuardTest {
             source.contains("DirectPolicy.hasGrantStrict"))
     }
 
-    /**
-     * The delivered image is "client + magic + credential", and the client finds the
-     * credential by matching the magic. If the two sides ever disagree the image is written
-     * but never recognised, which looks exactly like "authorization silently stopped
-     * working". The values live in different languages, so they are compared here.
-     */
-    @Test fun trailerMagicAgreesOnBothSides() {
+    /** No production consumer may recreate the retired client trailer or stdin frame. */
+    @Test fun deliveredClientUsesCurrentCallerAdmission() {
         val client = read("runtime/src/su_main.cpp")
-        val trailer = read("manager/src/main/java/dev/maplesu/manager/runtime/SuDelivery.kt")
-        val clientMagic = Regex("""DELIVERED_MAGIC\[8\]\s*=\s*\{([^}]*)\}""").find(client)
-            ?.groupValues?.get(1)
-            ?.split(',')
-            ?.map { it.trim().trim('\'') }
-            ?.filter { it.isNotEmpty() }
-            ?.joinToString("")
-        val managerMagic = Regex("""MAGIC\s*=\s*"([^"]+)"""")
-            .find(trailer)?.groupValues?.get(1)
-        assertTrue("client magic not found", clientMagic != null)
-        assertTrue("manager magic not found", managerMagic != null)
-        assertTrue("trailer magic differs: client=$clientMagic manager=$managerMagic",
-            clientMagic == managerMagic)
+        assertFalse(client.contains("DELIVERED_MAGIC"))
+        val delivery = read("manager/src/main/java/dev/maplesu/manager/runtime/SuDelivery.kt")
+        assertTrue("client bootstrap needs its installed image path", delivery.contains("ln -sfn"))
+        for (name in listOf("SuDelivery", "SuPublication", "SuPathWiring")) {
+            val source = read("manager/src/main/java/dev/maplesu/manager/runtime/$name.kt")
+            assertFalse("$name reads the retired secret store", source.contains("MapleSuCredentialStore"))
+            assertFalse("$name recreates the secret trailer", source.contains("MPLSUKEY"))
+            assertFalse("$name recreates the secret frame", source.contains("byteArrayOf(0, 0, 0, 48)"))
+        }
+        val publication = read("manager/src/main/java/dev/maplesu/manager/runtime/SuPublication.kt")
+        assertFalse("Pending must not remove a previous installation", publication.contains("rm -rf '\$previous'"))
+        assertFalse("a missing locator must stay unknown", publication.contains("/data/maplesu-su"))
+    }
+
+    @Test fun deliveredDigestBindsTheCompleteRawImage() {
+        val image = File.createTempFile("maplesu-raw-client", ".elf")
+        try {
+            val method = SuDelivery::class.java.getDeclaredMethod("deliveredImageSha", File::class.java)
+                .apply { isAccessible = true }
+            val bytes = ByteArray(96) { it.toByte() }
+            image.writeBytes(bytes)
+            val first = method.invoke(SuDelivery, image) as String
+            val expected = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            assertEquals(expected, first)
+            bytes[bytes.lastIndex] = 7
+            image.writeBytes(bytes)
+            assertNotEquals("the old trailer region is part of the actual file", first,
+                method.invoke(SuDelivery, image))
+        } finally {
+            image.delete()
+        }
     }
 }

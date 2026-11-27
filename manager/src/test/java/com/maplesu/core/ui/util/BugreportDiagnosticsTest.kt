@@ -124,7 +124,37 @@ class BugreportDiagnosticsTest {
         BugreportDiagnostics.collect(protected, files, destination)
 
         assertEquals(setOf("diagnostics-collection.log"), destination.list()!!.toSet())
-        assertTrue(File(destination, "diagnostics-collection.log").readText().contains("MISSING_OR_UNREADABLE"))
+        assertTrue(File(destination, "diagnostics-collection.log").readLines()
+            .any { it == "MISSING native-stage.log" })
+    }
+
+    @Test fun emptyEvidenceRetainsItsOwnCollectionStateAndProvenance() {
+        val protected = temporary.newFolder("empty-log-protected")
+        val files = temporary.newFolder("empty-log-files")
+        val destination = temporary.newFolder("empty-log-report")
+        File(protected, "native-stage.log").writeBytes(byteArrayOf())
+
+        BugreportDiagnostics.collect(protected, files, destination)
+
+        assertTrue(File(destination, "native-stage.log").isFile)
+        assertEquals(0L, File(destination, "native-stage.log").length())
+        val record = File(destination, "diagnostics-collection.log").readLines()
+            .single { it.startsWith("EMPTY native-stage.log ") }
+        assertTrue(record.contains("bytes=0 sourceBytesBefore=0 "))
+        assertTrue(record.contains("bootScope=UNVERIFIED"))
+    }
+
+    @Test fun aDirectoryAtALogPathIsNotReportedAsMissing() {
+        val protected = temporary.newFolder("directory-log-protected")
+        val files = temporary.newFolder("directory-log-files")
+        val destination = temporary.newFolder("directory-log-report")
+        File(protected, "native-stage.log").mkdir()
+
+        BugreportDiagnostics.collect(protected, files, destination)
+
+        assertFalse(File(destination, "native-stage.log").exists())
+        assertTrue(File(destination, "diagnostics-collection.log").readLines()
+            .any { it == "NOT_REGULAR_FILE native-stage.log" })
     }
 
     @Test fun exportsFullNativePreparationAndWorkerLogsForBothProvidersAndModes() {

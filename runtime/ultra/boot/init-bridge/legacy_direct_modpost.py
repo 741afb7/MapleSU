@@ -120,8 +120,12 @@ def staged_sources(source):
         if not path.is_relative_to(source) or any(identity(path)[key] != row["selected"][key] for key in ("bytes", "sha256")):
             raise ValueError("ULTRA_BRIDGE_DIRECT_STAGED_IDENTITY:" + relative)
         paths.append(path)
-    # Snapshot generated Kbuild fragments and headers as actual build inputs too.
-    return list(dict.fromkeys([*paths, *sorted(path for path in source.rglob("*") if path.is_file())]))
+    # Include generated compiler inputs, not cached outputs rewritten by make.
+    generated = sorted(path for path in source.rglob("*") if path.is_file() and
+                       (path.name in ("Kbuild", "Makefile") or
+                        path.suffix in (".c", ".h", ".S", ".s", ".inc", ".mk")) and
+                       not path.name.endswith(".mod.c"))
+    return list(dict.fromkeys([*paths, *generated]))
 
 
 def arguments_facts(arguments, stdin, request):

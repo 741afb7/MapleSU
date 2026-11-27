@@ -25,7 +25,7 @@ object ModeSwitchRootMain {
         val lease = ModeSwitchRootLease()
         val requests = ModeSwitchRootRequests(
             execute = commands::execute,
-            uninstall = { rootKey -> uninstall(configuration.nativeDirectory, rootKey) },
+            uninstall = { uninstall(configuration.nativeDirectory) },
             acquire = lease::acquire,
             release = lease::release,
             isHeld = lease::isHeld,
@@ -64,7 +64,7 @@ object ModeSwitchRootMain {
         }
     }
 
-    internal fun uninstall(nativeDirectory: String, rootKey: String): ModeSwitchRootProtocol.Reply {
+    internal fun uninstall(nativeDirectory: String): ModeSwitchRootProtocol.Reply {
         val worker = Executors.newSingleThreadExecutor { task ->
             Thread(task, "maplesu-mode-switch-sdk").apply { isDaemon = true }
         }
@@ -75,7 +75,7 @@ object ModeSwitchRootMain {
             } else {
                 ModeSwitchRootProtocol.uninstallAndReboot(
                     remove = {
-                        val receipt = UltraRuntimeClient { rootKey }.uninstallEnvironment()
+                        val receipt = UltraRuntimeClient().uninstallEnvironment()
                         if (receipt.succeeded) ModeSwitchRootProtocol.Reply(0)
                         else ModeSwitchRootProtocol.Reply(-1, detail = "MODE_SWITCH_ULTRA_UNINSTALL_FAILED")
                     },

@@ -39,18 +39,18 @@
     "dl",
     "m"
   ],
-  "feature_token": "8ba9d457344d22b85d3e7f7263c3dd04d9effeb1becb41a806eaaa9926087fae49c43c1c3d64c98333e8017195c6ab7bfe7e72a99c4530b267705824e5d6e700",
   "reference": {
     "bytes": 766320,
     "sha256": "9f6557d3e09a223ff82d2adb10b6f865afe5fd3aa71cc3f0d856c7c22ed39cd8",
     "origin": "frozen archive member skroot_unsafe_webui_loader_install.o .data (skroot_env::webui_loader_data), extracted into sdk/assets/webui_loader.bin"
   },
   "ownerLaunch": {
-    "date": "2026-11-19",
-    "status": "source-only-unbuilt",
-    "privateContract": "src/startup_receipt.h: StartupReceipt v1 24 bytes unchanged; Owner argument --maplesu-webui-directory-v1 selects a 32-byte DeploymentDirectory v1 read descriptor and successful receipt appendix.",
-    "authority": "Owner uses inherited uid/euid0; directory facts do not grant Root and carry no session or Key. The installer-patched credential remains only at the existing external Legacy module callback boundary.",
+    "date": "2026-11-26",
+    "status": "source-implemented-formal-payload-and-device-pending",
+    "privateContract": "StartupReceipt v1 24 bytes and DeploymentDirectory v1 32 bytes remain unchanged. --maplesu-webui-directory-legacy-v1 explicitly adds a validated 64-byte LegacyCredential v1 record on the same anonymous FD; no Key is placed in argv.",
+    "authority": "Current-task root is acquired before Owner exec. The deployment directory is a nonsecret path fact. Only an explicitly configured actual credential reaches the historical module ABI; Owner launches never use the installed compatibility slot.",
     "pairedMember": "manifest/0062_maplesu_module_webui_loader.o.json",
-    "delivery": "Payload regeneration, embedded bytes, SDK/helper/APK formal combination and devices are pending."
+    "delivery": "Payload regeneration, embedded bytes, SDK/helper/APK formal combination and devices are pending.",
+    "legacyCaller": "Historical 5/8-argument callers use only a real 48-byte installer-patched feature slot; the unpatched marker fails. New callers retain Owner v1 for older directory-aware payloads only when their actual installed slot exactly matches the configured credential."
   }
 }

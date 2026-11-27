@@ -46,7 +46,7 @@ uint32_t align_to_page(uint32_t size, uint32_t page_size) {
     return (size + page_size - 1) & ~(page_size - 1);
 }
 
-bool valid_legacy_memory_range(uint64_t kaddr, const void* buffer, uint32_t size) {
+bool valid_memory_range(uint64_t kaddr, const void* buffer, uint32_t size) {
     const auto user = reinterpret_cast<uintptr_t>(buffer);
     return kaddr != 0 && buffer != nullptr && size != 0 &&
         kaddr <= std::numeric_limits<uint64_t>::max() - (size - 1) &&
@@ -93,7 +93,8 @@ static int64_t dispatch_kernel_request(KernelCmdFlag flag, uint8_t sub, uint64_t
         }
     }
 
-    const char* root_key = key_snapshot ? key_snapshot : current_module_root_key();
+    const char* root_key = maplesu_request_auth_legacy(maplesu_request_auth_state())
+        ? (key_snapshot ? key_snapshot : current_module_root_key()) : MAPLESU_OWNER_ENVELOPE_PREFIX;
     if (root_key == nullptr) {
         return to_num(KModErr::ERR_MODULE_ROOT_KEY);
     }
@@ -230,7 +231,12 @@ KModErr exchange_v2(uint32_t command, uint64_t arg0, uint64_t arg1, bool probe,
 namespace { bool management_session_open(); }
 
 uint64_t maplesu_request_auth_state() {
-    return request_auth_state.load(std::memory_order_acquire);
+    auto state = request_auth_state.load(std::memory_order_acquire);
+    if (!state) {
+        state = next_auth_state(RequestAuthMode::ManagerOwner);
+        request_auth_state.store(state, std::memory_order_release);
+    }
+    return state;
 }
 
 KModErr maplesu_request_set_auth_mode(RequestAuthMode mode) {
@@ -389,7 +395,7 @@ KModErr owner_raw_exchange(uint32_t command, uint64_t arg0, uint64_t arg1,
         !(management && command >= MAPLESU_REQUEST_SESSION_OPEN && command <= MAPLESU_REQUEST_SU_RUNTIME_READ &&
           command != MAPLESU_REQUEST_VENDOR_STATE))
         return KModErr::ERR_MODULE_PARAM;
-    if (!owner_identity_matches(binding)) return KModErr::ERR_MODULE_ROOT_KEY;
+    if (!owner_identity_matches(binding)) { errno = ESTALE; return KModErr::ERR_MODULE_ROOT_KEY; }
     if (maplesu_request_auth_helper(binding.auth_state) && command == MAPLESU_REQUEST_QUERY) {
         errno = EPERM;
         return KModErr::ERR_MODULE_ROOT_KEY;
@@ -426,8 +432,10 @@ KModErr owner_raw_exchange(uint32_t command, uint64_t arg0, uint64_t arg1,
     }
     if (!key_management && (candidate.completion_magic != MAPLESU_RESPONSE_MAGIC ||
         candidate.version != MAPLESU_OWNER_PROTOCOL_VERSION || candidate.length != sizeof(candidate) ||
-        candidate.command != command || candidate.request_id != request.request_id))
+        candidate.command != command || candidate.request_id != request.request_id)) {
+        errno = EPROTO;
         return KModErr::ERR_MODULE_TEST_CHANNEL;
+    }
     if (management) {
         uint32_t effects = MAPLESU_EFFECT_QUARANTINED | MAPLESU_EFFECT_SESSION_CLOSED;
         if (command == MAPLESU_REQUEST_SESSION_OPEN && maplesu_request_auth_helper(binding.auth_state) &&
@@ -471,8 +479,10 @@ KModErr owner_raw_exchange(uint32_t command, uint64_t arg0, uint64_t arg1,
         if (candidate.status > 0 || candidate.status < -4095 || candidate.metadata_version || (candidate.metadata_length & ~effects) ||
             (command != MAPLESU_REQUEST_ALLOC && command < MAPLESU_REQUEST_PUBLICATION_PREPARE &&
                 !(command == MAPLESU_REQUEST_SESSION_OPEN && maplesu_request_auth_helper(binding.auth_state) &&
-                  !binding.epoch) && candidate.metadata_address))
+                  !binding.epoch) && candidate.metadata_address)) {
+            errno = EPROTO;
             return KModErr::ERR_MODULE_TEST_CHANNEL;
+        }
         // Retain this call's validated wire facts if its authority changed
         // afterwards. The caller still validates command shape and fails closed.
         response = candidate;
@@ -496,9 +506,19 @@ KModErr owner_raw_exchange(uint32_t command, uint64_t arg0, uint64_t arg1,
         if (!owner_identity_matches(binding)) return KModErr::ERR_MODULE_ROOT_KEY;
         *query_rejected = true;
     }
-    if (candidate.status == MAPLESU_REQUEST_STATUS_INVALID) return KModErr::ERR_MODULE_PARAM;
-    if (candidate.status == MAPLESU_REQUEST_STATUS_FAULT) return KModErr::ERR_MODULE_NOT_KADDR;
-    if (candidate.status != MAPLESU_REQUEST_STATUS_OK) return KModErr::ERR_MODULE_TEST_CHANNEL;
+    if (candidate.status > 0 || candidate.status < -4095) {
+        errno = EPROTO;
+        return KModErr::ERR_MODULE_TEST_CHANNEL;
+    }
+    if (candidate.status) {
+        errno = -candidate.status;
+        if (candidate.status == MAPLESU_REQUEST_STATUS_INVALID) return KModErr::ERR_MODULE_PARAM;
+        if (candidate.status == MAPLESU_REQUEST_STATUS_FAULT) return KModErr::ERR_MODULE_NOT_KADDR;
+        if (candidate.status == MAPLESU_REQUEST_STATUS_NOMEM) return KModErr::ERR_NO_MEM;
+        if (candidate.status == MAPLESU_REQUEST_STATUS_DENIED || candidate.status == MAPLESU_REQUEST_STATUS_STALE)
+            return KModErr::ERR_MODULE_ROOT_KEY;
+        return KModErr::ERR_MODULE_TEST_CHANNEL;
+    }
     if (!owner_identity_matches(binding)) return KModErr::ERR_MODULE_ROOT_KEY;
     response = candidate;
     return KModErr::OK;
@@ -629,9 +649,31 @@ KModErr maplesu_request_owner_channel(maplesu_metadata_owner_v3& metadata,
     return KModErr::OK;
 }
 
+KModErr maplesu_request_worker_admission() {
+    const auto state = maplesu_request_auth_state();
+    if (maplesu_request_auth_legacy(state)) {
+        RequestIdentity identity;
+        return identity.capture() ? KModErr::OK : KModErr::ERR_MODULE_ROOT_KEY;
+    }
+    if (maplesu_request_auth_manager(state)) {
+        maplesu_metadata_owner_v3 metadata{};
+        uint64_t descriptor = 0;
+        RequestOwnerBinding binding{};
+        return maplesu_request_owner_channel(metadata, descriptor, binding);
+    }
+    if (maplesu_request_auth_helper(state) && !getuid() && !geteuid()) {
+        // Existing native init-user-ns/exact-helper verification; never OPEN a
+        // parent session. Normal helper startup has already observed this state.
+        maplesu_installation_state_v3 installation{};
+        return maplesu_request_helper_vendor(MAPLESU_INSTALLATION_READ, 0, installation);
+    }
+    errno = EPERM;
+    return KModErr::ERR_MODULE_ROOT_KEY;
+}
+
 KModErr maplesu_request_owner_read(uint64_t source, void* destination, uint32_t size,
     const RequestOwnerBinding& binding) {
-    if (!valid_legacy_memory_range(source, destination, size) ||
+    if (!valid_memory_range(source, destination, size) ||
         source < UINT64_C(0xffff000000000000)) return KModErr::ERR_MODULE_PARAM;
     const auto identity = binding;
     if (!maplesu_request_owner_binding_matches(identity)) return owner_failed(KModErr::ERR_MODULE_ROOT_KEY, identity.auth_state);
@@ -1387,7 +1429,7 @@ KModErr owner_read(uint64_t address, void* output, uint32_t size) {
 }
 KModErr owner_write(uint64_t address, const void* data, uint32_t size) {
     management_reply = {};
-    if (!valid_legacy_memory_range(address, data, size) || size > MAPLESU_MANAGEMENT_MAX_BYTES)
+    if (!valid_memory_range(address, data, size) || size > MAPLESU_MANAGEMENT_MAX_BYTES)
         return KModErr::ERR_MODULE_PARAM;
     const auto entry = owner_allocation(address);
     const auto handle = entry == owner_management.allocations.end() ? 0 : entry->handle;
@@ -1773,7 +1815,7 @@ KModErr maplesu_request_owner_caps(const maplesu_caps_v3& caps) {
 }
 KModErr maplesu_request_owner_write_text(uint64_t address, const void* data, uint32_t size) {
     management_reply = {};
-    if (!valid_legacy_memory_range(address, data, size) ||
+    if (!valid_memory_range(address, data, size) ||
         address < UINT64_C(0xffff000000000000) || (address & 3) ||
         size > MAPLESU_MANAGEMENT_MAX_BYTES) return KModErr::ERR_MODULE_PARAM;
     const uint64_t rounded = (static_cast<uint64_t>(size) + 3) & ~UINT64_C(3);
@@ -2372,7 +2414,7 @@ KModErr unsafe_request_kernel_alloc_mem(uint32_t size, uint64_t& out_kaddr) {
 
 KModErr unsafe_request_kernel_write_mem(uint64_t kaddr, const void* buf, uint32_t size) {
     if (maplesu_request_owner_mode() || maplesu_request_managed_allocation(kaddr)) return owner_write(kaddr, buf, size);
-    if (!valid_legacy_memory_range(kaddr, buf, size)) {
+    if (!valid_memory_range(kaddr, buf, size)) {
         return KModErr::ERR_MODULE_PARAM;
     }
     const auto* bytes = static_cast<const uint8_t*>(buf);
@@ -2396,7 +2438,7 @@ KModErr unsafe_request_kernel_read_mem(uint64_t kaddr, void* buf, uint32_t size)
             maplesu_request_v2_read(kaddr, buf, size);
     }
     if (maplesu_request_owner_mode()) return owner_read(kaddr, buf, size);
-    if (!valid_legacy_memory_range(kaddr, buf, size)) {
+    if (!valid_memory_range(kaddr, buf, size)) {
         return KModErr::ERR_MODULE_PARAM;
     }
     auto* bytes = static_cast<uint8_t*>(buf);
@@ -2507,7 +2549,7 @@ int64_t maplesu_release_staging(uint64_t address) {
 extern "C" __attribute__((visibility("hidden")))
 KModErr maplesu_legacy_request_kernel_read_mem(uint64_t kaddr, void* buf, uint32_t size) {
     if (maplesu_request_owner_mode()) return owner_read(kaddr, buf, size);
-    if (!valid_legacy_memory_range(kaddr, buf, size)) return KModErr::ERR_MODULE_PARAM;
+    if (!valid_memory_range(kaddr, buf, size)) return KModErr::ERR_MODULE_PARAM;
     SuidSgidGuard guard;
     if (is_failed(guard.status())) return guard.status();
     const KModErr error = unsafe_request_kernel_read_mem(kaddr, buf, size);

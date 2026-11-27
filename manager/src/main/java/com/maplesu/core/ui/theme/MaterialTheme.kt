@@ -76,7 +76,8 @@ fun MaterialKernelSUTheme(
     val animatedBase = if (wallpaperStyle != null && wallpaperStyle.darkNeutral != darkTheme)
         animatedPalette.withThemeNeutral(neutral) else animatedPalette
     val effectiveStyle = wallpaperStyle
-    val animatedColorScheme = animatedBase.let {
+    val imported = ThemeRuntime.observe()
+    val animatedColorScheme = animatedBase.withSukisuColors(imported).let {
         if (effectiveStyle != null) it.withThemeWallpaper(effectiveStyle)
         else if (surfaceAlpha >= 1f) it else it.translucent(surfaceAlpha)
     }

@@ -4,27 +4,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class UltraRecoveryFingerprintTest {
-    @Test fun removingTheKeyDiscardsProofAndExplicitlyResolvesTheNoKeyIdentity() {
-        for (state in UltraEnvironmentProbe.State.entries) {
-            val old = UltraEnvironmentProbe.Snapshot(state, kernelRootVerified = true)
-            val observed = UltraEnvironmentProbe.scopeSnapshot(old, null, "old-key", "boot-1", "boot-1", false)
-            assertEquals(UltraEnvironmentProbe.State.NoKey, observed.state)
-            assertFalse(observed.kernelRootVerified)
-            assertFalse(observed.rootAvailable)
-            assertNull(UltraEnvironmentProbe.recoveryFingerprint(observed.state, false, observed.kernelRootVerified))
-        }
-    }
 
-    @Test fun proofRequiresTheSameKeyBootAndAnUnsuspendedIdentity() {
-        val running = UltraEnvironmentProbe.Snapshot(UltraEnvironmentProbe.State.Running, kernelRootVerified = true)
-        assertEquals(running, UltraEnvironmentProbe.scopeSnapshot(running, "key", "key", "boot-1", "boot-1", false))
-        for ((key, boot, paused) in listOf(Triple("other-key", "boot-1", false),
-            Triple("key", "boot-2", false), Triple("key", "", false), Triple("key", "boot-1", true))) {
-            val observed = UltraEnvironmentProbe.scopeSnapshot(running, key, "key", boot, "boot-1", paused)
-            assertEquals(UltraEnvironmentProbe.State.Unknown, observed.state)
-            assertFalse(observed.kernelRootVerified)
-            assertFalse(observed.rootAvailable)
+
+
+
+    @Test fun unavailableSdkAndMalformedIdentityPreserveUnknownAndExactFailureDetails() {
+        for (available in listOf(false, true)) for (detail in listOf(
+            "MAPLESU_SDK_BUSY", "MAPLESU_SDK_INTERRUPTED", "TIMEOUT",
+            "operation=query_manager_owner_identity;sdkError=OK;sdkErrorCode=0;identity=invalid_reply",
+            "operation=query_manager_owner_identity;sdkError=JNI_NOT_LOADED;sdkErrorCode=-1")) {
+            val observation = UltraEnvironmentProbe.Snapshot(detail = detail, sdkChannelAvailable = available)
+            val failure = assertThrows(IllegalStateException::class.java) {
+                UltraEnvironmentProbe.recoveryFingerprint(observation.state, false,
+                    observation.kernelRootVerified, observation.kernelChannelAbsent, observation.detail)
+            }
+            assertEquals("ULTRA_RECOVERY_PROBE_UNKNOWN:$detail", failure.message)
         }
+        val absent = UltraEnvironmentProbe.Snapshot(kernelChannelAbsent = true,
+            detail = "operation=query_manager_owner_identity;sdkError=ERR_MODULE_NO_BOOT;sdkErrorCode=-1")
+        assertNull(UltraEnvironmentProbe.recoveryFingerprint(absent.state, false,
+            absent.kernelRootVerified, absent.kernelChannelAbsent, absent.detail))
     }
 
     @Test fun noBootIsDefinitiveAbsenceWhereasBusyAndTimeoutRemainUnknown() {
@@ -44,10 +43,21 @@ class UltraRecoveryFingerprintTest {
             UltraEnvironmentProbe.recoveryFingerprint(UltraEnvironmentProbe.State.Unknown, false)
         }
     }
+
+    @Test fun failedSdkChannelPreservesTheExactOperationAndErrorForTheResolver() {
+        val receipt = requireNotNull(NativeReceipt.parse("""{"schemaVersion":1,"backend":"maplesu_ultra","bridgeVersion":1,"operation":"query_manager_owner_identity","ok":false,"sdkError":"ERR_MODULE_TEST_CHANNEL","sdkErrorCode":-19999}"""))
+        val detail = UltraEnvironmentProbe.observationDetail(receipt)
+        val error = assertThrows(IllegalStateException::class.java) {
+            UltraEnvironmentProbe.recoveryFingerprint(UltraEnvironmentProbe.State.Unknown, false, detail = detail)
+        }
+        assertEquals("ULTRA_RECOVERY_PROBE_UNKNOWN:operation=query_manager_owner_identity;sdkError=ERR_MODULE_TEST_CHANNEL;sdkErrorCode=-19999",
+            error.message)
+        assertEquals("$detail;identity=invalid_reply", UltraEnvironmentProbe.observationDetail(receipt, invalidIdentity = true))
+    }
     @Test fun onlyLiveRunningOrApplicableFaultIdentifiesUltra() {
         assertEquals("ultra:running", UltraEnvironmentProbe.recoveryFingerprint(UltraEnvironmentProbe.State.Running, false))
         assertEquals("ultra:fault", UltraEnvironmentProbe.recoveryFingerprint(UltraEnvironmentProbe.State.Fault, true))
-        for (state in listOf(UltraEnvironmentProbe.State.NotInstalled, UltraEnvironmentProbe.State.NoKey,
+        for (state in listOf(UltraEnvironmentProbe.State.NotInstalled,
             UltraEnvironmentProbe.State.Fault)) assertNull(UltraEnvironmentProbe.recoveryFingerprint(state, false))
     }
 
@@ -71,7 +81,7 @@ class UltraRecoveryFingerprintTest {
         assertFalse(UltraEnvironmentProbe.verifyKernelRoot(UltraEnvironmentProbe.State.Unknown, false) {
             error("A failed receipt must not start another SDK command")
         })
-        for (state in listOf(UltraEnvironmentProbe.State.Running, UltraEnvironmentProbe.State.Fault,
+        for (state in listOf(UltraEnvironmentProbe.State.Fault,
             UltraEnvironmentProbe.State.NoKey)) {
             assertFalse(UltraEnvironmentProbe.verifyKernelRoot(state, true) { error("No probe for $state") })
         }

@@ -27,8 +27,10 @@
 #endif
 
 extern int path_umount(struct path *path, int flags);
+#ifndef path_mount
 extern int path_mount(const char *dev_name, struct path *path,
     const char *type_page, unsigned long flags, void *data_page);
+#endif
 _Static_assert(__builtin_types_compatible_p(typeof(&path_umount),
     int (*)(struct path *, int)), "native path_umount ABI");
 

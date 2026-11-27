@@ -157,19 +157,3 @@ int helper_state_path(const struct helper_context* context, const char* suffix,
     if (helper_append(out, capacity, &length, suffix) != HELPER_OK) return HELPER_E_OVERFLOW;
     return HELPER_OK;
 }
-
-// The installed bootstrap and five-state lists use Key16. Module files use
-// Key17 separately in module_runtime::system_directory.
-int helper_data_dir_from_key(const char* key, helper_u32 key_length, char* out,
-                             helper_u32 capacity) {
-    if (key == 0 || out == 0 || key_length < 16 || capacity < 26) return HELPER_E_INVAL;
-    helper_u32 length = 0;
-    out[0] = '\0';
-    if (helper_append(out, capacity, &length, "/data/") != HELPER_OK) return HELPER_E_OVERFLOW;
-    for (helper_u32 index = 0; index < 16; ++index) {
-        const char value = key[index];
-        if (!helper_is_alpha_numeric(value)) return HELPER_E_INVAL;
-        if (helper_append_char(out, capacity, &length, value) != HELPER_OK) return HELPER_E_OVERFLOW;
-    }
-    return HELPER_OK;
-}

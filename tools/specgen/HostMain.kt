@@ -12,7 +12,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.system.exitProcess
 
-/** Host entry to the product generator and builder; credentials arrive on stdin, never in argv. */
+/** Host entry to the same keyless generator and builder selected by the Manager. */
 fun main(args: Array<String>) {
     try {
         require(args.size % 2 == 0) { "ULTRA_HOST_ARGUMENTS" }
@@ -71,11 +71,10 @@ fun main(args: Array<String>) {
         require(assetsRoot.isDirectory) { "ULTRA_HOST_MANAGER_CLAIM_ASSETS_MISSING" }
         val release = UltraKernelSpec.releaseOf(kernel)
         options["--require-release"]?.let { require(it == release) { "ULTRA_KERNEL_RELEASE_MISMATCH" } }
-        val credential = UltraKernelCredential.of(System.`in`.bufferedReader().readLine().orEmpty())
         val plan = UltraKernelSpecGenerator(managerClaimAssets = UltraKernelFileAssets(assetsRoot))
-            .generate(kernel, credential)
+            .generate(kernel)
         val applied = plan.apply(kernel)
-        val text = plan.specText(requireNotNull(plan.credential))
+        val text = plan.specText()
         val spec = UltraKernelSpec.parse(text)
         check(spec.apply(kernel).kernel.contentEquals(applied.kernel)) { "ULTRA_HOST_SPEC_REPLAY_MISMATCH" }
 
@@ -151,7 +150,7 @@ fun main(args: Array<String>) {
         System.err.println("${error.code}:${error.detail}")
         exitProcess(3)
     } catch (error: Exception) {
-        // Do not echo arbitrary input, command lines or credentials on failure.
+        // Keep arbitrary input and command lines out of failure output.
         val code = error.message?.takeIf { it.matches(Regex("[A-Z][A-Z0-9_]{0,120}")) }
         System.err.println(code ?: "ULTRA_HOST_FAILED:${error.javaClass.simpleName}")
         exitProcess(3)

@@ -42,7 +42,7 @@ struct msu_resident_config_v2 {
     msu_loader_u32 version, config_bytes, append_bytes, namespace_record_bytes;
     const void *image;
     const void *append;
-    const char *credential;
+    const char *credential; /* Optional historical claim; owner-v3 does not consume it. */
     const struct msu_deployment_namespace_record *namespace_record;
 };
 
@@ -66,7 +66,7 @@ struct msu_resident_config {
     msu_loader_u32 version, append_bytes;
     const void *image;
     const void *append;
-    const char *credential;
+    const char *credential; /* Optional historical claim; NULL keeps owner-v3 available. */
 };
 
 /* Private paired-support contract. The prefix is allocated separately from the

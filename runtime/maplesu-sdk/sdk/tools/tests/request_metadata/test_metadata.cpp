@@ -34,15 +34,25 @@ std::atomic<unsigned> checks{0}, failures{0}, old_calls{0};
 struct Fixture {
     std::string key;
     pid_t pid = 123;
+    uint64_t auth_state = 4;
     bool supported = true;
     bool channel_oom = false, read_oom = false;
     unsigned identity_change_on_read = 0, identity_change_on_channel = 0;
     unsigned identity_change_on_legacy = 0;
+    unsigned identity_change_on_data = 0;
+    unsigned owner_channels = 0, owner_reads = 0;
+    bool owner_binding_valid = true;
+    KModErr owner_error = KModErr::OK;
     uint64_t legacy_result = append;
     uint64_t capabilities = 7, address = descriptor;
     unsigned descriptor_reads = 0, data_reads = 0, channel_calls = 0, read_calls = 0, unpublished_reads = 0;
     KModErr channel_error = KModErr::OK, read_error = KModErr::OK;
     KModErr legacy_error = KModErr::OK;
+    bool key_alloc_supported = false, managed_allocation = false, memory_ops = false;
+    bool older_kernel = false, patch_skipped = false;
+    unsigned key_allocs = 0, raw_allocs = 0, releases = 0, owner_writes = 0;
+    KModErr key_alloc_error = KModErr::OK, release_error = KModErr::OK;
+    std::array<uint8_t,600> memory{};
     maplesu_metadata_v2 metadata{};
     uint32_t published_bytes = 54;
     std::array<uint8_t,58> data{};
@@ -75,31 +85,48 @@ extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2
     return fixture.key.c_str();
 }
 namespace kernel_module {
-// This suite exercises the legacy-Key QUERY/READ consumers. Keep owner-mode
-// transport unavailable so the fixture cannot accidentally claim v3 coverage.
-uint64_t maplesu_request_auth_state() { return 0; }
-bool maplesu_request_managed_allocation(uint64_t) { return false; }
-KModErr maplesu_request_key_alloc(uint32_t, uint64_t&, bool& supported) {
-    supported = false; return KModErr::OK;
+// Request I/O is a seam; both canonical READ TUs and metadata consumers are real.
+uint64_t maplesu_request_auth_state() { return fixture.auth_state; }
+bool maplesu_request_managed_allocation(uint64_t) { return fixture.managed_allocation; }
+KModErr maplesu_request_key_alloc(uint32_t, uint64_t& address, bool& supported) {
+    ++fixture.key_allocs; supported = fixture.key_alloc_supported;
+    if (is_ok(fixture.key_alloc_error) && supported) address=source;
+    return fixture.key_alloc_error;
 }
-bool maplesu_request_owner_binding_matches(const RequestOwnerBinding&) { return false; }
-KModErr maplesu_request_owner_channel(maplesu_metadata_owner_v3&, uint64_t&,
-                                      RequestOwnerBinding&) {
-    return KModErr::ERR_MODULE_TEST_CHANNEL;
+bool maplesu_request_owner_binding_matches(const RequestOwnerBinding& binding) {
+    return fixture.owner_binding_valid && binding.auth_state == fixture.auth_state;
 }
-KModErr maplesu_request_owner_read(uint64_t, void*, uint32_t,
-                                   const RequestOwnerBinding&) {
-    return KModErr::ERR_MODULE_TEST_CHANNEL;
+KModErr maplesu_request_owner_channel(maplesu_metadata_owner_v3& metadata, uint64_t& address,
+                                      RequestOwnerBinding& binding) {
+    ++fixture.owner_channels;
+    if (is_failed(fixture.owner_error)) return fixture.owner_error;
+    if (!maplesu_request_auth_authenticated(fixture.auth_state)) return KModErr::ERR_MODULE_ROOT_KEY;
+    metadata = {}; metadata.common = fixture.metadata;
+    metadata.common.version = MAPLESU_OWNER_METADATA_VERSION;
+    metadata.common.length = MAPLESU_OWNER_METADATA_WIRE_BYTES;
+    address = fixture.address;
+    binding = {}; binding.auth_state = fixture.auth_state;
+    return KModErr::OK;
+}
+KModErr maplesu_request_owner_read(uint64_t address, void* output, uint32_t size,
+                                   const RequestOwnerBinding& binding) {
+    ++fixture.owner_reads;
+    if (!maplesu_request_owner_binding_matches(binding)) return KModErr::ERR_MODULE_ROOT_KEY;
+    if (is_failed(fixture.owner_error)) return fixture.owner_error;
+    if (address < source || address-source > 600 || size > 600-(address-source))
+        return KModErr::ERR_MODULE_NOT_KADDR;
+    for (uint32_t i=0;i<size;++i) static_cast<uint8_t*>(output)[i]=uint8_t((address-source+i)*37+11);
+    return KModErr::OK;
 }
 KModErr maplesu_request_owner_write_text(uint64_t, const void*, uint32_t) {
-    return KModErr::ERR_MODULE_TEST_CHANNEL;
+    ++fixture.owner_writes; return KModErr::ERR_MODULE_TEST_CHANNEL;
 }
 // Windows uint64_t mangles differently from the fixed Android canonical entry.
 KModErr request_kernel_read_mem(uint64_t a,void* b,uint32_t c) {
     return _ZN13kernel_module23request_kernel_read_memEmPvj(a,b,c);
 }
 
-extern "C" int64_t maplesu_release_staging(uint64_t) { return 0; }
+extern "C" int64_t maplesu_release_staging(uint64_t) { ++fixture.releases; return static_cast<int64_t>(fixture.release_error); }
 KModErr maplesu_request_v2_channel(maplesu_response_v2& response,bool& supported) {
     ++fixture.channel_calls; response={}; supported=fixture.supported;
     if (fixture.channel_oom) throw std::bad_alloc();
@@ -135,7 +162,17 @@ KModErr maplesu_request_v2_read(uint64_t address,void* output,uint32_t size) {
     if (address>=append && address-append<0x1000) ++fixture.unpublished_reads;
     if (address>=source && address-source<=600 && size<=600-(address-source)) {
         ++fixture.data_reads;
+        if (fixture.memory_ops) {
+            std::memcpy(output,fixture.memory.data()+(address-source),size); return KModErr::OK;
+        }
         for (uint32_t i=0;i<size;++i) static_cast<uint8_t*>(output)[i]=uint8_t((address-source+i)*37+11);
+        switch (fixture.identity_change_on_data) {
+        case 1: fixture.key[47]='Z'; break;
+        case 2: ++fixture.pid; break;
+        case 3: fixture.auth_state+=4; break;
+        case 4: fixture.auth_state=1; break;
+        }
+        fixture.identity_change_on_data=0;
         return KModErr::OK;
     }
     return KModErr::ERR_MODULE_NOT_KADDR;
@@ -148,6 +185,15 @@ void maplesu_legacy_asm_func_end(Assembler*) { ++old_calls; }
 void maplesu_legacy_asm_func_end(Assembler*,GpX) { ++old_calls; }
 KModErr execute_kernel_asm_func(const std::vector<uint8_t>&,uint64_t& result) {
     ++old_calls; result=fixture.legacy_result;
+    if (fixture.memory_ops && !fixture.patch_skipped && !metadata_test::embedded().empty() && is_ok(fixture.legacy_error) && !result) {
+        const auto& tables=metadata_test::embedded();
+        const auto words=tables.size()/12;
+        for(size_t i=0;i<words;++i) {
+            uint64_t address=0; std::memcpy(&address,tables.data()+i*8,8);
+            if(address<source || address-source>fixture.memory.size()-4) return KModErr::ERR_MODULE_NOT_KADDR;
+            std::memcpy(fixture.memory.data()+(address-source),tables.data()+words*8+i*4,4);
+        }
+    }
     if (fixture.identity_change_on_legacy == 1) fixture.key[47] = 'Z';
     if (fixture.identity_change_on_legacy == 2) ++fixture.pid;
     fixture.identity_change_on_legacy = 0;
@@ -159,9 +205,13 @@ KModErr execute_kernel_asm_func_with_buf(const uint8_t*,uint32_t,uint64_t&) {
 KModErr kallsyms_lookup_name(const char*,SymbolHit&,SymbolMatchMode) {
     ++old_calls; return KModErr::ERR_MODULE_SYMBOL_NOT_EXIST;
 }
-KModErr kallsyms_lookup_name(const char*,uint64_t&) { ++old_calls; return KModErr::ERR_MODULE_SYMBOL_NOT_EXIST; }
-bool is_kernel_version_less(const char*) { ++old_calls; return false; }
-KModErr request_kernel_alloc_mem(uint32_t,uint64_t&) { ++old_calls; return KModErr::ERR_MODULE_ALLOC_MEM; }
+KModErr kallsyms_lookup_name(const char*,uint64_t& address) {
+    ++old_calls;
+    if(fixture.memory_ops) { address=source+0x1000; return KModErr::OK; }
+    return KModErr::ERR_MODULE_SYMBOL_NOT_EXIST;
+}
+bool is_kernel_version_less(const char*) { ++old_calls; return fixture.older_kernel; }
+KModErr request_kernel_alloc_mem(uint32_t,uint64_t&) { ++old_calls; ++fixture.raw_allocs; return KModErr::ERR_MODULE_ALLOC_MEM; }
 KModErr request_kernel_write_mem(uint64_t,const void*,uint32_t) { ++old_calls; return KModErr::ERR_MODULE_PARAM; }
 KModErr icache_invalidate_all_cpus() { ++old_calls; return KModErr::OK; }
 }
@@ -442,6 +492,107 @@ int main() {
     fixture.legacy_error=KModErr::OK;
     check(is_ok(get_append_package_run_fake_proc_path_addr(value))&&value==append+8);
     check(old_calls>legacy_after_error);
+    // Canonical READ must preserve a negotiated v2 error or observed identity
+    // change. Neither path may invoke the v1 resolver/emitter after negotiation.
+    const auto legacy_before_routing=old_calls.load();
+    const auto asm_before_routing=metadata_test::init_count.load();
+    for (unsigned change=1;change<=4;++change) {
+        reset(240+change); fixture.identity_change_on_data=change;
+        check(request_kernel_read_mem(source,bytes.data(),bytes.size())==KModErr::ERR_MODULE_ROOT_KEY);
+        check(fixture.read_calls==1&&fixture.owner_channels==0&&fixture.owner_reads==0);
+        check(old_calls==legacy_before_routing&&metadata_test::init_count==asm_before_routing);
+    }
+    for (auto error : {KModErr::ERR_MODULE_TEST_CHANNEL,KModErr::ERR_MODULE_NOT_KADDR,
+                       KModErr::ERR_MODULE_ASM,KModErr::ERR_MODULE_ROOT_KEY}) {
+        reset(250); fixture.read_error=error;
+        check(request_kernel_read_mem(source,bytes.data(),4)==error);
+        check(fixture.read_calls==1&&old_calls==legacy_before_routing);
+        reset(251); fixture.channel_error=error;
+        check(request_kernel_read_mem(source,bytes.data(),4)==error);
+        check(fixture.read_calls==0&&old_calls==legacy_before_routing);
+    }
+    // Owner/helper routing executes actual canonical READ and metadata facts.
+    // The transport itself is a seam; its full native behavior has a separate suite.
+    for (uint64_t state : {UINT64_C(1),UINT64_C(3)}) {
+        reset(260); fixture.auth_state=state;
+        bytes.fill(0xa5);
+        check(is_ok(request_kernel_read_mem(source,bytes.data(),bytes.size())));
+        for(size_t i=0;i<bytes.size();++i) check(bytes[i]==uint8_t(i*37+11));
+        RequestMetadataFacts facts{}; supported=false;
+        check(is_ok(maplesu_kernel_metadata_facts(facts,supported))&&supported);
+        check(facts.wire_version==3&&facts.wire_length==80&&facts.owner.auth_state==state);
+        check(facts.kernel_base==base&&facts.append==append);
+        check(fixture.owner_channels==2&&fixture.owner_reads==1);
+        check(fixture.channel_calls==0&&fixture.read_calls==0&&old_calls==legacy_before_routing);
+        fixture.owner_binding_valid=false;
+        check(maplesu_kernel_metadata_facts(facts,supported)==KModErr::ERR_MODULE_ROOT_KEY&&!supported);
+        check(request_kernel_read_mem(source,bytes.data(),4)==KModErr::ERR_MODULE_ROOT_KEY);
+        fixture.owner_binding_valid=true; fixture.owner_error=KModErr::ERR_MODULE_TEST_CHANNEL;
+        check(request_kernel_read_mem(source,bytes.data(),4)==KModErr::ERR_MODULE_TEST_CHANNEL);
+        check(maplesu_kernel_metadata_facts(facts,supported)==KModErr::ERR_MODULE_TEST_CHANNEL&&!supported);
+        check(fixture.channel_calls==0&&fixture.read_calls==0&&old_calls==legacy_before_routing);
+    }
+    for (uint64_t state : {UINT64_C(0),UINT64_C(2),UINT64_MAX}) {
+        reset(270); fixture.auth_state=state;
+        check(request_kernel_read_mem(source,bytes.data(),4)==KModErr::ERR_MODULE_ROOT_KEY);
+        check(fixture.channel_calls==0&&fixture.read_calls==0&&old_calls==legacy_before_routing);
+    }
+    reset(280); fixture.auth_state=1;
+    check(maplesu_kernel_legacy_read(source,bytes.data(),4)==KModErr::ERR_MODULE_TEST_CHANNEL);
+    check(fixture.channel_calls==0&&old_calls==legacy_before_routing);
+    // Actual public KMem entries must retain explicit Legacy negotiation and raw
+    // allocation ownership, while Owner/helper errors remain on their transport.
+    reset(300); value=sentinel; fixture.key_alloc_supported=true;
+    check(is_ok(alloc_kernel_mem(32,value))&&value==source);
+    check(fixture.key_allocs==1&&fixture.raw_allocs==0);
+    reset(301); value=sentinel;
+    check(alloc_kernel_mem(32,value)==KModErr::ERR_MODULE_ALLOC_MEM&&value==sentinel);
+    check(fixture.key_allocs==1&&fixture.raw_allocs==1);
+    reset(302); value=sentinel; fixture.key_alloc_error=KModErr::ERR_MODULE_ROOT_KEY;
+    check(alloc_kernel_mem(32,value)==KModErr::ERR_MODULE_ROOT_KEY&&value==sentinel);
+    check(fixture.key_allocs==1&&fixture.raw_allocs==0);
+    for(uint64_t state : {UINT64_C(1),UINT64_C(3)}) {
+        reset(303); fixture.auth_state=state;
+        check(alloc_kernel_mem(32,value)==KModErr::ERR_MODULE_ALLOC_MEM);
+        check(fixture.key_allocs==0&&fixture.raw_allocs==1);
+        fixture.release_error=KModErr::ERR_MODULE_TEST_CHANNEL;
+        check(free_kernel_mem(source)==fixture.release_error&&fixture.releases==1);
+        check(write_kernel_mem(source,bytes.data(),4,KernMemProt::KMP_RO)==KModErr::ERR_MODULE_TEST_CHANNEL);
+        check(fixture.owner_writes==1);
+    }
+    for(bool older : {false,true}) {
+        reset(304); fixture.older_kernel=older; fixture.legacy_result=0;
+        const auto before=older?metadata_test::module_frees.load():metadata_test::execmem_frees.load();
+        check(is_ok(free_kernel_mem(source))&&fixture.releases==0);
+        check((older?metadata_test::module_frees.load():metadata_test::execmem_frees.load())==before+1);
+    }
+    reset(305); fixture.managed_allocation=true; fixture.release_error=KModErr::ERR_MODULE_ROOT_KEY;
+    check(free_kernel_mem(source)==fixture.release_error&&fixture.releases==1);
+    check(free_kernel_mem(0)==KModErr::ERR_MODULE_PARAM);
+    check(free_kernel_mem(1)==KModErr::ERR_MODULE_NOT_KADDR);
+    // The 18-byte legacy bootstrap write preserves both bytes beside its last
+    // word. The test seam captures actual emitted tables, then models only the
+    // external kernel patch routine; production staging and verification run.
+    for(uint32_t size : {4u,18u,20u}) {
+        reset(306+size); fixture.memory_ops=true; fixture.legacy_result=0;
+        fixture.memory.fill(0xa5); bytes.fill(0x3c);
+        const auto before=metadata_test::patch_calls.load();
+        check(is_ok(write_kernel_mem(source,bytes.data(),size,KernMemProt::KMP_RO)));
+        check(fixture.owner_writes==0&&metadata_test::patch_calls==before+1);
+        for(uint32_t i=0;i<size;++i) check(fixture.memory[i]==0x3c);
+        for(uint32_t i=size;i<size+4;++i) check(fixture.memory[i]==0xa5);
+    }
+    reset(340); fixture.memory_ops=true; fixture.legacy_result=0; fixture.read_error=KModErr::ERR_MODULE_NOT_KADDR;
+    const auto patches=metadata_test::patch_calls.load();
+    check(write_kernel_mem(source,bytes.data(),18,KernMemProt::KMP_RO)==fixture.read_error);
+    check(metadata_test::patch_calls==patches&&fixture.owner_writes==0);
+    reset(341); fixture.memory_ops=true; fixture.legacy_error=KModErr::ERR_MODULE_ASM;
+    check(write_kernel_mem(source,bytes.data(),4,KernMemProt::KMP_RO)==fixture.legacy_error);
+    reset(342); fixture.memory_ops=true; fixture.legacy_result=1;
+    check(write_kernel_mem(source,bytes.data(),4,KernMemProt::KMP_RO)==KModErr::ERR_MODULE_ASM);
+    reset(343); fixture.memory_ops=true; fixture.legacy_result=0; fixture.patch_skipped=true;
+    check(write_kernel_mem(source,bytes.data(),18,KernMemProt::KMP_RO)==KModErr::ERR_MODULE_ASM);
+    check(fixture.owner_writes==0);
     std::printf("request-metadata: %u checks, %u failures; 16 threads, 1600 lookups; legacy seam %u\n",
                 checks.load(),failures.load(),old_calls.load());
     return failures?1:0;

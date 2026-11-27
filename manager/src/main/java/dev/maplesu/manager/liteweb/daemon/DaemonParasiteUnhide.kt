@@ -115,7 +115,7 @@ class DaemonParasiteUnhide(
         steps += stopDaemon()
         if (!steps.last().ok) return steps
 
-        // 解除成功才清身份材料；失败保留，重试时 daemon 还要用它解 rootkey 去撤销授权。
+        // 解除成功才清身份记录；失败保留，重试时 daemon 仍需核对当前安装与撤销目标。
         if (clearIdentityOnSuccess && !removeIdentity()) logger("hidden.unhide identity cleanup failed (retry will reuse it)")
         return steps
     }

@@ -1,4 +1,4 @@
-// MapleSU runtime log implementation and frozen external entry points.
+// MapleSU runtime log implementation and current keyless entry points.
 //
 #include "kernel_module_kit_umbrella.h"
 
@@ -47,16 +47,6 @@ static_assert(static_cast<ssize_t>(KModErr::ERR_MODULE_CREATE_EMPTY_FILE) == -19
 static_assert(static_cast<ssize_t>(KModErr::ERR_MODULE_READ_FILE) == -19932);
 static_assert(static_cast<ssize_t>(KModErr::ERR_SET_FILE_SELINUX) == -19915);
 
-static KModErr check_log_auth(const char* root_key, uint64_t& auth) {
-    auth = kernel_module::maplesu_request_auth_state();
-    if (!kernel_module::maplesu_request_auth_usable(auth)) return KModErr::ERR_MODULE_ROOT_KEY;
-    if (auth & 1) return KModErr::OK;
-    if (root_key == nullptr) return KModErr::ERR_MODULE_ROOT_KEY;
-    const size_t length = strnlen(root_key, 1024);
-    return length >= FOLDER_HEAD_ROOT_KEY_LEN && length < 1024
-        ? KModErr::OK : KModErr::ERR_MODULE_ROOT_KEY;
-}
-
 // Logs use the kernel deployment directory, not the 17-byte system directory.
 static KModErr get_autorun_bootstrap_path(std::string& path) {
     RETURN_IF_ERROR(storage::current_kernel_directory(path));
@@ -70,7 +60,9 @@ static KModErr run_log_worker(Operation&& operation) {
         storage::WorkerScope worker;
         const KModErr error = worker.root();
         if (is_failed(error)) return error;
-        return operation();
+        const auto result = operation();
+        const auto closed = worker.close_checked();
+        return is_failed(result) ? result : closed;
     } catch (...) {
         return KModErr::ERR_READ_CHILD_ERRCODE;
     }
@@ -103,11 +95,9 @@ static KModErr receive_log_worker(fork_pipe_info& pipe, Payload&& payload, KModE
     return finish_log_worker(pipe, code);
 }
 
-KModErr read(const char* root_key, void (*on_log_text)(const char*)) {
-    uint64_t auth = 0;
-    RETURN_IF_ERROR(check_log_auth(root_key, auth));
+KModErr read(void (*on_log_text)(const char*)) {
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     if (on_log_text == nullptr) return KModErr::ERR_MODULE_PARAM;
-    if (!(auth & 1)) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
 
     std::string log_text;
     fork_pipe_info pipe_info;
@@ -143,10 +133,8 @@ KModErr read(const char* root_key, void (*on_log_text)(const char*)) {
     return code;
 }
 
-KModErr set_enabled(const char* root_key, bool enable) {
-    uint64_t auth = 0;
-    RETURN_IF_ERROR(check_log_auth(root_key, auth));
-    if (!(auth & 1)) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
+KModErr set_enabled(bool enable) {
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     fork_pipe_info pipe_info;
     if (fork_pipe_child_process(pipe_info)) {
         const KModErr code = run_log_worker([&] {
@@ -173,11 +161,9 @@ KModErr set_enabled(const char* root_key, bool enable) {
 }
 }  // namespace
 
-KModErr query_enabled(const char* root_key, bool& enabled) {
+KModErr query_enabled(bool& enabled) {
     enabled = false;
-    uint64_t auth = 0;
-    RETURN_IF_ERROR(check_log_auth(root_key, auth));
-    if (!(auth & 1)) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     fork_pipe_info pipe_info;
     if (fork_pipe_child_process(pipe_info)) {
         int child_enabled = 0;
@@ -204,10 +190,8 @@ KModErr query_enabled(const char* root_key, bool& enabled) {
 }
 
 namespace {
-KModErr clear(const char* root_key) {
-    uint64_t auth = 0;
-    RETURN_IF_ERROR(check_log_auth(root_key, auth));
-    if (!(auth & 1)) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(root_key);
+KModErr clear() {
+    RETURN_IF_ERROR(kernel_module::maplesu_request_worker_admission());
     fork_pipe_info pipe_info;
     if (fork_pipe_child_process(pipe_info)) {
         const KModErr code = run_log_worker([&] {
@@ -228,35 +212,35 @@ KModErr clear(const char* root_key) {
 }  // namespace
 }  // namespace maplesu::runtime_log
 
-// These names and signatures remain the compatibility boundary for existing SDK consumers.
+// These keyless names and signatures are the current SDK boundary.
 namespace maplesu::sdk {
-KModErr read_maplesu_log_cb(const char* root_key, void (*on_log_text)(const char*)) {
-    return maplesu::runtime_log::read(root_key, on_log_text);
+KModErr read_maplesu_log_cb(void (*on_log_text)(const char*)) {
+    return maplesu::runtime_log::read(on_log_text);
 }
-KModErr set_maplesu_log_enabled(const char* root_key, bool enable) {
-    return maplesu::runtime_log::set_enabled(root_key, enable);
+KModErr set_maplesu_log_enabled(bool enable) {
+    return maplesu::runtime_log::set_enabled(enable);
 }
-bool is_maplesu_log_enabled(const char* root_key) {
+bool is_maplesu_log_enabled() {
     // Keep the legacy bool projection; structured consumers use query_enabled.
     bool enabled = false;
-    return is_ok(maplesu::runtime_log::query_enabled(root_key, enabled)) && enabled;
+    return is_ok(maplesu::runtime_log::query_enabled(enabled)) && enabled;
 }
-KModErr clear_maplesu_log(const char* root_key) {
-    return maplesu::runtime_log::clear(root_key);
+KModErr clear_maplesu_log() {
+    return maplesu::runtime_log::clear();
 }
 }  // namespace maplesu::sdk
 
 namespace skroot_env {
-KModErr read_skroot_log_cb(const char* root_key, void (*callback)(const char*)) {
-    return maplesu::sdk::read_maplesu_log_cb(root_key, callback);
+KModErr read_skroot_log_cb(void (*callback)(const char*)) {
+    return maplesu::sdk::read_maplesu_log_cb(callback);
 }
-KModErr set_skroot_log_enabled(const char* root_key, bool enable) {
-    return maplesu::sdk::set_maplesu_log_enabled(root_key, enable);
+KModErr set_skroot_log_enabled(bool enable) {
+    return maplesu::sdk::set_maplesu_log_enabled(enable);
 }
-bool is_skroot_log_enabled(const char* root_key) {
-    return maplesu::sdk::is_maplesu_log_enabled(root_key);
+bool is_skroot_log_enabled() {
+    return maplesu::sdk::is_maplesu_log_enabled();
 }
-KModErr clear_skroot_log(const char* root_key) {
-    return maplesu::sdk::clear_maplesu_log(root_key);
+KModErr clear_skroot_log() {
+    return maplesu::sdk::clear_maplesu_log();
 }
 }  // namespace skroot_env

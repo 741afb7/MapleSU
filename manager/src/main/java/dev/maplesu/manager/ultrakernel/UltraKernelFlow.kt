@@ -5,16 +5,10 @@ import dev.maplesu.image.BootImageInspector
 import dev.maplesu.image.KernelCompression
 import dev.maplesu.image.UltraInitBootProducer
 import java.io.File
+import java.io.InputStream
 import java.io.RandomAccessFile
 
-/**
- * Builds from the target kernel's own symbols, layout and generated instructions when an explicit
- * credential is available. Recommended assets do not decide whether that target can be generated.
- * A receipt-bound generated image is restored through the existing recovery path before generation.
- * Explicit asset selections and calls without a credential retain the legacy asset contract.
- *
- * This class never opens a partition.
- */
+/** Target-specific, keyless production. Historical assets are read only for recovery. */
 internal class UltraKernelFlow internal constructor(
     private val workspace: File,
     private val assets: UltraKernelAssetSource,
@@ -31,10 +25,8 @@ internal class UltraKernelFlow internal constructor(
         UltraKernelContextAssets(context),
         { source ->
             if (BootImageInspector.inspect(source).kernelSize == 0L) initBootArtifact(context)
-            else {
-                val kmi = dev.maplesu.image.KernelIdentity.kmiOf(UltraKernelPlan.readKernel(source))
-                if (kmi.matches(Regex("android[0-9]+-[0-9]+\\.[0-9]+"))) initBootArtifact(context, kmi) else null
-            }
+            else artifactForKernelBoot(context.filesDir, { path -> context.assets.open(path) }, source,
+                UltraKernelContextAssets(context))
         },
     )
 
@@ -68,6 +60,14 @@ internal class UltraKernelFlow internal constructor(
     }
 
     companion object {
+        internal fun artifactForKernelBoot(filesDir: File, open: (String) -> InputStream, source: File,
+            claimAssets: UltraKernelAssetSource? = null): UltraInitBootProducer.Artifact? {
+            val kmi = dev.maplesu.image.KernelIdentity.kmiOf(UltraKernelPlan.readKernel(source))
+            return if (kmi.matches(Regex("android[0-9]+-[0-9]+\\.[0-9]+")))
+                UltraInitBootCatalog.resolveKmi(filesDir, open, kmi)
+            else UltraInitBootCatalog.resolve(filesDir, open, source, claimAssets)
+        }
+
         /** Current-device default; an offline image for another device supplies its selected KMI. */
         fun initBootArtifact(context: Context): UltraInitBootProducer.Artifact? {
             val kmi = dev.maplesu.image.KernelIdentity.kmiOfRelease(android.system.Os.uname().release)
@@ -76,7 +76,7 @@ internal class UltraKernelFlow internal constructor(
         }
 
         fun initBootArtifact(context: Context, pairedBoot: File): UltraInitBootProducer.Artifact? =
-            UltraInitBootCatalog.resolve(context.filesDir, { path -> context.assets.open(path) }, pairedBoot,
+            artifactForKernelBoot(context.filesDir, { path -> context.assets.open(path) }, pairedBoot,
                 UltraKernelContextAssets(context))
 
         fun availableInitBootKmis(context: Context): List<String> =
@@ -85,34 +85,22 @@ internal class UltraKernelFlow internal constructor(
         fun initBootArtifact(context: Context, kmi: String): UltraInitBootProducer.Artifact? =
             UltraInitBootCatalog.resolveKmi(context.filesDir, { path -> context.assets.open(path) }, kmi)
 
-        /** Compare installed payload and parameter bytes, never the generic bundle's absent key hash. */
-        fun initBootUpdateRequired(image: File, artifact: UltraInitBootProducer.Artifact,
-                                   credential: UltraKernelCredential): Boolean {
+        /** Compare actual payload bytes and the verified public deployment record. */
+        fun initBootUpdateRequired(image: File, artifact: UltraInitBootProducer.Artifact): Boolean {
             check(UltraInitBootProducer.recognizes(image)) { "ULTRA_KERNEL_INIT_BOOT_CANDIDATE_UNRECOGNIZED" }
             val ramdisk = dev.maplesu.image.RamdiskInspector.inspect(image)
             check(!ramdisk.malformed) { "ULTRA_KERNEL_INIT_BOOT_RAMDISK_INVALID" }
-            val deployment = UltraInitBootProducer.readDeploymentNamespace(image)
-            val parameter = artifact.credentialMode == "module-parameter"
-            val bound = if (parameter) credential.withMetadataDisplacement(artifact.metadataDisplacement) else credential
-            val secret = bound.copySecret()
-            return try {
-                val expected = if (parameter) artifact.withCredential(secret) else artifact
-                val init = ramdisk.entries.singleOrNull { it.path == "init" }
-                val bridge = ramdisk.entries.singleOrNull { it.path == ".maplesu_ultra/bridge.ko" }
-                val identityChanged = if (parameter) {
-                    val entry = ramdisk.entries.singleOrNull { it.path == ".maplesu_ultra/credential" }
-                    entry == null || !entry.isRegularFile || entry.permissions() != 0x180 ||
-                        entry.size != UltraKernelCredential.LENGTH.toLong() || entry.sha256 != expected.credentialSha256
-                } else UltraKernelSpec.sha256(secret) != expected.credentialSha256
-                init?.sha256 != expected.handoffSha256 || bridge?.sha256 != expected.bridgeSha256 || identityChanged ||
-                    artifact.supportsDeploymentNamespace && deployment == null
-            } finally { secret.fill(0) }
+            return artifact.credentialMode != "keyless" ||
+                ramdisk.entries.singleOrNull { it.path == "init" }?.sha256 != artifact.handoffSha256 ||
+                ramdisk.entries.singleOrNull { it.path == ".maplesu_ultra/bridge.ko" }?.sha256 != artifact.bridgeSha256 ||
+                ramdisk.entries.any { it.path == ".maplesu_ultra/credential" } ||
+                UltraInitBootProducer.readDeploymentNamespace(image) == null
         }
     }
 
     /**
      * Ordered, pre-validated assets for [release]; `null` means "this kernel build has no pinned
-     * asset" and keeps the legacy Lite path. A malformed asset for a release that *is* declared
+     * asset". Standard preparation still generates for the actual kernel. A malformed declared asset
      * throws (fail closed) instead of silently downgrading to another release.
      */
     fun selectForRelease(release: String): UltraKernelSelection? = select(release, loadCatalogs())
@@ -120,22 +108,19 @@ internal class UltraKernelFlow internal constructor(
     /** Source target ids from current and older callers share the target generator. */
     fun prepareTarget(
         base: File,
-        credential: UltraKernelCredential,
         variantId: String? = null,
         onNotice: (String) -> Unit = {},
-    ): Preparation = prepareTarget(base, credential, variantId, null, onNotice)
+    ): Preparation = prepareTarget(base, variantId, null, onNotice)
 
     fun prepareTarget(
         base: File,
-        credential: UltraKernelCredential,
         variantId: String?,
         initBootArtifact: UltraInitBootProducer.Artifact?,
         onNotice: (String) -> Unit = {},
-    ): Preparation = prepareTarget(base, credential, variantId, initBootArtifact, null, onNotice)
+    ): Preparation = prepareTarget(base, variantId, initBootArtifact, null, onNotice)
 
     internal fun prepareTarget(
         base: File,
-        credential: UltraKernelCredential,
         variantId: String?,
         initBootArtifact: UltraInitBootProducer.Artifact?,
         recoveredDeployment: UltraKernelDeploymentNamespace?,
@@ -145,11 +130,12 @@ internal class UltraKernelFlow internal constructor(
         val carrier = BootImageInspector.inspect(base)
         val legacyModule = initBootArtifact?.isKmiComponent != true && carrier.kernelSize > 0L &&
             UltraKernelLegacyModuleRoute.required(UltraKernelPlan.readKernel(base))
-        if (carrier.kernelSize == 0L || legacyModule || initBootArtifact?.isKmiComponent == true) {
+        val selectedArtifact = initBootArtifact ?: if (carrier.kernelSize == 0L || legacyModule) moduleArtifact(base) else null
+        if (carrier.kernelSize == 0L || legacyModule || selectedArtifact?.isKmiComponent == true) {
             check(variantId == null || variantId == "generated" || carrier.kernelSize > 0L && variantId == freshSpecGenerator.recipeId) {
                 "ULTRA_KERNEL_INIT_BOOT_VARIANT_UNSUPPORTED"
             }
-            val artifactSource = requireNotNull(initBootArtifact ?: moduleArtifact(base)) {
+            val artifactSource = requireNotNull(selectedArtifact ?: if (carrier.ramdiskSize == 0L) moduleArtifact(base) else null) {
                 "ULTRA_KERNEL_INIT_BOOT_ARTIFACT_REQUIRED:select-KMI-and-packaged-component"
             }
             val recoveryWork = if (artifactSource.isKmiComponent && carrier.kernelSize > 0L)
@@ -165,16 +151,11 @@ internal class UltraKernelFlow internal constructor(
                 if (recovered != null) onNotice("已恢复当前 Ultra 镜像，正在准备模块桥接")
                 val artifact = if (artifactSource.isKmiComponent && carrier.kernelSize == 0L) artifactSource
                 else UltraInitBootTargetResolver.resolve(artifactSource,
-                    if (carrier.kernelSize > 0L) moduleBase else artifactSource.targetBoot,
+                    if (carrier.kernelSize > 0L) moduleBase else requireNotNull(artifactSource.targetBoot) { "ULTRA_INIT_PAIRED_BOOT_REQUIRED" },
                     managerClaimAssets ?: assets)
                 val deploymentArtifact = withInitBootDeployment(base, artifact, retainedDeployment ?: recoveredDeployment)
-                val parameter = deploymentArtifact.credentialMode == "module-parameter"
-                val bound = if (parameter) credential.withMetadataDisplacement(deploymentArtifact.metadataDisplacement) else credential
-                val boundArtifact = if (parameter) {
-                    val secret = bound.copySecret()
-                    try { deploymentArtifact.withCredential(secret) } finally { secret.fill(0) }
-                } else deploymentArtifact
-                val candidate = builder.generateInitBoot(moduleBase, boundArtifact, bound,
+                check(deploymentArtifact.credentialMode == "keyless") { "ULTRA_KERNEL_KEYLESS_COMPONENT_REQUIRED" }
+                val candidate = builder.generateInitBoot(moduleBase, deploymentArtifact,
                     installationInput = base, installationInputSha256 = carrier.sha256,
                     normalizationSource = recovered?.source)
                 return Preparation(null, candidate, candidate.bootSha256 == candidate.baseBootSha256,
@@ -183,86 +164,47 @@ internal class UltraKernelFlow internal constructor(
                         artifactSource.isKmiComponent -> "INIT_BOOT_KMI_COMPONENT"
                         legacyModule -> "LEGACY_CFI_MODULE"
                         else -> "INIT_BOOT_BRIDGE"
-                    }, credential = bound)
+                    })
             } finally { recoveryWork?.deleteRecursively() }
         }
         if (recoveredDeployment != null) synchronized(this) { selectedDeploymentNamespace = recoveredDeployment }
         if (variantId == null || variantId == "generated" || variantId == UltraKernelSpecGenerator().recipeId) {
-            return prepare(base, credential, onNotice)
+            val release = releaseOf(base)
+            check(release.isNotEmpty()) { "ULTRA_KERNEL_BASE_RELEASE_UNREADABLE" }
+            prepareRetainedGenerated(base, onNotice)?.let { return it }
+            return prepareGenerated(base, release, onNotice)
         }
         val selection = selectForRelease(releaseOf(base))
         return prepare(base, requireNotNull(withChosenVariant(selection, variantId, onNotice)),
-            { credential }, onNotice)
+            onNotice)
     }
 
-    /**
-     * Generate directly for [base] and [credential], preserving builder boundaries and read-back.
-     * A null credential explicitly requests the legacy packaged-asset path.
-     *
-     * @throws UltraKernelCredentialRequiredException when the release has no asset directory and no
-     *         credential was supplied; the message names the release, every known release, and the
-     *         fact that a 48 byte Ultra root key is what is missing.
-     * @throws UltraKernelReleaseUnsupportedException (supertype) for callers written before the
-     *         generator existed.
-     */
-    fun prepare(
-        base: File,
-        credential: UltraKernelCredential?,
-        onNotice: (String) -> Unit = {},
-    ): Preparation {
+    /** Only the target's actual legacy CFI contract keeps the default kernel route on modules. */
+    fun usesLegacyModule(base: File): Boolean {
         requireBase(base)
-        if (credential != null && BootImageInspector.inspect(base).kernelSize == 0L)
-            return prepareTarget(base, credential, "generated", null, onNotice)
-        val release = releaseOf(base)
-        check(release.isNotEmpty()) { "ULTRA_KERNEL_BASE_RELEASE_UNREADABLE" }
-        if (credential != null) {
-            if (UltraKernelLegacyModuleRoute.required(UltraKernelPlan.readKernel(base)))
-                return prepareTarget(base, credential, "generated", null, onNotice)
-            prepareRetainedGenerated(base, { credential }, onNotice)?.let { return it }
-            return prepareGenerated(base, release, credential, onNotice)
-        }
-        val catalogs = loadCatalogs()
-        val selection = select(release, catalogs)
-        if (selection != null) return prepare(base, selection, { credential }, onNotice)
-        throw UltraKernelCredentialRequiredException(release, knownReleases(catalogs))
+        return BootImageInspector.inspect(base).kernelSize > 0L &&
+            UltraKernelLegacyModuleRoute.required(UltraKernelPlan.readKernel(base))
     }
 
-    /**
-     * Preserve the selected variant and every asset gate before considering local generation.
-     * A different complete base of the same series must use the
-     * generator. A selected asset's digest failure and an explicit k21 choice keep their failures;
-     * an unrelated rejected asset does not disable valid k22 generation or identity binding.
-     * A valid k22 asset is also rebound to the explicitly prepared device identity.
-     */
-    fun prepare(
-        base: File,
-        selection: UltraKernelSelection,
-        credentials: () -> UltraKernelCredential?,
-        onNotice: (String) -> Unit,
-    ): Preparation {
-        selection.rejected.forEach { onNotice("已跳过无效内置补丁：$it") }
-        if (selection.usable.any { it.id == UltraKernelSpecGenerator().recipeId }) {
-            prepareRetainedGenerated(base, credentials, onNotice)?.let { return it }
+    /** Generate against the verified input; normal retries retain the existing namespace. */
+    fun prepare(base: File, onNotice: (String) -> Unit = {}): Preparation =
+        prepareTarget(base, "generated", null, onNotice)
+
+    /** A chosen historical payload is recoverable but is never silently reinstalled. */
+    fun prepare(base: File, selection: UltraKernelSelection, onNotice: (String) -> Unit): Preparation {
+        check(selection.usable.any { it.id == freshSpecGenerator.recipeId }) {
+            "ULTRA_KERNEL_LEGACY_ASSET_READ_ONLY"
         }
-        return try {
-            prepareAssets(base, selection, onNotice, credentials)
-        } catch (error: TemplateBaseMismatch) {
-            if (selection.usable.none { it.id == UltraKernelSpecGenerator().recipeId }) throw error
-            val pristine = error.base
-            val release = releaseOf(pristine)
-            onNotice("内置补丁的完整基座与当前内核不同，按当前镜像独立生成补丁")
-            prepareGenerated(pristine, release, credentials(), onNotice, deploymentNamespace = error.deploymentNamespace)
-        }
+        return prepare(base, onNotice)
     }
 
-    private fun prepareRetainedGenerated(base: File, credentials: () -> UltraKernelCredential?,
-        onNotice: (String) -> Unit): Preparation? {
+    private fun prepareRetainedGenerated(base: File, onNotice: (String) -> Unit): Preparation? {
         val recovery = UltraKernelOriginalRecovery(assets)
         val recovered = recovery.recover(base, workspace, emptyList(),
             File(workspace, "generated-recovery"), generatedOnly = true)
             ?: recovery.recoverPinned(base, File(workspace, "pinned-recovery")) ?: return null
         onNotice("已识别当前 Ultra 镜像，正在准备更新")
-        return prepareGenerated(recovered.image, recovered.kernelRelease, credentials(),
+        return prepareGenerated(recovered.image, recovered.kernelRelease,
             onNotice, installed = base, deploymentNamespace = recovered.deploymentNamespace)
     }
 
@@ -293,12 +235,12 @@ internal class UltraKernelFlow internal constructor(
      * deciding to write a 100 MiB candidate. The result is always
      * [UltraKernelPlan.SupportLevel.EXPERIMENTAL]; nothing here writes a partition.
      */
-    fun generatePlan(base: File, credential: UltraKernelCredential): UltraKernelPlan {
+    fun generatePlan(base: File): UltraKernelPlan {
         requireBase(base)
         val recovery = UltraKernelOriginalRecovery(assets)
         val recovered = recovery.generatedKernelWithDeployment(base, workspace)
         val raw = recovered?.kernel ?: UltraKernelPlan.readKernel(base)
-        return specGenerator(recovered?.deploymentNamespace).generate(raw, credential)
+        return specGenerator(recovered?.deploymentNamespace).generate(raw)
     }
 
     /**
@@ -307,20 +249,13 @@ internal class UltraKernelFlow internal constructor(
     private fun prepareGenerated(
         base: File,
         release: String,
-        credential: UltraKernelCredential?,
         onNotice: (String) -> Unit,
         installed: File? = null,
         deploymentNamespace: UltraKernelDeploymentNamespace? = null,
     ): Preparation {
-        if (credential == null) {
-            // Not a downgrade and not a random key: the credential is the device's Ultra root key,
-            // and a kernel built for a different one would accept nobody.
-            throw UltraKernelCredentialRequiredException(release, emptyList())
-        }
         onNotice("正在根据目标内核生成补丁：$release")
         val kernel = UltraKernelPlan.readKernel(base)
-        val plan = specGenerator(deploymentNamespace).generate(kernel, credential)
-        val boundCredential = requireNotNull(plan.credential)
+        val plan = specGenerator(deploymentNamespace).generate(kernel)
         val evidence = plan.evidence
         evidence?.let { evidence ->
             onNotice(
@@ -332,7 +267,7 @@ internal class UltraKernelFlow internal constructor(
             onNotice("内核摘要现算：${derived.patchedKernelSha256.take(16)}…，改动 ${derived.changedBytes} B")
         }
         val report = BootImageInspector.inspect(base)
-        val specText = plan.specText(boundCredential)
+        val specText = plan.specText()
         val asset = UltraKernelGeneratedAsset.of(
             plan = plan,
             imageSizeBytes = report.fileSize,
@@ -347,7 +282,6 @@ internal class UltraKernelFlow internal constructor(
                 planOrigin = UltraKernelPlan.Origin.GENERATED.name,
                 siteMatch = evidence?.summary.orEmpty(),
                 referenceMatch = evidence?.referenceMatch ?: false,
-                credential = boundCredential,
             )
         }
         return Preparation(
@@ -355,20 +289,8 @@ internal class UltraKernelFlow internal constructor(
             planOrigin = UltraKernelPlan.Origin.GENERATED.name,
             siteMatch = evidence?.summary.orEmpty(),
             referenceMatch = evidence?.referenceMatch ?: false,
-            credential = boundCredential,
         )
     }
-
-    /**
-     * Release-indexed entry point: identify [base]'s kernel release, select that release's
-     * assets and build the first one that passes every gate. Asset-only; see the overload taking a
-     * credential for the generation path.
-     *
-     * @throws UltraKernelCredentialRequiredException when the release has no asset directory and no
-     *         legacy variant.
-     */
-    fun prepare(base: File, onNotice: (String) -> Unit = {}): Preparation =
-        prepare(base, null, onNotice)
 
     /** Kernel release of a boot image, read without touching any partition. */
     fun releaseOf(image: File): String {
@@ -406,8 +328,11 @@ internal class UltraKernelFlow internal constructor(
     fun inspect(base: File, asset: UltraKernelPatchAsset): UltraKernelBuilder.BaseInspection =
         builder.inspectBase(base, asset, specFor(asset))
 
-    fun build(base: File, asset: UltraKernelPatchAsset): UltraKernelBuilder.Candidate =
-        builder.generate(base, asset, specFor(asset))
+    fun build(base: File, asset: UltraKernelPatchAsset): UltraKernelBuilder.Candidate {
+        val spec = specFor(asset)
+        check(spec.key.isEmpty()) { "ULTRA_KERNEL_LEGACY_ASSET_READ_ONLY" }
+        return builder.generate(base, asset, spec)
+    }
 
     /** An already-patched source still needs committing when migrating from another root. */
     fun candidateForInstall(base: File, preparation: Preparation): UltraKernelBuilder.Candidate {
@@ -415,7 +340,7 @@ internal class UltraKernelFlow internal constructor(
         check(preparation.alreadyInstalled) { "ULTRA_KERNEL_CANDIDATE_MISSING" }
         val asset = requireNotNull(preparation.variant)
         val spec = if (asset is UltraKernelGeneratedAsset) {
-            UltraKernelSpec.parse(asset.plan.specText(requireNotNull(preparation.credential)))
+            UltraKernelSpec.parse(asset.plan.specText())
         } else specFor(asset)
         val inspection = builder.inspectBase(base, asset, spec)
         check(inspection.alreadyPatched || inspection.kernelSha256 == asset.expectedKernelSha256) {
@@ -431,121 +356,6 @@ internal class UltraKernelFlow internal constructor(
         )
     }
 
-    /**
-     * Picks the first asset from [selection] whose base is pristine and whose build passes every
-     * pinned digest. Returns [Preparation.alreadyInstalled] when the base already carries the
-     * asset's patched kernel; throws with all collected reasons when nothing can be written.
-     *
-     * [build] only writes into the app's private workspace, so trying the fallback after a failed
-     * default build cannot touch `boot`.
-     */
-    fun prepare(
-        base: File,
-        selection: UltraKernelSelection,
-        onNotice: (String) -> Unit,
-    ): Preparation = prepareAssets(base, selection, onNotice)
-
-    private fun prepareAssets(
-        base: File,
-        selection: UltraKernelSelection,
-        onNotice: (String) -> Unit,
-        credentials: (() -> UltraKernelCredential?)? = null,
-        deploymentNamespace: UltraKernelDeploymentNamespace? = null,
-    ): Preparation {
-        requireBase(base)
-        val deployment = deploymentNamespace ?: synchronized(this) { selectedDeploymentNamespace }
-        if (deployment != null) synchronized(this) { selectedDeploymentNamespace = deployment }
-        val reasons = ArrayList(selection.rejected)
-        var templateMismatches = 0
-        var first = true
-        for (asset in selection.usable) {
-            if (!first) onNotice("推荐内核校验未通过，已回退到「${asset.label}」")
-            first = false
-            asset.warning?.let(onNotice)
-            var bindingIdentity = false
-            try {
-                check(deployment == null || asset.id == UltraKernelSpecGenerator().recipeId) {
-                    "ULTRA_KERNEL_DEPLOYMENT_SUPPORT_MISSING"
-                }
-                val spec = specFor(asset)
-                val inspection = builder.inspectBase(base, asset, spec)
-                if (inspection.kernelSha256 == asset.expectedKernelSha256 || inspection.alreadyPatched) {
-                    val embedded = UltraKernelCredential.of(spec.key)
-                    bindingIdentity = asset.id == UltraKernelSpecGenerator().recipeId && credentials != null
-                    val requested = if (bindingIdentity) credentials?.invoke() else null
-                    if (requested != null && requested != embedded || vivoVrFilter ||
-                        bindingIdentity && managerClaimAssets != null || deployment != null) {
-                        val original = UltraKernelOriginalRecovery(assets).recover(base, workspace,
-                            listOf(File(workspace, "base-stock.img")), File(workspace, "identity-recovery"))
-                            ?: error("ULTRA_KERNEL_ORIGINAL_REQUIRED")
-                        return prepareGenerated(original.image, original.kernelRelease, requested ?: embedded,
-                            onNotice, installed = base, deploymentNamespace = original.deploymentNamespace ?: deployment)
-                    }
-                    return Preparation(asset, null, true, credential = embedded)
-                }
-                if (!KernelSeries.same(inspection.kernelRelease, asset.kernelRelease)) {
-                    reasons += "${asset.label}：基座内核 release ${inspection.kernelRelease.ifEmpty { "unreadable" }}" +
-                        " 与资产 ${asset.kernelRelease} 不同系列（${KernelSeries.detail(inspection.kernelRelease, asset.kernelRelease)}）"
-                    continue
-                }
-                val crossRelease = KernelSeries.isCrossRelease(
-                    inspection.kernelRelease,
-                    asset.kernelRelease,
-                )
-                if (asset.baseKernelSha256.isNotEmpty() && !inspection.baseKernelPinned) {
-                    reasons += "${asset.label}：ULTRA_KERNEL_TEMPLATE_BASE_MISMATCH:${asset.id}"
-                    templateMismatches++
-                    continue
-                }
-                if (crossRelease) {
-                    onNotice(
-                        "基座内核 ${inspection.kernelRelease} 与资产 ${asset.kernelRelease} 同属 " +
-                            "${KernelSeries.of(inspection.kernelRelease)} 系列，继续校验补丁原字节、" +
-                            "完整产物摘要与容器回读",
-                    )
-                }
-
-                if (!inspection.pristine) {
-                    reasons += "${asset.label}：内核基线与补丁记录不一致（${inspection.mismatchedRecords} 条）"
-                    if (crossRelease) templateMismatches++
-                    continue
-                }
-                // Verify the complete packaged output before rebinding a supported recipe.
-                val candidate = builder.generate(base, asset, spec)
-                val embedded = UltraKernelCredential.of(spec.key)
-                bindingIdentity = asset.id == UltraKernelSpecGenerator().recipeId && credentials != null
-                val requested = if (bindingIdentity) credentials?.invoke() else null
-                if (requested != null && requested != embedded || vivoVrFilter ||
-                    bindingIdentity && managerClaimAssets != null || deployment != null) {
-                    onNotice("内置补丁校验通过，按本机安装身份生成独立候选")
-                    return prepareGenerated(base, inspection.kernelRelease, requested ?: embedded, onNotice,
-                        deploymentNamespace = deployment)
-                }
-                return Preparation(asset, candidate, false, credential = embedded)
-            } catch (error: Exception) {
-                if (bindingIdentity) throw error
-                reasons += "${asset.label}：${error.message.orEmpty()}"
-            }
-        }
-        // Older releases could capture a patched kernel as a ramdisk-clean "original".
-        // Restore only a pinned or receipt-proven preimage, then apply the current asset.
-        UltraKernelOriginalRecovery(assets)
-            .recover(base, workspace, listOf(File(workspace, "base-stock.img")),
-                File(workspace, "original-recovery"))?.let { recovered ->
-            onNotice("识别到旧版 Ultra 修补镜像，已校验并恢复原始字节，再生成当前内核（原备份保留）")
-            return prepareAssets(recovered.image, selection, onNotice, credentials, recovered.deploymentNamespace ?: deployment)
-        }
-        val message = "ULTRA_KERNEL_ALL_VARIANTS_FAILED:${reasons.joinToString(" | ")}"
-        if (selection.usable.isNotEmpty() &&
-            templateMismatches == selection.usable.size) {
-            throw TemplateBaseMismatch(message, base, deployment)
-        }
-        throw IllegalStateException(message)
-    }
-
-    private class TemplateBaseMismatch(message: String, val base: File,
-        val deploymentNamespace: UltraKernelDeploymentNamespace?) : IllegalStateException(message)
-
     internal class Preparation(
         val variant: UltraKernelPatchAsset?,
         val candidate: UltraKernelBuilder.Candidate?,
@@ -559,8 +369,6 @@ internal class UltraKernelFlow internal constructor(
         val siteMatch: String = "",
         /** True only when every site matched the reference build; never promotes [supportLevel]. */
         val referenceMatch: Boolean = false,
-        /** Identity embedded in this candidate. Memory-only; never included in logs or receipts. */
-        val credential: UltraKernelCredential? = null,
     ) {
         /** True when no shipped asset produced this candidate; the UI must warn unconditionally. */
         val generated: Boolean get() = planOrigin == UltraKernelPlan.Origin.GENERATED.name

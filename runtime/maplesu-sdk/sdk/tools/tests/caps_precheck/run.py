@@ -33,6 +33,8 @@ def main():
         ROOT / 'runtime/ultra/authorization/request_protocol.h': 'include/request_protocol.h',
         SDK / 'include/maplesu_root_private.h': 'include/maplesu_root_private.h',
         SDK / 'include/maplesu_caps_private.h': 'include/maplesu_caps_private.h',
+        SDK / 'include/maplesu_early_fixed_private.h': 'include/maplesu_early_fixed_private.h',
+        SDK / 'include/maplesu_storage_private.h': 'include/maplesu_storage_private.h',
         SDK.parent / 'include/module_err_def.h': 'include/module_err_def.h',
         SDK.parent / 'include/kernel_offsets/cred.h': 'include/kernel_offsets/cred.h',
         SDK.parent / 'include/kernel_offsets/task_struct.h': 'include/kernel_offsets/task_struct.h',

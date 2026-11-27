@@ -62,7 +62,7 @@ class UltraKernelBootSafetyTest {
         val symbols = UltraKernelKallsymsTable.decode(kernel)
         val entry = requireNotNull(symbols.offsetOf("do_execveat_common"))
         assertEquals(0xF800865E.toInt(), UltraKernelA64.le32Bits(kernel, entry + 4))
-        val plan = UltraKernelSpecGenerator().generate(kernel, credential)
+        val plan = UltraKernelSpecGenerator().generate(kernel)
         val patched = plan.apply(kernel).kernel
         val frame = plan.records.single { it.role == "arm64_notify_die+0x0" }
         assertEquals(UltraKernelA64.PACIA1716, UltraKernelA64.le32Bits(patched, entry))
@@ -88,10 +88,11 @@ class UltraKernelBootSafetyTest {
             UltraKernelBuilder(File(workspace, "direct")).generate(changed, asset, spec)
         }
         assertTrue(error.message.orEmpty().startsWith("ULTRA_KERNEL_TEMPLATE_BASE_MISMATCH"))
-        val prepared = UltraKernelFlow(File(workspace, "flow"), assets).prepare(changed, credential)
+        val flow = UltraKernelFlow(File(workspace, "flow"), assets)
+        val prepared = flow.prepare(changed)
         assertTrue(prepared.generated)
         assertFalse(prepared.alreadyInstalled)
-        assertEquals(UltraKernelSpecGenerator().generate(kernel, credential).derived?.patchedKernelSha256,
+        assertEquals(flow.generatePlan(changed).derived?.patchedKernelSha256,
             requireNotNull(prepared.candidate).kernelSha256)
     }
 

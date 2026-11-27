@@ -93,7 +93,8 @@ def _host_runtime(java=None, image_core=None) -> tuple[str, Path, str]:
     serial = cached_jar('org.jetbrains.kotlinx', 'kotlinx-serialization-core-jvm', '1.11.0')
     compiler = cached_jar('org.jetbrains.kotlin', 'kotlin-compiler-embeddable', '2.4.20')
     coroutines = cached_jar('org.jetbrains.kotlinx', 'kotlinx-coroutines-core-jvm', '1.11.0')
-    dependencies = [stdlib, annotations, json_library, serial, image, android]
+    xz = cached_jar('org.tukaani', 'xz', '1.12')
+    dependencies = [stdlib, annotations, json_library, serial, image, android, xz]
     sources = sorted((ROOT / 'manager/src/main/java/dev/maplesu/manager/ultrakernel').glob('*.kt'))
     sources += [ROOT / ('manager/src/main/java/dev/maplesu/manager/workmode/' + name) for name in (
         'Hashes.kt', 'WorkMode.kt', 'control/ControlPaths.kt', 'control/AtomicControlFile.kt')]
@@ -143,7 +144,7 @@ def _describe_layout(image: bytes, operation: str, code: str) -> dict:
         return facts
 
 
-def generate(args, credential: bytes) -> int:
+def generate(args) -> int:
     if args.symbols or args.struct_offsets or Path(args.recipe).resolve() != (
             ROOT / 'tools/specgen/specgen/recipes/k22.json').resolve():
         raise RuntimeError('ULTRA_HOST_EXTERNAL_RECIPE_OR_SYMBOL_OVERRIDES_UNSUPPORTED')
@@ -160,5 +161,4 @@ def generate(args, credential: bytes) -> int:
         value = getattr(args, name, None)
         if value is not None:
             command += ['--' + name.replace('_', '-'), str(value)]
-    # Only the child JVM reads this pipe; no credential appears in its argv or build logs.
-    return subprocess.run(command, input=credential + b'\n').returncode
+    return subprocess.run(command, stdin=subprocess.DEVNULL).returncode

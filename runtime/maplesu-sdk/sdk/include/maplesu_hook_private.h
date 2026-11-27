@@ -4,11 +4,9 @@
 #include "module_base_kernel_func_hook.h"
 
 namespace kernel_module {
-// Optional compatibility selection: Legacy Key and a checked v2 zero private
-// tail. Provider/Owner callers retain their publication lifetime contract.
+// Explicit LegacyKey may select the checked v2 boot compatibility provider.
 __attribute__((visibility("hidden"))) KModErr maplesu_hook_legacy_boot_selected(bool& selected);
-// Hook closure storage always uses the current authenticated backend. Legacy
-// calls retain their real Key EXEC scope and never select an Owner identity.
+// Hook closure storage follows the explicitly selected authenticated backend.
 __attribute__((visibility("hidden"))) KModErr maplesu_hook_reserve_code(
     uint32_t bytes, uint64_t near_anchor, uint64_t& address);
 __attribute__((visibility("hidden"))) KModErr maplesu_hook_write(

@@ -595,7 +595,9 @@ internal class UltraKernelOriginalRecovery(private val assets: UltraKernelAssetS
                 !retained.isFile || retained.length() !in 1..UltraKernelSpec.MAX_SPEC_BYTES ||
                 UltraKernelSpec.sha256(retained) != specSha) return null
             val spec = UltraKernelSpec.read(retained)
-            if (!UltraKernelCredential.isValid(spec.key) || spec.kernelRelease != assetRelease ||
+            // Current generated specs have no Key; nonempty historical credentials keep their validation.
+            if ((spec.key.isNotEmpty() && !UltraKernelCredential.isValid(spec.key)) ||
+                spec.kernelRelease != assetRelease ||
                 spec.kernelRelease != text("kernelRelease") ||
                 spec.patches.size != primitive("patches")?.intOrNull) return null
             // This private asset is used solely to prove the original; it never enters the catalogue.

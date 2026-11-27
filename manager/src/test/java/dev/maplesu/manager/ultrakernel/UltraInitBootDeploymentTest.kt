@@ -3,11 +3,7 @@ package dev.maplesu.manager.ultrakernel
 import dev.maplesu.image.BootImageInspector
 import dev.maplesu.image.RamdiskInspector
 import dev.maplesu.image.UltraInitBootProducer
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -16,14 +12,13 @@ import org.junit.rules.TemporaryFolder
 /** Real producer and typed namespace bytes only; no module, gateway or installation authority. */
 class UltraInitBootDeploymentTest {
     @get:Rule val temporary = TemporaryFolder()
-    private val credential = UltraKernelCredential.of("Aa1".repeat(16))
 
-    @Test fun oneFlowReusesItsPublicNamespaceAcrossPreparationsAndCredentialChanges() {
+    @Test fun oneFlowReusesItsPublicNamespaceAcrossPreparations() {
         val input = fixture()
         val flow = flow()
         val first = build(flow, input.source, input.artifact)
         val original = namespace(first)
-        val second = flow.prepareTarget(input.source, UltraKernelCredential.of("Bb2".repeat(16)), null, input.artifact)
+        val second = flow.prepareTarget(input.source, null, input.artifact)
         assertArrayEquals(original, namespace(requireNotNull(second.candidate).image))
         assertArrayEquals(original, namespace(first))
         val returnedCopy = namespace(first).apply { this[8] = 'Z'.code.toByte() }
@@ -44,7 +39,7 @@ class UltraInitBootDeploymentTest {
         val upgrade = build(retryFlow, installed, input.artifact)
         assertArrayEquals(original, namespace(upgrade))
         assertArrayEquals(original, namespace(build(retryFlow, input.source, input.artifact)))
-        assertFalse(UltraKernelFlow.initBootUpdateRequired(upgrade, input.artifact, credential))
+        assertFalse(UltraKernelFlow.initBootUpdateRequired(upgrade, input.artifact))
         val restored = File(temporary.root, "exact-restored.img")
         UltraInitBootProducer.restore(upgrade, restored)
         assertArrayEquals(input.source.readBytes(), restored.readBytes())
@@ -62,18 +57,15 @@ class UltraInitBootDeploymentTest {
         assertArrayEquals(record, namespace(build(flow, input.source, input.artifact)))
     }
 
-    @Test fun oldArtifactsKeepLegacyNewInstallsAndPreserveExistingSourceNamespace() {
-        val old = fixture(support = false)
-        val oldImage = build(flow(), old.source, old.artifact)
-        assertFalse(old.artifact.supportsDeploymentNamespace)
-        assertNull(UltraInitBootProducer.readDeploymentNamespace(oldImage))
-        val current = fixture()
-        val installed = build(flow(), current.source, current.artifact)
-        val original = namespace(installed)
-        val legacyUpgrade = build(flow(), installed, old.artifact)
-        assertArrayEquals(original, namespace(legacyUpgrade))
-        assertFalse(UltraKernelFlow.initBootUpdateRequired(legacyUpgrade, old.artifact, credential))
-        assertTrue(UltraKernelFlow.initBootUpdateRequired(oldImage, current.artifact, credential))
+    @Test fun keylessArtifactsRejectCredentialBinding() {
+        val input = fixture()
+        assertEquals("keyless", input.artifact.credentialMode)
+        assertNull(input.artifact.credentialSha256)
+        assertThrows(java.io.IOException::class.java) {
+            input.artifact.withCredential("A".repeat(48).toByteArray())
+        }
+        assertTrue(RamdiskInspector.inspect(build(flow(), input.source, input.artifact)).entries
+            .none { it.path == ".maplesu_ultra/credential" })
     }
 
     @Test fun failedBindingDoesNotRotateTheFlowsAlreadySelectedNamespace() {
@@ -81,20 +73,20 @@ class UltraInitBootDeploymentTest {
         val flow = flow()
         val first = build(flow, input.source, input.artifact)
         val original = namespace(first)
-        val rejected = fixture(pinnedHash = "0".repeat(64))
-        val failure = runCatching { build(flow, input.source, rejected.artifact) }.exceptionOrNull()
-        assertEquals("ULTRA_INIT_BOOT_CREDENTIAL_HASH", failure?.message)
+        val failure = runCatching { flow.prepareTarget(first, null, input.artifact,
+            UltraKernelDeploymentNamespace.create()) }.exceptionOrNull()
+        assertEquals("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_CONFLICT", failure?.message)
         assertArrayEquals(original, namespace(build(flow, input.source, input.artifact)))
     }
 
     @Test fun identicalRepatchReportsAlreadyInstalledAfterFullProducerReadback() {
         val input = fixture()
         val flow = flow()
-        val first = flow.prepareTarget(input.source, credential, null, input.artifact)
+        val first = flow.prepareTarget(input.source, null, input.artifact)
         assertFalse(first.alreadyInstalled)
         val installed = requireNotNull(first.candidate)
         val before = installed.image.readBytes()
-        val repeated = flow.prepareTarget(installed.image, credential, null, input.artifact)
+        val repeated = flow.prepareTarget(installed.image, null, input.artifact)
         assertTrue(repeated.alreadyInstalled)
         assertEquals(installed.bootSha256, requireNotNull(repeated.candidate).bootSha256)
         assertArrayEquals(before, installed.image.readBytes())
@@ -121,14 +113,14 @@ class UltraInitBootDeploymentTest {
     private fun flow() = UltraKernelFlow(temporary.newFolder(), UltraKernelMemoryAssets(emptyMap()))
 
     private fun build(flow: UltraKernelFlow, source: File, artifact: UltraInitBootProducer.Artifact): File =
-        requireNotNull(flow.prepareTarget(source, credential, null, artifact).candidate).image
+        requireNotNull(flow.prepareTarget(source, null, artifact).candidate).image
 
     private fun namespace(image: File): ByteArray =
         requireNotNull(UltraInitBootProducer.readDeploymentNamespace(image))
 
     private data class Fixture(val source: File, val artifact: UltraInitBootProducer.Artifact)
 
-    private fun fixture(support: Boolean = true, pinnedHash: String? = null): Fixture {
+    private fun fixture(): Fixture {
         val directory = temporary.newFolder()
         val helpers = Class.forName("dev.maplesu.image.UltraInitBootProducerTest")
         fun bytes(name: String, vararg args: Any): ByteArray {
@@ -140,33 +132,11 @@ class UltraInitBootDeploymentTest {
             return helpers.getDeclaredMethod(name, *types).apply { isAccessible = true }
                 .invoke(null, *args) as ByteArray
         }
-        val kernel = bytes("kernel")
-        val module = bytes("parameterModule", 32)
-        if (support) {
-            val header = ByteBuffer.wrap(module).order(ByteOrder.LITTLE_ENDIAN)
-            val section = header.getLong(40).toInt() + 5 * header.getShort(58).toInt()
-            val at = header.getLong(section + 24).toInt()
-            val count = header.getLong(section + 32).toInt()
-            val parameter = "parmtype=deployment_namespace:string\u0000".toByteArray(Charsets.US_ASCII)
-            parameter.copyInto(module, at + count)
-            header.putLong(section + 32, (count + parameter.size).toLong())
-        }
-        val files = mapOf("target-boot.img" to bytes("image", kernel, ByteArray(0)),
-            "ultra-init" to bytes("handoff"), "bridge.ko" to module)
+        @Suppress("UNCHECKED_CAST")
+        val files = helpers.getDeclaredMethod("kmiBundle").apply { isAccessible = true }
+            .invoke(null) as Map<String, ByteArray>
         files.forEach { (name, content) -> File(directory, name).writeBytes(content) }
         val manifest = File(directory, "manifest.json")
-        manifest.writeText(buildJsonObject {
-            put("schemaVersion", 1)
-            put("kernelRelease", "6.6.1-fixture")
-            put("kernelSha256", UltraKernelSpec.sha256(kernel))
-            put("credentialMode", "module-parameter")
-            put("metadataDisplacement", 4096 - 32)
-            pinnedHash?.let { put("credentialSha256", it) }
-            for ((field, path) in mapOf("targetBoot" to "target-boot.img", "handoff" to "ultra-init", "bridge" to "bridge.ko")) {
-                put(field, path)
-                put(field + "Sha256", UltraKernelSpec.sha256(files.getValue(path)))
-            }
-        }.toString())
         val source = File(directory, "init_boot.img").also {
             it.writeBytes(bytes("image", ByteArray(0), bytes("stock", false, false)))
         }

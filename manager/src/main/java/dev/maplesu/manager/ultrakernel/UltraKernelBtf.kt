@@ -52,8 +52,17 @@ internal object UltraKernelBtf {
     fun enumValue(kernel: ByteArray, symbols: UltraKernelSymbols, name: String): Long? =
         readAbi(kernel, symbols) { enumValue(name) }
 
-    fun integerVariable(kernel: ByteArray, symbols: UltraKernelSymbols, name: String): Long? =
-        readAbi(kernel, symbols) { integerVariable(symbols, name) }
+    fun integerVariable(kernel: ByteArray, symbols: UltraKernelSymbols, name: String): Long? {
+        readAbi(kernel, symbols) { integerVariable(symbols, name) }?.let { return it }
+        // Some targets omit BTF VAR records while retaining the initialized data symbol.
+        val addresses = symbols.offsetsOf(name)
+        if (addresses.isEmpty()) return null
+        val offset = addresses.singleOrNull() ?: throw UltraKernelGenerateException(
+            UltraKernelGenerateCodes.STRUCT_OFFSET, "BTF_ABI_VARIABLE_ADDRESS:$name")
+        if (offset < 0 || offset.toLong() + 4 > kernel.size) throw UltraKernelGenerateException(
+            UltraKernelGenerateCodes.STRUCT_OFFSET, "BTF_ABI_VARIABLE_BOUNDS:$name")
+        return UltraKernelA64.le32Bits(kernel, offset).toLong() and 0xffffffffL
+    }
 
     private fun <T> readAbi(kernel: ByteArray, symbols: UltraKernelSymbols, read: Reader.() -> T): T? {
         val start = symbols.offsetOf("__start_BTF") ?: return null
@@ -85,13 +94,16 @@ internal object UltraKernelBtf {
 
     /** One target parse for the complete imported-function/callback contract. */
     fun signatures(kernel: ByteArray, symbols: UltraKernelSymbols, functions: Set<String>,
-                   members: Set<String>): Map<String, String>? {
+                   members: Set<String>, optionalFunctions: Set<String> = emptySet()): Map<String, String>? {
         val start = symbols.offsetOf("__start_BTF") ?: return null
         return try {
             val reader = Reader(kernel, start, symbols.offsetOf("__stop_BTF") ?: kernel.size)
             val result = linkedMapOf<String, String>()
-            for (key in functions.sorted()) result[key] = reader.functionSignature(key)
-                ?: throw Invalid("FUNCTION_MISSING:$key")
+            for (key in functions.sorted()) {
+                val signature = reader.functionSignature(key)
+                if (signature != null) result[key] = signature
+                else if (key !in optionalFunctions) throw Invalid("FUNCTION_MISSING:$key")
+            }
             for (key in members.sorted()) {
                 val separator = key.indexOf('.')
                 requireBtf(separator > 0 && separator < key.lastIndex, "CALLBACK_QUERY:$key")
@@ -103,6 +115,12 @@ internal object UltraKernelBtf {
             throw UltraKernelGenerateException(UltraKernelGenerateCodes.STRUCT_OFFSET, "BTF_ABI_${error.message}")
         }
     }
+
+    /** A missing assembly FUNC still needs an actual compiler-described target caller. */
+    fun directCallers(kernel: ByteArray, symbols: UltraKernelSymbols, targets: Map<String, Int>,
+                      textStart: Int, textEnd: Int): Map<String, Set<String>> = readAbi(kernel, symbols) {
+        directCallers(symbols, targets, textStart, textEnd)
+    } ?: error("ULTRA_KERNEL_RESIDENT_ABI_BTF_REQUIRED")
 
     fun functionParameterCount(kernel: ByteArray, symbols: UltraKernelSymbols, name: String): Int? {
         val start = symbols.offsetOf("__start_BTF") ?: return null
@@ -239,6 +257,33 @@ internal object UltraKernelBtf {
         private fun type(id: Int): Type {
             requireBtf(id > 0 && id < types.size, "TYPE_ID")
             return types[id]
+        }
+
+        fun directCallers(symbols: UltraKernelSymbols, targets: Map<String, Int>,
+                          textStart: Int, textEnd: Int): Map<String, Set<String>> {
+            val result = targets.mapValues { linkedSetOf<String>() }
+            val remaining = targets.entries.associate { it.value to it.key }.toMutableMap()
+            val visited = hashSetOf<Int>()
+            for (function in types.filter { it.kind == 12 }) {
+                val caller = name(function.name)
+                for (start in symbols.offsetsOf(caller).distinct()) {
+                    if (start < textStart || start >= textEnd || start and 3 != 0 || !visited.add(start)) continue
+                    val stop = minOf(symbols.nextOffset(start) ?: textEnd, textEnd)
+                    if (stop <= start || stop - start > 256 * 1024) continue
+                    for (at in start until stop - 3 step 4) {
+                        val instruction = UltraKernelA64.le32Bits(data, at)
+                        if (!UltraKernelA64.isBl(instruction)) continue
+                        val target = at.toLong() + (instruction shl 6 shr 4).toLong()
+                        if (target < 0 || target > Int.MAX_VALUE || target == start.toLong()) continue
+                        val imported = remaining[target.toInt()] ?: continue
+                        requireBtf(functionSignature(caller) != null, "ASM_CALLER:$caller")
+                        result.getValue(imported).add(caller)
+                        remaining.remove(target.toInt())
+                        if (remaining.isEmpty()) return result
+                    }
+                }
+            }
+            return result
         }
 
         private fun resolved(id: Int): Int {
@@ -578,8 +623,10 @@ internal object UltraKernelBtf {
                 return word ushr 22 and 3 == 0 || word and 31 != register
             if (word and 0xffe00c00.toInt() == 0xb8400000.toInt() ||
                 word and 0xffe00c00.toInt() == 0xf8400000.toInt()) return word and 31 != register
-            if (word and 0x1f800000 == 0x12800000 || word and 0x1f000000 == 0x11000000 ||
-                word and 0x1f000000 == 0x0a000000 || word and 0x1f000000 == 0x0b000000)
+            if (word and 0x1f800000 == 0x12800000 || word and 0x1f800000 == 0x12000000 ||
+                word and 0x1f000000 == 0x11000000 ||
+                word and 0x1f000000 == 0x0a000000 || word and 0x1f000000 == 0x0b000000 ||
+                word and 0x1fe00000 == 0x1a800000)
                 return word and 31 != register
             return false
         }
@@ -609,7 +656,8 @@ internal object UltraKernelBtf {
                         aliases[destination] = aliases[word ushr 16 and 31]
                     word and 0x3f000000 == 0x39000000 ->
                         if (word ushr 22 and 3 != 0) aliases[destination] = -1
-                    word and 0x1f800000 == 0x12800000 || word and 0x1f000000 == 0x11000000 ||
+                    word and 0x1f800000 == 0x12800000 || word and 0x1f800000 == 0x12000000 ||
+                        word and 0x1f000000 == 0x11000000 ||
                         word and 0x1f000000 == 0x0a000000 || word and 0x1f000000 == 0x0b000000 ->
                         if (destination != 31) aliases[destination] = -1
                     word and 0x7e000000 == 0x34000000 -> {
@@ -637,6 +685,8 @@ internal object UltraKernelBtf {
                 word and 0xfffff09f.toInt() == 0xd503309f.toInt()) return register != 30
             if (word and 0xfff00000.toInt() == 0xd5300000.toInt()) return word and 31 != register
             if (word and 0xfff00000.toInt() == 0xd5100000.toInt()) return true
+            if (word and 0x3fe07c00 == 0x08007c00) // STXR/STLXR write only their W-status register.
+                return word ushr 16 and 31 != register
             if (word and 0x3f000000 == 0x39000000)
                 return word ushr 22 and 3 == 0 || word and 31 != register
             if (word and 0x3f000000 == 0x38000000) {
@@ -769,6 +819,9 @@ internal object UltraKernelBtf {
                 "file_operations.compat_ioctl" to listOf("compat_ptr_ioctl", "__arm64_compat_sys_ioctl"),
                 "file_operations.flush" to listOf("filp_close"),
                 "file_operations.release" to listOf("__fput"),
+                "file_operations.read" to listOf("vfs_read", "__kernel_read"),
+                "file_operations.read_iter" to listOf("vfs_iter_read", "__kernel_read", "new_sync_read"),
+                "kprobe.pre_handler" to listOf("aggr_pre_handler", "kprobe_breakpoint_handler"),
                 "callback_head.func" to listOf("rcu_do_batch", "srcu_invoke_callbacks", "rcu_core"),
                 "work_struct.func" to listOf("process_one_work", "process_scheduled_works", "worker_thread", "rescuer_thread"))
             requireBtf(sources.keys.containsAll(callbacks.keys), "SESSION_CALLER_MEMBERS")
@@ -798,18 +851,23 @@ internal object UltraKernelBtf {
                     if (declarations.isEmpty()) continue
                     requireBtf(declarations.map { signature(it, semantic = true) }.distinct().size == 1,
                         "SESSION_CALLER_DECLARATION:$caller")
-                    val workerParameters = if (key == "work_struct.func") {
+                    val pointerOwner = when (key) {
+                        "work_struct.func" -> "worker"
+                        "file_operations.read", "file_operations.read_iter" -> "file"
+                        else -> null
+                    }
+                    val sourceParameters = if (pointerOwner != null) {
                         val alternatives = declarations.map { declaration ->
                             val prototype = type(resolved(type(declaration).value))
                             requireBtf(prototype.kind == 13, "SESSION_CALLER_PROTOTYPE:$caller")
                             (0 until minOf(prototype.count, 8)).filterTo(linkedSetOf()) { parameter ->
-                                signature(u32(prototype.extra + parameter * 8 + 4), semantic = true) == "*sworker"
+                                signature(u32(prototype.extra + parameter * 8 + 4), semantic = true) == "*s$pointerOwner"
                             }
                         }.distinct()
                         requireBtf(alternatives.size == 1, "SESSION_CALLER_PARAMETER:$caller")
                         alternatives.single()
                     } else emptySet()
-                    if (key == "work_struct.func" && workerParameters.isEmpty()) continue
+                    if (pointerOwner != null && sourceParameters.isEmpty()) continue
                     for (entry in symbols.offsetsOf(caller).distinct()) {
                         requireBtf(entry >= textStart && entry % 4 == 0 && symbols.nameAt(entry) == caller,
                             "SESSION_CALLER_ADDRESS:$caller")
@@ -826,8 +884,8 @@ internal object UltraKernelBtf {
                                         sessionLoad(load.first, entry, load.second, fileOperations.offset)
                                     val origin = if (fileOperations != null) parent else load
                                     val argument = if (key == "file_operations.release") 1 else 0
-                                    val typedSource = if (key == "work_struct.func")
-                                        sessionPointerArgument(entry, end, load.first, load.second, workerParameters)
+                                    val typedSource = if (pointerOwner != null) origin != null &&
+                                        sessionPointerArgument(entry, end, origin.first, origin.second, sourceParameters)
                                     else origin != null &&
                                         sessionArgument(origin.first, call - 24, origin.second, argument, call)
                                     if (typedSource) {
@@ -874,16 +932,16 @@ internal object UltraKernelBtf {
                 val ids = result[expected] ?: continue
                 val functionName = name(function.name)
                 val addresses = symbols.offsetsOf(functionName).distinct()
-                requireBtf(addresses.size <= 1, "FUNCTION_TYPEID_ADDRESS_AMBIGUOUS:$functionName")
-                val entry = addresses.singleOrNull() ?: continue
-                // Do not turn a synthesized LTO alias into a target type-ID anchor.
-                if (symbols.nameAt(entry) != functionName) continue
-                if (entry.toLong() < textStart.toLong() + 4 ||
-                    entry.toLong() + 4 > textEnd || entry % 4 != 0) continue
-                requireBtf(namedFunctions.getValue(functionName).all {
-                    candidateSignature(it) == expected
-                }, "FUNCTION_TYPEID_FUNCTION_AMBIGUOUS:$functionName")
-                ids += UltraKernelA64.le32Bits(data, entry - 4)
+                for (entry in addresses) {
+                    // Do not turn a synthesized LTO alias into a target type-ID anchor.
+                    if (addresses.size == 1 && symbols.nameAt(entry) != functionName) continue
+                    if (entry.toLong() < textStart.toLong() + 4 ||
+                        entry.toLong() + 4 > textEnd || entry % 4 != 0) continue
+                    requireBtf(namedFunctions.getValue(functionName).all {
+                        candidateSignature(it) == expected
+                    }, "FUNCTION_TYPEID_FUNCTION_AMBIGUOUS:$functionName")
+                    ids += UltraKernelA64.le32Bits(data, entry - 4)
+                }
             }
             for ((expected, ids) in result)
                 requireBtf(ids.isNotEmpty(), "FUNCTION_TYPEID_MISSING:$expected")
@@ -936,7 +994,7 @@ internal object UltraKernelBtf {
 
         fun managementCallbackTypeids(symbols: UltraKernelKallsymsTable,
             callbacks: Map<String, String>, origins: Map<String, UltraKernelResidentAbi.CallbackOrigin>): Map<String, Set<Int>> {
-            fun boundary(name: String) = symbols.offsetsOf(name).singleOrNull()
+            fun boundary(name: String) = symbols.memoryOffsetsOf(name).singleOrNull()
                 ?: throw Invalid("BOUNDARY:$name")
             val textStart = boundary("_stext")
             val textEnd = boundary("_etext")
@@ -981,14 +1039,14 @@ internal object UltraKernelBtf {
                                 ids += nativeTypeid(offset.toInt(), expected, key)
                             }
                         }
+                        if (ids.isEmpty()) ids += sessionCallbackTypeids(symbols,
+                            mapOf("work_struct.func" to expected.removePrefix("*"))).getValue("work_struct.func")
                     }
                     "rcu" -> {
                         requireBtf(key == "msu_uid_snapshot_reclaim_rcu" && origin.source == "call_rcu" &&
                             origin.parameterIndex == 1 && origin.secondarySource == "rcu_callback_t", "RCU_CALLBACK_ORIGIN:$key")
-                        for (index in types.indices.filter { types[it].kind == 12 && signature(it) == expected.removePrefix("*") })
-                            for (entry in symbols.offsetsOf(name(types[index].name)))
-                                if (entry >= textStart + 4 && entry.toLong() + 4 <= textEnd && entry % 4 == 0)
-                                    ids += nativeTypeid(entry, expected, key)
+                        ids += sessionCallbackTypeids(symbols,
+                            mapOf("callback_head.func" to expected.removePrefix("*"))).getValue("callback_head.func")
                     }
                     "internal" -> continue // Proven by the same payload object's call-site type, not this kernel.
                     else -> throw Invalid("MANAGEMENT_CALLBACK_ORIGIN:$key")

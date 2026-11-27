@@ -20,10 +20,14 @@
 
 namespace kernel_module {
 enum class RequestAuthMode : uint8_t { LegacyKey = 0, ManagerOwner = 1, EarlyHelper = 3 };
-// Explicit calling-thread choice after the real claim flow. New worker threads
-// select their mode explicitly. Selecting a mode grants nothing; the gateway
+// New threads default to ManagerOwner. LegacyKey requires explicit selection
+// and a real historical credential. Request failures never select another protocol. Selecting a mode grants nothing; the gateway
 // authenticates every operation. No automatic downgrade or cross-thread change.
 KModErr maplesu_request_set_auth_mode(RequestAuthMode mode);
+// Compatibility only: explicit selection with the actual historical credential.
+// Current-task request failures never call this entry automatically.
+KModErr maplesu_request_select_legacy(const char* credential);
+void maplesu_request_clear_legacy();
 uint64_t maplesu_request_auth_state();
 // Low two bits identify the authentication source, not its granted permissions.
 // Exhaustion/invalid tags stay closed and never enter the Legacy Key boundary.
@@ -31,7 +35,7 @@ inline RequestAuthMode maplesu_request_auth_mode(uint64_t state) {
     return static_cast<RequestAuthMode>(state & 3);
 }
 inline bool maplesu_request_auth_usable(uint64_t state) {
-    return state != UINT64_MAX && (state & 3) != 2;
+    return state != 0 && state != UINT64_MAX && (state & 3) != 2;
 }
 inline bool maplesu_request_auth_legacy(uint64_t state) {
     return maplesu_request_auth_usable(state) && maplesu_request_auth_mode(state) == RequestAuthMode::LegacyKey;
@@ -83,6 +87,8 @@ KModErr maplesu_request_owner_channel(maplesu_metadata_owner_v3& metadata,
 // vendor-READ promotion, Key fallback or uncertain-OPEN replay. Subsequent typed
 // namespace/binding/lifetime and ROOT/task/procattr/CLOSE reuse this same session.
 KModErr maplesu_request_helper_open();
+// Worker creation preserves the selected protocol; each child authenticates its operations.
+KModErr maplesu_request_worker_admission();
 KModErr maplesu_request_owner_read(uint64_t source, void* destination, uint32_t size,
     const RequestOwnerBinding& binding);
 KModErr maplesu_request_owner_echo(uint64_t value, uint64_t& result);

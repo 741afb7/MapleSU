@@ -2,20 +2,21 @@
 package dev.maplesu.manager.runtime.ultra
 
 import android.content.Context
-import android.os.Process
-import android.os.SystemClock
 import android.util.Log
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.superuser.LiteImplantQuiesceGate
 import dev.maplesu.manager.workmode.ui.WorkModeSwitchSession
-import java.security.MessageDigest
 import java.util.concurrent.CancellationException
+
+/** Preparation cancellation proves the SDK installation was never submitted. */
+internal class UltraInstallPreparationCancelled(val cancellation: CancellationException) :
+    CancellationException("INSTALL_PREPARATION_CANCELLED") {
+    init { initCause(cancellation) }
+}
 
 object UltraEnvironmentInstaller {
 
     private const val TAG = "MapleSUUltraInstaller"
-    private val backupMaintenance = UltraBackupMaintenance(SystemClock::elapsedRealtime)
 
     /** 安装意图。默认值保持既有调用点的语义（复用运行中的环境）。 */
     enum class Intent {
@@ -38,7 +39,6 @@ object UltraEnvironmentInstaller {
         val sdkError: String,
         val reason: String? = null,
         val whitelist: String? = null,
-        val backup: String? = null,
         val detail: String? = null,
         /** 每次真正提交安装后核对；回读失败/摘要不符 → false（[ok] 仍可为 true）。 */
         val verified: Boolean = true,
@@ -53,7 +53,6 @@ object UltraEnvironmentInstaller {
                 (sdkErrorCode?.let { " sdkErrorCode=$it" } ?: "") +
                 (reason?.let { " reason=$it" } ?: "") +
                 (whitelist?.let { " suAuth[$it]" } ?: "") +
-                (backup?.let { " backup[$it]" } ?: "") +
                 " verified=$verified" +
                 " submissionUnknown=$submissionUnknown" +
                 (buildId?.let { " buildId=$it" } ?: "") +
@@ -67,7 +66,7 @@ object UltraEnvironmentInstaller {
         detail = "phase=$phase operation=${receipt.operation} bridgeVersion=${receipt.bridgeVersion}",
         submissionUnknown = phase == "install" && (receipt.operationCompleted ||
             receipt.sdkError !in setOf("MAPLESU_SDK_BUSY", "MAPLESU_SDK_INTERRUPTED",
-                "MAPLESU_BRIDGE_UNAVAILABLE", "MAPLESU_ULTRA_ROOT_KEY_ABSENT", "SDK_CREDENTIAL_SCOPE_CHANGED")),
+                "MAPLESU_BRIDGE_UNAVAILABLE", "SDK_IDENTITY_SCOPE_CHANGED")),
     )
 
     /**
@@ -82,11 +81,10 @@ object UltraEnvironmentInstaller {
 
     /**
      * 安装之后的附带动作。主机测试传空实现；生产由 [install] 用真实 Context 装好。
-     * 真正提交后先回读并保存身份，再做白名单、备份与探针刷新。
+     * 真正提交后先回读并保存身份，再做白名单与探针刷新。
      */
     class Attachments(
         val whitelist: () -> UltraSelfWhitelist.Result,
-        val backup: () -> String?,
         /** 每次真正提交安装后调用；复用 Running 不重复回读。 */
         val verify: () -> IdentityObservation = {
             IdentityObservation(InstalledIdentity.unknown(), IdentityVerification.passed(null))
@@ -94,29 +92,18 @@ object UltraEnvironmentInstaller {
         /** 只有核对通过才落盘（未经验证的身份不许写成「已装」）。 */
         val persist: (InstalledIdentity) -> Unit = {},
         val refreshProbe: () -> Unit = {},
-        /** Prepare the deployed current SDK/restorer before a Boot upgrade can reboot. */
-        val prepareUpgrade: () -> Outcome? = { null },
         val prepareInstall: () -> String? = { null },
         val scopeFailure: () -> String? = { null },
         /** Explicit installation initializes only a genuinely absent durable authority. */
         val initializeAuthority: () -> String? = { null },
     )
 
-    /**
-     * 安装成功之后的附带动作（纯编排；主机测试直接调它，不需要 JNI/Context）。
-     *
-     * 规则：
-     *  - `succeeded == false` → 白名单/备份**都不调用**；
-     *  - 白名单抛异常 → 安装仍是成功，`whitelist` 记 `EXCEPTION:<类型>`；
-     *  - 白名单失败或抛异常 → 仍通过 Key 通道备份，避免遗漏重装恢复材料；
-     *  - 备份抛异常 → 安装仍是成功，`backup` 记 `EXCEPTION:<类型>`。
-     */
+    /** Authorization maintenance never changes a completed installation result. */
     fun afterInstall(
         succeeded: Boolean,
         sdkError: String,
         reason: String?,
         whitelist: () -> UltraSelfWhitelist.Result,
-        backup: () -> String?,
     ): Outcome {
         if (!succeeded) return Outcome(false, receiptErrorName(false, sdkError), reason)
         val white = try {
@@ -125,17 +112,11 @@ object UltraEnvironmentInstaller {
             null
         }
         val whiteSummary = white?.summary ?: "EXCEPTION:WHITELIST"
-        val backupReason = try {
-            backup()
-        } catch (error: Throwable) {
-            "EXCEPTION:${error.javaClass.simpleName}"
-        }
         return Outcome(
             ok = true,
             sdkError = sdkError,
             reason = reason,
             whitelist = whiteSummary,
-            backup = backupReason,
         )
     }
 
@@ -152,51 +133,45 @@ object UltraEnvironmentInstaller {
     }
 
     /**
-     * 用本地 key 安装环境。安装成功后自动自白名单 + 备份 key。
+     * 使用当前受验证安装身份安装环境，安装后核对真实回执与授权状态。
      *
      * <p>启动链路里 `UltraEnvironmentAutoSetup` 与 `UltraSelfHeal` 在不同
      * daemon 线程上可能同时判断出「需要补装」，锁内重新检查 Running，避免排队中的旧请求
-     * 再次安装已激活的环境；自白名单与备份仍按原顺序补齐。
+     * 再次安装已激活的环境；自白名单仍在安装结果之后维护。
      *
      * @param intent 默认 [Intent.ReuseRunning]（保持既有调用点语义）；升级必须显式传
      *   [Intent.UpgradeToBundledBuild]，否则会被 Running 短路掉。
-     * @param client 绑定 key 的客户端；默认复用 [UltraSdkCredentials] 的捕获身份。
+     * @param client 默认复用 [UltraSdkCredentials] 捕获的安装身份。
      */
     fun install(
         context: Context,
         client: UltraRuntimeClient = UltraSdkCredentials.client(context),
         intent: Intent = Intent.ReuseRunning,
     ): Outcome {
-        val key = UltraSdkCredentials.read(context)
         val bootId = UltraEnvironmentAutoSetup.currentBootId()
         val activation = ModeRuntime.activation
-        val suspended = UltraSdkCredentials.suspended(context)
-        val clientScope = client.logPolicyScope()
-        val owner = if (key == null) client.queryManagerOwnerIdentity().identity else null
-        val expectedScope = key?.let {
-            MessageDigest.getInstance("SHA-256").digest(it.toByteArray(Charsets.US_ASCII))
-                .joinToString("") { byte -> "%02x".format(byte.toInt() and 255) }
+        val current = UltraSdkCredentials.captureOwnerMarker(context)
+        val legacy = UltraLegacyCredential.read(context)?.takeIf {
+            it.fingerprint == client.legacyCredentialFingerprint
         }
+        val owner = if (client.legacyCredentialFingerprint == null) client.queryManagerOwnerIdentity().identity else null
         fun checkScope(): String? = when {
             Thread.currentThread().isInterrupted -> "MAPLESU_SDK_INTERRUPTED"
             bootId == null || UltraEnvironmentAutoSetup.currentBootId() != bootId -> "INSTALL_BOOT_CHANGED"
-            ModeRuntime.activation != activation -> "INSTALL_MODE_CHANGED"
+            ModeRuntime.activation !== activation -> "INSTALL_MODE_CHANGED"
             LiteImplantQuiesceGate.isBlocked() || WorkModeSwitchSession.executing -> "INSTALL_SWITCH_PENDING"
-            key == null && owner == null -> "INSTALL_IDENTITY_UNCONFIRMED"
-            clientScope != expectedScope || UltraSdkCredentials.read(context) != key ||
-                client.logPolicyScope() != clientScope ||
-                owner != null && client.queryManagerOwnerIdentity().identity != owner -> "INSTALL_IDENTITY_CHANGED"
-            UltraSdkCredentials.suspended(context) != suspended -> "INSTALL_SUSPENSION_CHANGED"
+            owner == null && legacy == null -> "INSTALL_IDENTITY_UNCONFIRMED"
+            !current() || (legacy != null && !legacy.isCurrent(context)) ||
+                (owner != null && client.queryManagerOwnerIdentity().identity != owner) -> "INSTALL_IDENTITY_CHANGED"
             else -> null
         }
-        val scopedClient = client.scoped(key) { checkScope() == null }
+        val scopedClient = client.scoped { checkScope() == null }
         return synchronized(this) {
             install(
                 port = portOf(scopedClient, intent),
                 intent = intent,
                 attachments = Attachments(
                     whitelist = { UltraSelfWhitelist.onEnvironmentInstalled(context, scopedClient) { checkScope() == null } },
-                    backup = { if (owner != null) "SKIPPED:OWNER_IDENTITY" else backupKey(context, key)?.reason },
                     verify = {
                         // Boot 安装返回后设备马上重启，文件可能刚写完：给 3 次、每次 1s 的有界重试。
                         UltraInstalledIdentityProbe.readAndVerify(
@@ -213,17 +188,6 @@ object UltraEnvironmentInstaller {
                     refreshProbe = {
                         runCatching { UltraEnvironmentProbe.refresh(context) }
                             .onFailure { Log.w(TAG, "probe refresh after install failed (ignored)") }
-                    },
-                    prepareUpgrade = {
-                        // The SDK can reboot immediately after submission. Deploy the repaired
-                        // SDK/boot restorer first, not in the remaining post-install window.
-                        // Signed Owner installation uses the existing native gateway and
-                        // boot-owned namespace; it does not need the legacy key broker.
-                        // Tools/backend preparation and helper readback still run below.
-                        if (owner != null) null else {
-                            val prepared = backupKey(context, key, forceIdentity = true, preparingUpgrade = true)
-                            upgradePreparationFailure(prepared)
-                        }
                     },
                     prepareInstall = { UltraPolicyBackendDeployment.prepare(context, scopedClient) },
                     scopeFailure = ::checkScope,
@@ -245,16 +209,8 @@ object UltraEnvironmentInstaller {
     private fun scopeFailure(attachments: Attachments): String? =
         runCatching { attachments.scopeFailure() }.getOrDefault("INSTALL_SCOPE_UNREADABLE")
 
-    internal fun upgradePreparationFailure(prepared: UltraRecoveryKeyStore.BackupOutcome?): Outcome? =
-        if (prepared?.identityPrepared == true) null else Outcome(
-            false, receiptErrorName(false, prepared?.sdkError ?: "UPGRADE_PREPARATION_FAILED"),
-            reason = prepared?.reason ?: "IDENTITY_PREPARATION_UNAVAILABLE",
-            sdkErrorCode = prepared?.sdkErrorCode,
-            detail = prepared?.detail,
-        )
-
     /**
-     * 编排主体（不碰 Android）：提交/复用 → 回读身份 → 白名单 → 备份 → 刷新探针。
+     * 编排主体（不碰 Android）：提交/复用 → 回读身份 → 白名单 → 刷新探针。
      * 只有复用路径需要先读 Running；显式升级已在入口核对事实。
      */
     fun install(port: InstallPort, intent: Intent, attachments: Attachments): Outcome {
@@ -287,25 +243,12 @@ object UltraEnvironmentInstaller {
             val failure = try {
                 attachments.prepareInstall()
             } catch (error: Exception) {
+                if (error is CancellationException) throw UltraInstallPreparationCancelled(error)
                 if (error is InterruptedException) Thread.currentThread().interrupt()
                 "POLICY_BACKEND_PREPARATION_EXCEPTION"
             }
             if (failure != null) return Outcome(false, "POLICY_BACKEND_PREPARATION_FAILED", reason = failure)
             pendingScopeFailure()?.let { return it }
-            // Complete tools/policy preflight before replacing the recovery identity.
-            // A tools failure must not first stop or publish the current broker tuple.
-            if (intent == Intent.UpgradeToBundledBuild || intent == Intent.RefreshToBundledBuild) {
-                val failure = try {
-                    attachments.prepareUpgrade()
-                } catch (error: Exception) {
-                    if (error is InterruptedException) Thread.currentThread().interrupt()
-                    Outcome(false, if (error is InterruptedException || error is CancellationException)
-                        "MAPLESU_SDK_INTERRUPTED" else "UPGRADE_PREPARATION_FAILED",
-                        reason = "PREPARATION_EXCEPTION:${error.javaClass.simpleName}")
-                }
-                if (failure != null) return failure
-                pendingScopeFailure()?.let { return it }
-            }
         }
         if (Thread.currentThread().isInterrupted) return Outcome(false, "MAPLESU_SDK_INTERRUPTED")
         pendingScopeFailure()?.let { return it }
@@ -349,10 +292,6 @@ object UltraEnvironmentInstaller {
                 check(scopeFailure(attachments) == null) { "INSTALL_CONTEXT_CHANGED" }
                 if (authorityFailure == null) attachments.whitelist()
                 else UltraSelfWhitelist.Result(false, false, false, false, false, authorityFailure)
-            },
-            backup = {
-                check(scopeFailure(attachments) == null) { "INSTALL_CONTEXT_CHANGED" }
-                attachments.backup()
             },
         )
         scopeFailure(attachments)?.let { return submittedUnverified(it) }
@@ -419,90 +358,4 @@ object UltraEnvironmentInstaller {
         runCatching(block)
     }
 
-    /** The kernel credential owns recovery; a stale package/UID su grant is not required. */
-    fun backupKey(context: Context, key: String? = null, forceIdentity: Boolean = false,
-                  preparingUpgrade: Boolean = false): UltraRecoveryKeyStore.BackupOutcome? =
-        runCatching {
-            val resolved = key ?: UltraRootKeyStore.read(context)
-                ?: return UltraRecoveryKeyStore.BackupOutcome(false, true, "BACKUP_CREDENTIAL_ABSENT", "BACKUP_CREDENTIAL_ABSENT")
-            // Resolve scope under the maintenance monitor, including after waiting for a peer.
-            backupMaintenance.ensure(identity = {
-                val boot = UltraEnvironmentAutoSetup.currentBootId()
-                if (!preparingUpgrade && boot != null && !UltraIdentityRecovery.blocked(context) &&
-                    !dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.executing && UltraRootKeyStore.read(context) == resolved) {
-                    val fingerprint = MessageDigest.getInstance("SHA-256").digest(resolved.toByteArray(Charsets.US_ASCII))
-                        .joinToString("") { "%02x".format(it.toInt() and 255) }
-                    UltraBackupMaintenance.Identity(fingerprint, boot, context.packageName, Process.myUid())
-                } else null
-            }, force = forceIdentity || preparingUpgrade) {
-                val client = UltraRuntimeClient { resolved }
-                val boot = UltraEnvironmentAutoSetup.currentBootId()
-                fun ineligible(): String? = when {
-                    Thread.currentThread().isInterrupted -> "BACKUP_CANCELLED"
-                    boot == null -> "BACKUP_BOOT_UNAVAILABLE"
-                    UltraEnvironmentAutoSetup.currentBootId() != boot -> "BACKUP_BOOT_CHANGED"
-                    dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.executing -> "BACKUP_MODE_SWITCHING"
-                    UltraRootKeyStore.read(context) != resolved -> "BACKUP_IDENTITY_CHANGED"
-                    UltraIdentityRecovery.blocked(context, preparingUpgrade) -> "BACKUP_IDENTITY_SUSPENDED"
-                    else -> null
-                }
-                val attempt = "${Thread.currentThread().id}:${System.nanoTime()}"
-                fun rejected(reason: String, phase: String): UltraRecoveryKeyStore.BackupOutcome {
-                    quietLog { Log.i(TAG, "backup attempt=$attempt upgrade=$preparingUpgrade phase=$phase status=$reason") }
-                    return UltraRecoveryKeyStore.BackupOutcome(false, true, reason,
-                        if (reason == "BACKUP_CANCELLED") "MAPLESU_SDK_INTERRUPTED" else reason)
-                }
-                fun eligible() = ineligible() == null
-                ineligible()?.let { return@ensure rejected(it, "eligible-before") }
-                // Keep the complete proof: busy/transport failure is not an invalid identity.
-                val proofStarted = SystemClock.elapsedRealtime()
-                val proof = client.runRootCommand("/system/bin/id -u")
-                quietLog { Log.i(TAG, "backup attempt=$attempt upgrade=$preparingUpgrade phase=root-proof " +
-                    "operation=${proof.operation} bridgeVersion=${proof.bridgeVersion} " +
-                    "sdkError=${proof.sdkError} sdkErrorCode=${proof.sdkErrorCode} " +
-                    "elapsedMs=${SystemClock.elapsedRealtime() - proofStarted}") }
-                ineligible()?.let { return@ensure rejected(it, "eligible-after") }
-                if (!proof.succeeded) {
-                    return@ensure UltraRecoveryKeyStore.BackupOutcome(false, true,
-                        proof.reason ?: "BACKUP_ROOT_PROOF_FAILED", receiptErrorName(false, proof.sdkError), proof.sdkErrorCode,
-                        "phase=root-proof operation=${proof.operation} bridgeVersion=${proof.bridgeVersion}")
-                }
-                val uid = client.decodeText(proof.string("result"))?.trim()?.toIntOrNull()
-                if (uid == null || uid < 0) return@ensure rejected("BACKUP_ROOT_UID_UNREADABLE", "root-uid")
-                if (uid != 0) return@ensure rejected("BACKUP_ROOT_UID_NOT_ZERO", "root-uid")
-                val logging = UltraSdkLogging.apply(client)
-                if (logging != null && !logging.succeeded) quietLog {
-                    Log.i(TAG, "backup attempt=$attempt phase=log-policy sdkError=${logging.sdkError} sdkErrorCode=${logging.sdkErrorCode}")
-                }
-                // Preparation must not depend on standard-su delivery, which an
-                // authorization transaction may temporarily close. Keep the SDK-key
-                // transport just verified above; never replay a submitted script.
-                val maintenance = client
-                val backup = UltraRecoveryKeyStore.ensureBackup(
-                    context = context,
-                    root = runner@{ script ->
-                        if (!eligible()) return@runner null
-                        val receipt = maintenance.runRootCommand(script)
-                        if (!eligible()) return@runner null
-                        SuExecResult(if (receipt.succeeded) 0 else -1,
-                            maintenance.decodeText(receipt.string("result")).orEmpty())
-                    },
-                    key = resolved,
-                )
-                ineligible()?.let { return@ensure rejected(it, "backup-after") }
-                val identity = UltraIdentityRecovery.ensure(context, resolved, maintenance, force = forceIdentity,
-                    preparingUpgrade = preparingUpgrade)
-                val identityPrepared = identity == "IDENTITY_READY" ||
-                    preparingUpgrade && identity == "IDENTITY_UPGRADE_PREPARED"
-                backup.copy(ok = backup.ok && identityPrepared, identityPrepared = identityPrepared,
-                    reason = "${backup.reason};$identity")
-            }
-        }.getOrElse { error ->
-            if (error is InterruptedException) Thread.currentThread().interrupt()
-            val cancelled = error is InterruptedException || error is CancellationException
-            quietLog { Log.w(TAG, "key backup failed: ${error.javaClass.simpleName}") }
-            UltraRecoveryKeyStore.BackupOutcome(false, true, "BACKUP_EXCEPTION:${error.javaClass.simpleName}",
-                if (cancelled) "MAPLESU_SDK_INTERRUPTED" else "UPGRADE_PREPARATION_FAILED")
-        }
-            ?.also { Log.i(TAG, "key backup outcome ${UltraSdkLogging.redact(it.reason)}") }
 }

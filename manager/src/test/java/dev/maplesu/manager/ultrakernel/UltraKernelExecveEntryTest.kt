@@ -50,7 +50,7 @@ class UltraKernelExecveEntryTest {
         val raw = UltraKernelPlan.readKernel(File(root, "Boot_Research/NGKI/boot.img"))
         val symbols = UltraKernelKallsymsTable.decode(raw)
         val entry = requireNotNull(symbols.offsetOf("__do_execve_file"))
-        val plan = UltraKernelSpecGenerator().generate(raw, UltraKernelCredential.of("Aa1".repeat(16)))
+        val plan = UltraKernelSpecGenerator().generate(raw)
         val hook = plan.records.single { it.role == "do_execveat_common+0x0" }
         val frame = plan.records.single { it.role == "arm64_notify_die+0x0" }
         val guard = plan.records.single { it.role == "execve-null-guard" }

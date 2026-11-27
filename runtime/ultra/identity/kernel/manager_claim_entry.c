@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <linux/version.h>
+#include <linux/errno.h>
+#include <linux/string.h>
+#include <linux/uaccess.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
 #include <crypto/sha.h>
 #else
 #include <crypto/sha2.h>
 #endif
-#include <linux/string.h>
-#include <linux/uaccess.h>
 #include "manager_apk_identity.h"
 #include "manager_claim_entry.h"
 #include "protected_install_kernel.h"
@@ -57,12 +58,8 @@ int msu_manager_claim_entry(const struct msu_manager_claim_boot_policy *boot,
     if (msu_kernel_verify_manager_installation(&msu_manager_policy, &generation))
         return 0;
     if (generation < msu_manager_policy.pin.minimum_generation) return 0;
-    /* Hardened usercopy rejects a direct source inside kernel text. The boot
-     * credential is retained there; copy from this live stack frame instead. */
+    /* Hardened usercopy requires a live stack copy rather than a text source. */
     memcpy(credential, boot->credential, sizeof(credential));
-    /* The client writes its stack reply before invoking the syscall. Keep
-     * target-specific access checks/PAN and fault recovery in the kernel's
-     * own uaccess implementation rather than importing DDK inline layouts. */
     delivered = copy_to_user_nofault((void __user *)(unsigned long)address,
                                     credential, sizeof(credential)) == 0;
     memzero_explicit(credential, sizeof(credential));

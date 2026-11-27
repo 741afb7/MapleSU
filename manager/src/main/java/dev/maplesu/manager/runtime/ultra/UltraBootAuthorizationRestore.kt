@@ -59,11 +59,14 @@ internal class UltraAuthorizationRestoreResult private constructor(
 internal class UltraBootAuthorizationRestore(private val pause: (Long) -> Unit = Thread::sleep) {
     private var restored: Pair<String, String>? = null
 
+    @Synchronized
+    fun invalidate() { restored = null }
+
     fun maintain(suspended: () -> Boolean, restore: () -> String,
                  onResult: (String) -> Unit = {}): String =
         maintainAttempt(suspended, { UltraAuthorizationRestoreResult.local(restore()) }, { onResult(it.status) })
 
-    /** A broker stays active after success; its session decides when an SDK write is needed. */
+    /** An existing lifecycle task decides when another SDK write is needed. */
     fun maintainAttempt(suspended: () -> Boolean, restore: () -> UltraAuthorizationRestoreResult,
                         onResult: (UltraAuthorizationRestoreResult) -> Unit = {}): String {
         var previous: String? = null
@@ -98,16 +101,16 @@ internal class UltraBootAuthorizationRestore(private val pause: (Long) -> Unit =
         }
     }
 
-    /** One-shot callers may wait for PM; a long-lived broker uses maintain instead. */
-    fun ensureWhenIdentityAvailable(bootId: String?, keyFingerprint: String,
+    /** An explicit caller may wait for a pending installation identity. */
+    fun ensureWhenIdentityAvailable(bootId: String?, ownerFingerprint: String,
                                     suspended: () -> Boolean, restore: () -> String): String {
         while (true) {
             if (Thread.currentThread().isInterrupted) return "MAPLESU_SDK_INTERRUPTED"
             if (suspended()) return "SUSPENDED"
-            val result = ensure(bootId, keyFingerprint) {
+            val result = ensure(bootId, ownerFingerprint) {
                 if (suspended()) "SUSPENDED" else restore()
             }
-            if (result != UltraManagerSignatureAuthorization.IDENTITY_PENDING) return result
+            if (result != "MANAGER_IDENTITY_PENDING") return result
             try {
                 pause(1_000L)
             } catch (_: InterruptedException) {
@@ -117,17 +120,21 @@ internal class UltraBootAuthorizationRestore(private val pause: (Long) -> Unit =
         }
     }
 
-    fun ensure(bootId: String?, keyFingerprint: String, restore: () -> String): String =
-        ensureAttempt(bootId, keyFingerprint) { UltraAuthorizationRestoreResult.local(restore()) }.status
+    fun ensure(bootId: String?, ownerFingerprint: String, restore: () -> String): String =
+        ensureAttempt(bootId, ownerFingerprint) { UltraAuthorizationRestoreResult.local(restore()) }.status
 
-    fun ensureAttempt(bootId: String?, keyFingerprint: String,
+    fun ensure(bootId: String?, ownerFingerprint: String, suspended: () -> Boolean,
+               restore: () -> String): String =
+        ensureAttempt(bootId, ownerFingerprint, suspended) { UltraAuthorizationRestoreResult.local(restore()) }.status
+
+    fun ensureAttempt(bootId: String?, ownerFingerprint: String,
                       restore: () -> UltraAuthorizationRestoreResult): UltraAuthorizationRestoreResult =
-        ensureAttempt(bootId, keyFingerprint, { false }, restore)
+        ensureAttempt(bootId, ownerFingerprint, { false }, restore)
 
     @Synchronized
-    fun ensureAttempt(bootId: String?, keyFingerprint: String, suspended: () -> Boolean,
+    fun ensureAttempt(bootId: String?, ownerFingerprint: String, suspended: () -> Boolean,
                       restore: () -> UltraAuthorizationRestoreResult): UltraAuthorizationRestoreResult {
-        val scope = bootId?.takeIf { it.isNotBlank() }?.let { it to keyFingerprint }
+        val scope = bootId?.takeIf { it.isNotBlank() }?.let { it to ownerFingerprint }
         if (suspended()) {
             restored = null
             return UltraAuthorizationRestoreResult.local("SUSPENDED")
@@ -137,6 +144,7 @@ internal class UltraBootAuthorizationRestore(private val pause: (Long) -> Unit =
         if (Thread.currentThread().isInterrupted) return UltraAuthorizationRestoreResult.local("MAPLESU_SDK_INTERRUPTED")
         var result = restore()
         for (delay in longArrayOf(250L, 750L)) {
+            if (suspended()) return result.withStatus("SUSPENDED")
             if (Thread.currentThread().isInterrupted) return result.withStatus("MAPLESU_SDK_INTERRUPTED")
             // Only the same structured receipt can prove this attempt did not commit.
             if (!result.retryableBeforeCommit) break
@@ -147,8 +155,10 @@ internal class UltraBootAuthorizationRestore(private val pause: (Long) -> Unit =
                 return result.withStatus("MAPLESU_SDK_INTERRUPTED")
             }
             if (Thread.currentThread().isInterrupted) return result.withStatus("MAPLESU_SDK_INTERRUPTED")
+            if (suspended()) return result.withStatus("SUSPENDED")
             result = restore()
         }
+        if (suspended()) return result.withStatus("SUSPENDED")
         if (Thread.currentThread().isInterrupted) return result.withStatus("MAPLESU_SDK_INTERRUPTED")
         if (result.status == "OK") restored = scope
         return result

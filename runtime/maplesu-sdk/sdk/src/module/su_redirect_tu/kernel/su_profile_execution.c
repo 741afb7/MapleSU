@@ -4,14 +4,15 @@
 #include "su_install_registry.h"
 #include "su_profile_apply.h"
 #include "su_profile_execution.h"
-#include "manager_management.h"
+#include "manager_dynamic_layout.h"
 #include "manager_task_state.h"
 
 int msu_su_profile_check_execution(const struct msu_su_profile *profile)
 {
     int error;
-    if (!(msu_management_capabilities() & MAPLESU_CAP_TASK_STATE))
-        return -EOPNOTSUPP;
+    /* CORE/SU task cleanup uses its qualified native path, independently of
+     * the optional management TASK_STATE command. */
+    if (!msu_runtime_layout_ready()) return -EPROTO;
     error = msu_su_profile_check(profile);
     if (error) return error;
     return msu_su_profile_namespace_supported(profile->namespace_mode);

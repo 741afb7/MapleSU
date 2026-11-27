@@ -78,6 +78,11 @@ internal object InstallerServiceClient {
     fun capturePairedBoot(context: Context, expected: InstallerSnapshot, destination: File): File =
         capturePairedPartition(context, expected, "boot", destination)
 
+    /** Keep the paired ramdisk bound to the same verified boot-chain snapshot. */
+    @Synchronized
+    fun capturePairedInitBoot(context: Context, expected: InstallerSnapshot, destination: File): File =
+        capturePairedPartition(context, expected, "init_boot", destination)
+
     /** A reselected original must be the verified inverse of this same live init_boot. */
     fun verifyInitBootSource(context: Context, expected: InstallerSnapshot, source: File):
         dev.maplesu.manager.ultrakernel.UltraKernelDeploymentNamespace? {
@@ -140,12 +145,12 @@ internal object InstallerServiceClient {
                             android.system.Os.fchmod(output.fd, 0x100)
                         }
                         verify(temporary)
-                        same(decode(observe(service)))
                         try { Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE) }
                         catch (error: java.nio.file.FileAlreadyExistsException) { verify(destination) }
                     }
                 }
-                same(decode(observe(service)))
+                // openPartitionImage already returns a frozen read-only copy after its two
+                // device observations. Reuse that verified snapshot; commit revalidates PRE.
                 verify(destination)
                 destination
             } finally { pending?.let { Files.deleteIfExists(it.toPath()) } }
@@ -160,30 +165,23 @@ internal object InstallerServiceClient {
             !receipt.getBoolean("operationActive") && receipt.getString("slotSuffix") == observed.slotSuffix &&
             partition in InstallPartition.ALLOWED_WIRE && partition in observed.partitions &&
             receipt.getString("partitionSha256") == observed.partitions[partition]?.sha256) return requireNotNull(partition)
-        if ("init_boot" in observed.partitions) {
-            val current = analyzeCurrentPartition(context, "init_boot")
-            check(current.slotSuffix == observed.slotSuffix &&
-                current.partitions.getValue("init_boot").sha256 == observed.partitions.getValue("init_boot").sha256) {
-                "INSTALLER_DEVICE_CHANGED"
+        val directory = Files.createTempDirectory(context.filesDir.toPath(), ".carrier-").toFile()
+        try {
+            if ("init_boot" in observed.partitions) {
+                val image = capturePairedInitBoot(context, observed, File(directory, "init_boot.img"))
+                if (dev.maplesu.image.UltraInitBootProducer.recognizes(image)) return "init_boot"
             }
-            if (dev.maplesu.image.UltraInitBootProducer.recognizes(File(context.filesDir, "images/imported.img")))
-                return "init_boot"
-        }
-        if ("boot" in observed.partitions) {
-            val current = analyzeCurrentPartition(context, "boot")
-            check(current.slotSuffix == observed.slotSuffix &&
-                current.partitions.getValue("boot").sha256 == observed.partitions.getValue("boot").sha256) {
-                "INSTALLER_DEVICE_CHANGED"
+            if ("boot" in observed.partitions) {
+                val image = capturePairedBoot(context, observed, File(directory, "boot.img"))
+                if (dev.maplesu.image.UltraInitBootProducer.recognizes(image)) return "boot"
+                val recovery = dev.maplesu.manager.ultrakernel.UltraKernelOriginalRecovery(
+                    dev.maplesu.manager.ultrakernel.UltraKernelContextAssets(context))
+                val receipts = dev.maplesu.manager.compat.UltraStateStorage.flash(context.filesDir)
+                if (recovery.installedSpec(image, receipts) != null ||
+                    recovery.generatedKernelWithDeployment(image, receipts) != null) return "boot"
             }
-            val image = File(context.filesDir, "images/imported.img")
-            if (dev.maplesu.image.UltraInitBootProducer.recognizes(image)) return "boot"
-            val recovery = dev.maplesu.manager.ultrakernel.UltraKernelOriginalRecovery(
-                dev.maplesu.manager.ultrakernel.UltraKernelContextAssets(context))
-            val receipts = dev.maplesu.manager.compat.UltraStateStorage.flash(context.filesDir)
-            if (recovery.installedSpec(image, receipts) != null ||
-                recovery.generatedKernelWithDeployment(image, receipts) != null) return "boot"
-        }
-        return null
+            return null
+        } finally { directory.deleteRecursively() }
     }
 
     /** Legacy carrier selection keeps boot as its operational fallback when no carrier is proven. */
@@ -208,7 +206,7 @@ internal object InstallerServiceClient {
             withService(context, persistent = true) { it.commitBootInstall(taskId) }
         } else {
             prepared
-        }.also { dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(it) }
+        }.also { observeUltraTransaction(context, it) }
     }
 
     /**
@@ -221,6 +219,7 @@ internal object InstallerServiceClient {
      */
     fun prepareBootInstall(context: Context, candidate: File, snapshot: InstallerSnapshot,
                            recovery: File, taskId: String): Bundle {
+        dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.invalidateObservation()
         rememberTask(context, taskId)
         check(recovery.isFile) { "INSTALLER_RECOVERY_REQUIRED" }
         val candidateSha256 = BlockDeviceTransaction.paddedDigest(candidate.toPath(), candidate.length())
@@ -324,6 +323,7 @@ internal object InstallerServiceClient {
     }
 
     fun beginInstallation(context: Context, taskId: String, rootTarget: InstallTargetMode? = null) {
+        dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.invalidateObservation()
         val previous = lastTaskId(context)
         if (previous != taskId) {
             // A new explicit attempt owns a new snapshot. Old task receipts remain queryable;
@@ -389,17 +389,18 @@ internal object InstallerServiceClient {
         } else withService(context, persistent = true,
             rootTarget = rootTarget ?: taskId?.let { installTargetOf(context, it) }) { it.getBootInstall(taskId ?: "") }
         rememberStockRestoreReceipt(context, status)
-        dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(status)
+        observeUltraTransaction(context, status)
         return status
     }
 
     /** Used only by an explicit continue action for this exact persisted PREPARED task. */
-    fun continueInstallation(context: Context, taskId: String): Bundle = withService(context, persistent = true) {
-        val status = it.getBootInstall(taskId)
-        check(status.getString("kind") != "NATIVE") { "INSTALLER_PATCH_INTERRUPTED" }
-        check(status.getString("state") == "PREPARED") { "INSTALLER_TRANSACTION_NOT_PREPARED" }
-        it.commitBootInstall(taskId).also { status ->
-            dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(status)
+    fun continueInstallation(context: Context, taskId: String): Bundle {
+        dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.invalidateObservation()
+        return withService(context, persistent = true) {
+            val status = it.getBootInstall(taskId)
+            check(status.getString("kind") != "NATIVE") { "INSTALLER_PATCH_INTERRUPTED" }
+            check(status.getString("state") == "PREPARED") { "INSTALLER_TRANSACTION_NOT_PREPARED" }
+            it.commitBootInstall(taskId).also { status -> observeUltraTransaction(context, status) }
         }
     }
 
@@ -407,16 +408,14 @@ internal object InstallerServiceClient {
         if (modeTask(context, taskId)) return runBlocking(Dispatchers.IO) {
             val result = modeFacade(context).abort(taskId)
             check(result?.ok == true) { result?.code ?: "INSTALLER_CANCELLATION_NOT_ALLOWED" }
-            modeStatus(result.status, taskId).also {
-                dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(taskId, "CANCELLED", null)
-            }
+            modeStatus(result.status, taskId).also { observeUltraTransaction(context, it) }
         }
         return withService(context, persistent = true) {
             it.cancelBootInstall(taskId).also { result ->
                 check(result.getString("taskId") == taskId && result.getString("state") == "CANCELLED") {
                     "INSTALLER_SERVICE_RESPONSE_INVALID"
                 }
-                dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(result)
+                observeUltraTransaction(context, result)
             }
         }
     }
@@ -457,6 +456,7 @@ internal object InstallerServiceClient {
     }
 
     fun restoreInstallation(context: Context, taskId: String): Bundle {
+        dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.invalidateObservation()
         clearStockRestoreReceipt(context)
         val result = if (modeTask(context, taskId)) runBlocking(Dispatchers.IO) {
             val facade = modeFacade(context)
@@ -467,10 +467,9 @@ internal object InstallerServiceClient {
                 if (restored?.ok == true) putString("state", "RESTORED")
             }
         } else withService(context, persistent = true) { service ->
-            dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(taskId, "RESTORING", null)
             service.restoreBootInstall(taskId)
         }
-        dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(result)
+        observeUltraTransaction(context, result)
         return result
     }
 
@@ -486,9 +485,15 @@ internal object InstallerServiceClient {
         if (modeTask(context, taskId)) return runBlocking(Dispatchers.IO) { modeFacade(context).reboot(taskId) }
         return withService(context, persistent = true) { service ->
             val status = service.getBootInstall(taskId)
-            dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore(context).observe(status)
+            observeUltraTransaction(context, status)
             if (!status.getBoolean("rebootRequired")) false else service.rebootAfterBootInstall(taskId)
         }
+    }
+
+    private fun observeUltraTransaction(context: Context, status: Bundle) {
+        dev.maplesu.manager.runtime.ultra.UltraInstallTransactions.observe(context,
+            status.getString("taskId"), status.getString("state"), status.getString("candidateSha256"),
+            status.getString("rebootSourceState"))
     }
 
     internal fun encode(snapshot: InstallerSnapshot) = Bundle().apply {
@@ -519,29 +524,45 @@ internal object InstallerServiceClient {
                         rootTarget: InstallTargetMode? = null, action: (IInstallerService) -> T): T {
         check(Looper.myLooper() != Looper.getMainLooper()) { "INSTALLER_BACKGROUND_THREAD_REQUIRED" }
         val handler = Handler(Looper.getMainLooper())
-        val connected = CompletableFuture<IBinder>()
-        val task = CompletableFuture<Shell.Task?>()
         var phase = "BIND"
-        val connection = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName, binder: IBinder) { connected.complete(binder) }
-            override fun onServiceDisconnected(name: ComponentName) {
-                connected.completeExceptionally(IllegalStateException("INSTALLER_SERVICE_DISCONNECTED"))
+        var activeBinding: RootServiceBootstrap.Binding<IBinder>? = null
+        fun bind(): RootServiceBootstrap.Binding<IBinder> {
+            val connected = CompletableFuture<IBinder>()
+            val task = CompletableFuture<Shell.Task?>()
+            val connection = object : ServiceConnection {
+                override fun onServiceConnected(name: ComponentName, binder: IBinder) { connected.complete(binder) }
+                override fun onServiceDisconnected(name: ComponentName) {
+                    connected.completeExceptionally(IllegalStateException("INSTALLER_SERVICE_DISCONNECTED"))
+                }
+                override fun onNullBinding(name: ComponentName) {
+                    connected.completeExceptionally(IllegalStateException("INSTALLER_SERVICE_NULL_BINDING"))
+                }
+                override fun onBindingDied(name: ComponentName) {
+                    connected.completeExceptionally(IllegalStateException("INSTALLER_SERVICE_DISCONNECTED"))
+                }
             }
-            override fun onNullBinding(name: ComponentName) {
-                connected.completeExceptionally(IllegalStateException("INSTALLER_SERVICE_NULL_BINDING"))
-            }
-            override fun onBindingDied(name: ComponentName) {
-                connected.completeExceptionally(IllegalStateException("INSTALLER_SERVICE_DISCONNECTED"))
-            }
-        }
-        fun useConnectedService(): T {
-            phase = "CONNECT"
-            val binder = connected.get(20, TimeUnit.SECONDS)
-            check(binder.isBinderAlive) { "INSTALLER_SERVICE_DISCONNECTED" }
-            phase = "IPC"
-            return action(IInstallerService.Stub.asInterface(binder))
-        }
-        try {
+            var closed = false
+            val binding = RootServiceBootstrap.Binding(script = {
+                phase = "BIND"
+                val launch = task.get(5, TimeUnit.SECONDS)
+                if (launch == null) null else {
+                    val script = ByteArrayOutputStream()
+                    launch.run(script, ByteArrayInputStream(ByteArray(0)), ByteArrayInputStream(ByteArray(0)))
+                    script.toString(Charsets.UTF_8.name())
+                }
+            }, await = {
+                phase = "CONNECT"
+                connected.get(20, TimeUnit.SECONDS).also {
+                    check(it.isBinderAlive) { "INSTALLER_SERVICE_DISCONNECTED" }
+                }
+            }, close = {
+                if (!closed) {
+                    closed = true
+                    // The next bind is posted to this same handler, after this lane is released.
+                    handler.post { RootService.unbind(connection) }
+                }
+            })
+            activeBinding = binding
             handler.post {
                 try {
                     val intent = Intent(context, InstallerPartitionService::class.java).apply {
@@ -550,73 +571,70 @@ internal object InstallerServiceClient {
                     task.complete(RootService.bindOrTask(intent, context.mainExecutor, connection))
                 } catch (error: Exception) { task.completeExceptionally(error) }
             }
-            // Reconnect to an authenticated surviving daemon without needing another su launch.
-            // A fresh process is still launched only through the explicit existing-provider session.
-            val launch = task.get(5, TimeUnit.SECONDS)
-            if (launch != null) {
-                val route = installerServiceLaunchRoute(ModeRuntime.active, rootTarget,
-                    rootTarget == InstallTargetMode.ULTRA && HookRootExecutor.production(context).available(),
-                    dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.usesUltraBackend(context))
-                val script = ByteArrayOutputStream()
-                launch.run(script, ByteArrayInputStream(ByteArray(0)), ByteArrayInputStream(ByteArray(0)))
-                val command = script.toString(Charsets.UTF_8.name())
-                val candidates = buildList {
-                    if (route == InstallerServiceLaunchRoute.HOOK) {
-                        add(RootServiceBootstrap.Candidate("hook") { probe ->
-                            runBlocking(PageReadDeadline.context(5_000L)) {
-                                RootServiceBootstrap.Result(RootExec.executeHook(context, probe))
-                            }
-                        })
-                    }
-                    // Use the same inventory as SU detection, even with a missing/stale SDK key.
-                    // Each explicit installation probe has its own budget; one timeout cannot
-                    // consume the later sources' chance to establish root and framework access.
-                    for (candidate in SuRootCandidates.all(context)) {
-                        add(RootServiceBootstrap.Candidate(candidate.source) { probe ->
-                            val result = ProcessSuExec.exec(candidate.argv, 5_000L, "$probe\n")
-                            RootServiceBootstrap.Result(
-                                if (result.ok) 0 else result.exitCode.takeUnless { it == 0 } ?: -1,
-                                result.output, result.failure ?: if (result.timedOut) "SU_TIMEOUT" else "")
-                        })
-                    }
-                    if (route == InstallerServiceLaunchRoute.ROOT_EXEC) {
-                        add(RootServiceBootstrap.Candidate("runtime") { probe ->
-                            runBlocking(PageReadDeadline.context(5_000L)) {
-                                RootServiceBootstrap.Result(RootExec.execute(context, probe))
-                            }
-                        })
-                    } else if (route == InstallerServiceLaunchRoute.SHELL) {
-                        add(RootServiceBootstrap.Candidate("installer-shell") { probe ->
-                            InstallerRootSession.open(context).use { session ->
-                                // Keep libsu's interactive shell alive for its own job receipt.
-                                val result = session.execute("(\n$probe\n)")
-                                RootServiceBootstrap.Result(result.code, result.out.joinToString("\n"),
-                                    stderr = result.err.joinToString("\n"))
-                            }
-                        })
-                    }
+            return binding
+        }
+        try {
+            val route = installerServiceLaunchRoute(ModeRuntime.active, rootTarget,
+                rootTarget == InstallTargetMode.ULTRA && HookRootExecutor.production(context).available(),
+                dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.usesUltraBackend(context))
+            val candidates = buildList {
+                if (route == InstallerServiceLaunchRoute.HOOK) {
+                    add(RootServiceBootstrap.Candidate("hook") { script ->
+                        runBlocking(PageReadDeadline.context(5_000L)) {
+                            RootServiceBootstrap.Result(RootExec.executeHook(context, script))
+                        }
+                    })
                 }
-                try {
-                    RootServiceBootstrap.launch(command, candidates) { source, stage, attempt ->
-                        // Fixed source/phase/status only: no commands, keys or helper paths.
-                        Log.i("MapleSUInstaller", "service source=$source phase=$stage code=${attempt.code}")
-                    }
-                } catch (error: RootServiceBootstrap.Failure) {
-                    Log.w("MapleSUInstaller", "service phase=${error.phase} code=${error.result.code} reason=${error.message}")
-                    try {
-                        File(context.filesDir, "installer-service-failure.json").writeText(org.json.JSONObject()
-                            .put("source", error.source).put("phase", error.phase)
-                            .put("reason", error.message).put("exitCode", error.result.code)
-                            .put("output", error.result.output).put("stderr", error.result.stderr)
-                            .put("detail", error.result.detail).toString())
-                    } catch (diagnostic: Exception) {
-                        rethrowInstallerCancellation(diagnostic)
-                        error.addSuppressed(diagnostic)
-                    }
-                    throw installerServiceFailure(error)
+                // Use the same inventory as SU detection, even with a missing/stale SDK key.
+                // Each explicit installation launch has its own budget; one timeout cannot
+                // consume the later sources' chance to establish root and connect the service.
+                for (candidate in SuRootCandidates.all(context)) {
+                    add(RootServiceBootstrap.Candidate(candidate.source) { script ->
+                        val result = ProcessSuExec.exec(candidate.argv, 5_000L, "$script\n")
+                        RootServiceBootstrap.Result(
+                            if (result.ok) 0 else result.exitCode.takeUnless { it == 0 } ?: -1,
+                            result.output, result.failure ?: if (result.timedOut) "SU_TIMEOUT" else "")
+                    })
+                }
+                if (route == InstallerServiceLaunchRoute.ROOT_EXEC) {
+                    add(RootServiceBootstrap.Candidate("runtime") { script ->
+                        runBlocking(PageReadDeadline.context(5_000L)) {
+                            RootServiceBootstrap.Result(RootExec.execute(context, script))
+                        }
+                    })
+                } else if (route == InstallerServiceLaunchRoute.SHELL) {
+                    add(RootServiceBootstrap.Candidate("installer-shell") { script ->
+                        InstallerRootSession.open(context).use { session ->
+                            // Keep libsu's interactive shell alive for its own job receipt.
+                            val result = session.execute("(\n$script\n)")
+                            RootServiceBootstrap.Result(result.code, result.out.joinToString("\n"),
+                                stderr = result.err.joinToString("\n"))
+                        }
+                    })
                 }
             }
-            return useConnectedService()
+            val binder = try {
+                RootServiceBootstrap.connect(candidates, ::bind) { source, stage, attempt ->
+                    // Fixed source/phase/status only: no commands, keys or helper paths.
+                    Log.i("MapleSUInstaller", "service source=$source phase=$stage code=${attempt.code}")
+                }
+            } catch (error: RootServiceBootstrap.Failure) {
+                Log.w("MapleSUInstaller", "service phase=${error.phase} code=${error.result.code} reason=${error.message}")
+                try {
+                    File(context.filesDir, "installer-service-failure.json").writeText(org.json.JSONObject()
+                        .put("source", error.source).put("phase", error.phase)
+                        .put("reason", error.message).put("exitCode", error.result.code)
+                        .put("output", error.result.output).put("stderr", error.result.stderr)
+                        .put("detail", error.result.detail).toString())
+                } catch (diagnostic: Exception) {
+                    rethrowInstallerCancellation(diagnostic)
+                    error.addSuppressed(diagnostic)
+                }
+                throw installerServiceFailure(error)
+            }
+            // Establishment retries end here; the actual service operation is dispatched once.
+            phase = "IPC"
+            return action(IInstallerService.Stub.asInterface(binder))
         } catch (error: Exception) {
             rethrowInstallerCancellation(error)
             if (error is AuthorizationFailure || error is RootServiceBootstrap.Failure || error is ServiceFailure) throw error
@@ -626,7 +644,7 @@ internal object InstallerServiceClient {
             }
             throw error
         } finally {
-            handler.post { RootService.unbind(connection) }
+            activeBinding?.close()
         }
     }
 

@@ -20,13 +20,22 @@ final class UltraInitBootArtifact {
             "credentialMode", "metadataDisplacement", "targetVermagic",
             "sessionAbi", "sessionAbiSha256", "bundleSources", "bundleSourcesSha256",
             "taskProfileAbi", "taskProfileAbiSha256", "abiEvidence", "abiEvidenceSha256",
-            "kind", "kmi", "architecture", "pageSize", "cfiMode", "runtimeFactsAbi", "sourceGenerationSha256");
+            "kind", "kmi", "architecture", "pageSize", "cfiMode", "runtimeFactsAbi", "sourceGenerationSha256",
+            "referenceFacts", "referenceFactsSha256");
     private static final Set<String> REQUIRED = Set.of("schemaVersion", "targetBoot", "targetBootSha256",
             "kernelRelease", "kernelSha256", "handoff", "handoffSha256", "bridge", "bridgeSha256");
     private static final Set<String> COMPONENT_REQUIRED = Set.of("schemaVersion", "kind", "kmi", "architecture",
             "pageSize", "cfiMode", "kernelRelease", "credentialMode", "metadataDisplacement", "runtimeFactsAbi",
             "sourceGenerationSha256", "handoff", "handoffSha256", "bridge", "bridgeSha256");
     private static final Set<String> COMPONENT_OPTIONAL = Set.of("ksuInit", "ksuInitSha256", "bundleSources", "bundleSourcesSha256");
+
+    private static final Set<String> TEMPLATE_REQUIRED = Set.of("schemaVersion", "kind", "targetBootSha256",
+            "kernelRelease", "kernelSha256", "credentialMode", "metadataDisplacement", "handoff", "handoffSha256",
+            "bridge", "bridgeSha256", "targetVermagic", "referenceFacts", "referenceFactsSha256", "sourceGenerationSha256",
+            "config", "configSha256", "targetContract", "targetContractSha256");
+    private static final Set<String> TEMPLATE_OPTIONAL = Set.of("moduleSymvers", "moduleSymversSha256",
+            "sessionAbi", "sessionAbiSha256", "taskProfileAbi", "taskProfileAbiSha256", "abiEvidence", "abiEvidenceSha256",
+            "bundleSources", "bundleSourcesSha256", "ksuInit", "ksuInitSha256");
 
     private UltraInitBootArtifact() {}
 
@@ -36,15 +45,17 @@ final class UltraInitBootArtifact {
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
         Map<String, String> fields = new Json(text).read();
         if ("2".equals(fields.get("schemaVersion"))) return readComponent(manifest, bytes, fields);
+        if ("3".equals(fields.get("schemaVersion"))) return readTemplate(manifest, bytes, fields);
         if (!fields.keySet().containsAll(REQUIRED) || !"1".equals(fields.get("schemaVersion")) ||
+                fields.containsKey("referenceFacts") || fields.containsKey("referenceFactsSha256") ||
                 fields.keySet().stream().anyMatch(name -> COMPONENT_REQUIRED.contains(name) && !REQUIRED.contains(name) &&
                         !name.equals("credentialMode") && !name.equals("metadataDisplacement")) ||
                 fields.containsKey("targetContract") != fields.containsKey("targetContractSha256")) throw error("FIELDS");
         if (fields.containsKey("ksuInit") != fields.containsKey("ksuInitSha256")) throw error("FIELDS");
         String credentialMode = fields.getOrDefault("credentialMode", "embedded");
-        if (!credentialMode.equals("embedded") && !credentialMode.equals("module-parameter")) throw error("CREDENTIAL_MODE");
+        if (!credentialMode.equals("embedded") && !credentialMode.equals("module-parameter") && !credentialMode.equals("keyless")) throw error("CREDENTIAL_MODE");
         if (credentialMode.equals("embedded") && !fields.containsKey("credentialSha256")) throw error("FIELDS");
-        // The bridge packager derives this from its ELF/page layout; Manager owns credential encoding.
+        // Non-secret ELF/page layout; keyless callers use the owner metadata descriptor.
         int metadataDisplacement = fields.containsKey("metadataDisplacement") ?
                 Integer.parseInt(fields.get("metadataDisplacement")) : 0;
         if (credentialMode.equals("module-parameter") && metadataDisplacement == 0) throw error("METADATA_DISPLACEMENT");
@@ -108,11 +119,65 @@ final class UltraInitBootArtifact {
         String targetVermagic = fields.get("targetVermagic");
         int page = verifyTarget(artifact, targetVermagic);
         boolean deployment = module(bridge, artifact.kernelRelease, configured(configuration, "CONFIG_MODVERSIONS"),
-                credentialMode.equals("module-parameter") ? page : 0, metadataDisplacement, targetVermagic);
+                !credentialMode.equals("embedded") ? page : 0, metadataDisplacement, targetVermagic);
         if (deployment) artifact = new UltraInitBootProducer.Artifact(boot,
                 fields.get("targetBootSha256"), fields.get("kernelRelease"), fields.get("kernelSha256"),
                 fields.get("credentialSha256"), handoff, bridge, ksuInitSha256, targetInputs, configPage,
                 credentialMode, metadataDisplacement, true);
+        if (!java.util.Arrays.equals(bytes, file(manifest.toPath(), 16 * 1024))) throw error("MANIFEST_CHANGED");
+        return artifact;
+    }
+
+    private static UltraInitBootProducer.Artifact readTemplate(File manifest, byte[] bytes,
+                                                              Map<String, String> fields) throws IOException {
+        if (!fields.keySet().containsAll(TEMPLATE_REQUIRED) || fields.keySet().stream().anyMatch(name ->
+                !TEMPLATE_REQUIRED.contains(name) && !TEMPLATE_OPTIONAL.contains(name))) throw error("TEMPLATE_FIELDS");
+        if (!"target-template".equals(fields.get("kind")) || !"keyless".equals(fields.get("credentialMode")))
+            throw error("TEMPLATE_KIND");
+        for (String name : new String[]{"targetBootSha256", "kernelSha256", "sourceGenerationSha256"})
+            if (!fields.get(name).matches("[0-9a-f]{64}")) throw error("HASH:" + name);
+        String release = fields.get("kernelRelease"), vermagic = fields.get("targetVermagic");
+        if (release.isEmpty() || release.length() > 256 || !release.matches("[!-~]+") ||
+                !vermagic.startsWith(release + " ") || vermagic.length() > 512 || !vermagic.matches("[ -~]+"))
+            throw error("TARGET_VERMAGIC");
+        Path directory = manifest.toPath().toAbsolutePath().getParent();
+        Map<String, String> inputs = new LinkedHashMap<>();
+        Map<String, byte[]> sidecars = new LinkedHashMap<>();
+        for (String name : new String[]{"handoff", "bridge", "config", "moduleSymvers", "targetContract", "referenceFacts",
+                "sessionAbi", "taskProfileAbi", "abiEvidence", "bundleSources", "ksuInit"}) {
+            if (fields.containsKey(name) != fields.containsKey(name + "Sha256")) throw error("TEMPLATE_FIELDS");
+            if (!fields.containsKey(name)) continue;
+            String path = fields.get(name), hash = fields.get(name + "Sha256");
+            if (!path.matches("[A-Za-z0-9_.-]{1,240}") || path.equals(".") || path.equals("..") ||
+                    path.equals(manifest.getName())) throw error("PATH:" + name);
+            if (!hash.matches("[0-9a-f]{64}")) throw error("HASH:" + name);
+            int limit = name.equals("bridge") || name.equals("moduleSymvers") ? 64 * 1024 * 1024 :
+                    name.equals("handoff") || name.equals("ksuInit") ? 16 * 1024 * 1024 : 1024 * 1024;
+            sidecars.put(name, bound(directory, fields, name, limit));
+            if (!name.equals("handoff") && !name.equals("bridge") && !name.equals("ksuInit")) inputs.put(name, hash);
+        }
+        byte[] handoff = sidecars.get("handoff"), bridge = sidecars.get("bridge");
+        String config = new String(sidecars.get("config"), StandardCharsets.US_ASCII);
+        if (!configured(config, "CONFIG_MODULES") || !configured(config, "CONFIG_ARM64")) throw error("TARGET_MODULE_CONFIG");
+        int page = 0;
+        for (int size : new int[]{4, 16, 64}) if (configured(config, "CONFIG_ARM64_" + size + "K_PAGES")) {
+            if (page != 0) throw error("TARGET_PAGE_CONFIG"); page = size * 1024;
+        }
+        if (page == 0) throw error("TARGET_PAGE_CONFIG");
+        boolean modversions = configured(config, "CONFIG_MODVERSIONS");
+        if (modversions && !sidecars.containsKey("moduleSymvers")) throw error("TARGET_MODULE_SYMVERS_REQUIRED");
+        if (configured(config, "CONFIG_MODULE_SIG_FORCE") &&
+                !new String(bridge, Math.max(0, bridge.length - 28), Math.min(28, bridge.length),
+                        StandardCharsets.US_ASCII).endsWith("~Module signature appended~\n")) throw error("TARGET_MODULE_SIGNATURE_REQUIRED");
+        elfHeader(handoff, 2, "HANDOFF"); elfHeader(bridge, 1, "BRIDGE"); staticHandoff(handoff, page);
+        String ksuInitHash = null;
+        if (sidecars.containsKey("ksuInit")) {
+            elfHeader(sidecars.get("ksuInit"), 0, "KSU_INIT"); ksuInitHash = fields.get("ksuInitSha256");
+        }
+        int displacement = Integer.parseInt(fields.get("metadataDisplacement"));
+        boolean deployment = module(bridge, release, modversions, page, displacement, vermagic);
+        var artifact = UltraInitBootProducer.Artifact.template(manifest, fields.get("targetBootSha256"), release,
+                fields.get("kernelSha256"), handoff, bridge, ksuInitHash, inputs, page, displacement, deployment);
         if (!java.util.Arrays.equals(bytes, file(manifest.toPath(), 16 * 1024))) throw error("MANIFEST_CHANGED");
         return artifact;
     }
@@ -123,7 +188,7 @@ final class UltraInitBootArtifact {
                 !COMPONENT_REQUIRED.contains(name) && !COMPONENT_OPTIONAL.contains(name))) throw error("COMPONENT_FIELDS");
         if (!"kmi-component".equals(fields.get("kind"))) throw error("COMPONENT_KIND");
         if (!"arm64".equals(fields.get("architecture"))) throw error("ARCHITECTURE");
-        if (!"module-parameter".equals(fields.get("credentialMode"))) throw error("CREDENTIAL_MODE");
+        if (!"keyless".equals(fields.get("credentialMode"))) throw error("CREDENTIAL_MODE");
         if (!"maplesu-runtime-facts/1".equals(fields.get("runtimeFactsAbi"))) throw error("RUNTIME_FACTS_ABI");
         String kmi = fields.get("kmi"), release = fields.get("kernelRelease");
         if (!kmi.matches("android[0-9]+-[0-9]+\\.[0-9]+") ||
@@ -152,6 +217,14 @@ final class UltraInitBootArtifact {
     }
 
     static void verifyArtifact(UltraInitBootProducer.Artifact artifact) throws IOException {
+        if (artifact.isTargetTemplate) {
+            UltraInitBootProducer.Artifact retained = read(artifact.templateManifest);
+            if (!retained.isTargetTemplate || !retained.targetBootSha256.equals(artifact.targetBootSha256) ||
+                    !retained.kernelSha256.equals(artifact.kernelSha256) || !retained.kernelRelease.equals(artifact.kernelRelease) ||
+                    !retained.handoffSha256.equals(artifact.handoffSha256) || !retained.bridgeSha256.equals(artifact.bridgeSha256) ||
+                    !retained.targetInputSha256.equals(artifact.targetInputSha256)) throw error("TEMPLATE_CHANGED");
+            return;
+        }
         if (!artifact.isKmiComponent) { verifyTarget(artifact); return; }
         if (artifact.targetBoot != null || !artifact.targetBootSha256.isEmpty() || !artifact.kernelSha256.isEmpty() ||
                 !artifact.targetInputSha256.isEmpty() || artifact.taskProfileMetadataBytes() != null) throw error("COMPONENT_TARGET_FACTS");
@@ -261,8 +334,8 @@ final class UltraInitBootArtifact {
         boolean deploymentParameter = false;
         boolean runtimeFactsMarker = false;
         String vermagic = null;
-        long extendedCrcs = -1, extendedNames = -1;
-        Set<String> versionLabels = new java.util.HashSet<>();
+        long extendedCrcs = -1, extendedCrcOffset = -1, extendedNames = -1, extendedNameBytes = 0;
+        Map<String, Long> versionLabels = new LinkedHashMap<>();
         int symbolTable = -1;
         for (int index = 0; index < count; index++) {
             BootImageRebuilder.cancelled();
@@ -282,22 +355,18 @@ final class UltraInitBootArtifact {
                 if (elf.getInt(at + 4) != 1 || length % 64 != 0) throw error("BRIDGE_MODVERSIONS");
                 for (long cursor = offset; cursor < offset + length; cursor += 64) {
                     String label = cstring(bytes, cursor + 8, cursor + 64);
-                    if (label.isEmpty() || !versionLabels.add(label)) throw error("BRIDGE_MODVERSIONS");
+                    if (label.isEmpty() || versionLabels.put(label, elf.getLong((int) cursor)) != null)
+                        throw error("BRIDGE_MODVERSIONS");
                 }
                 versions = true;
             }
             if (name.equals("__version_ext_crcs")) {
                 if (extendedCrcs != -1 || elf.getInt(at + 4) != 1 || length % 4 != 0) throw error("BRIDGE_MODVERSIONS");
-                extendedCrcs = length / 4;
+                extendedCrcs = length / 4; extendedCrcOffset = offset;
             }
             if (name.equals("__version_ext_names")) {
                 if (extendedNames != -1 || elf.getInt(at + 4) != 1) throw error("BRIDGE_MODVERSIONS");
-                extendedNames = 0;
-                for (long cursor = offset; cursor < offset + length;) {
-                    String label = cstring(bytes, cursor, offset + length);
-                    if (label.isEmpty() || !versionLabels.add(label)) throw error("BRIDGE_MODVERSIONS");
-                    extendedNames++; cursor += label.length() + 1;
-                }
+                extendedNames = offset; extendedNameBytes = length;
             }
             if (name.equals(".modinfo")) {
                 if (infoSection) throw error("BRIDGE_SECTIONS");
@@ -330,7 +399,21 @@ final class UltraInitBootArtifact {
             }
         }
         if (extendedCrcs != -1 || extendedNames != -1) {
-            if (extendedCrcs != extendedNames) throw error("BRIDGE_MODVERSIONS");
+            if (extendedCrcs == -1 || extendedNames == -1) throw error("BRIDGE_MODVERSIONS");
+            Set<String> extendedLabels = new java.util.HashSet<>();
+            long cursor = extendedNames, end = extendedNames + extendedNameBytes;
+            // modpost may emit both tables; their overlapping symbol CRCs must agree.
+            for (long index = 0; index < extendedCrcs; index++) {
+                String label = cstring(bytes, cursor, end);
+                if (label.isEmpty() || !extendedLabels.add(label)) throw error("BRIDGE_MODVERSIONS");
+                Long basicCrc = versionLabels.get(label);
+                long crc = Integer.toUnsignedLong(elf.getInt((int) (extendedCrcOffset + index * 4)));
+                if (basicCrc != null && basicCrc != crc) throw error("BRIDGE_MODVERSIONS");
+                cursor += label.length() + 1;
+            }
+            // A concatenated C string has one implicit NUL after its final explicit terminator.
+            if (cursor != end && (cursor != end - 1 || bytes[(int) cursor] != 0))
+                throw error("BRIDGE_MODVERSIONS");
             versions |= extendedCrcs > 0;
         }
         if (!info || !symbols || !module || !code) throw error("BRIDGE_MODULE");
@@ -349,7 +432,8 @@ final class UltraInitBootArtifact {
         if (modversions && !versions) throw error("BRIDGE_MODVERSIONS");
         if (runtimeFacts && !runtimeFactsMarker) throw error("BRIDGE_RUNTIME_FACTS");
         if (page != 0) {
-            if (!credentialParameter) throw error("BRIDGE_CREDENTIAL_PARAMETER_TYPE");
+            if (credentialParameter) throw error("BRIDGE_LEGACY_CREDENTIAL_PARAMETER");
+            if (!deploymentParameter) throw error("BRIDGE_DEPLOYMENT_NAMESPACE_PARAMETER_TYPE");
             moduleMetadata(bytes, elf, (int) table, count, symbolTable, page, displacement);
         }
         return deploymentParameter;
@@ -449,7 +533,7 @@ final class UltraInitBootArtifact {
                 String value;
                 if (name.equals("schemaVersion")) {
                     whitespace();
-                    if (at >= text.length() || text.charAt(at) != '1' && text.charAt(at) != '2') throw error("JSON");
+                    if (at >= text.length() || text.charAt(at) != '1' && text.charAt(at) != '2' && text.charAt(at) != '3') throw error("JSON");
                     value = String.valueOf(text.charAt(at++));
                 }
                 else if (name.equals("metadataDisplacement")) value = displacement();

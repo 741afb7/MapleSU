@@ -4,7 +4,7 @@
 // kit validates the module, allocates a localhost port and starts this process as
 // root; this process then
 //
-//   1. consumes the authenticated worker directory or installed Legacy credential,
+//   1. consumes the authenticated worker deployment directory,
 //   2. maps the module ELF (the same file the kernel runs) and resolves the
 //      module's three WebUI entry points,
 //   3. asks the module to start its CivetWeb server on the allocated port, and
@@ -141,33 +141,35 @@ int main(int argc, char* argv[]) {
         return sent;
     };
 
+    maplesu::payload::webui::LegacyCredential credential;
     long long root_err;
     if (owner_launch) {
         const int descriptor = args.owner_directory_fd;
-        const bool received = maplesu::payload::webui::read_deployment_directory(descriptor, deployment);
+        bool received = maplesu::payload::webui::read_deployment_directory(descriptor, deployment);
+        if (received && args.legacy_credential_record)
+            received = maplesu::payload::webui::read_legacy_credential(descriptor, credential);
         ::close(descriptor);
         args.owner_directory_fd = -1;
         root_err = !received ? as_code(KModErr::ERR_READ_CHILD_DATA) :
-            (::getuid() == 0 && ::geteuid() == 0 ? as_code(KModErr::OK) : as_code(KModErr::ERR_MODULE_NO_ROOT));
+            maplesu::payload::webui::acquire_root();
     } else {
-        root_err = maplesu::payload::webui::acquire_root(maplesu::payload::webui::feature_key());
+        root_err = !maplesu::payload::webui::read_installed_legacy_credential(credential.value)
+            ? as_code(KModErr::ERR_MODULE_ROOT_KEY)
+            : maplesu::payload::webui::acquire_legacy_root(credential.value);
     }
     if (root_err != as_code(KModErr::OK)) {
+        maplesu::payload::webui::clear_legacy_credential(credential);
         err_printf("get_root failed.\n");
         report_startup(root_err, 0);
         return 1;
     }
 
-    // The installed credential is consumed only by the old external module ABI.
-    const char* root_key = maplesu::payload::webui::feature_key();
-    const std::string key_text = owner_launch ? std::string() : std::string(root_key);
-    const std::string private_dir = owner_launch
-        ? maplesu::payload::webui::deployment_data_dir(deployment) + "modules/" + args.mod_id32 + "/"
-        : maplesu::payload::webui::module_private_dir(key_text, args.mod_id32);
-    const std::string elf_path = owner_launch ? private_dir + args.mod_id32
-        : maplesu::payload::webui::module_elf_path(key_text, args.mod_id32);
-    const std::string webroot_dir = owner_launch ? private_dir + "webroot"
-        : maplesu::payload::webui::module_webroot_dir(key_text, args.mod_id32);
+    const std::string data_directory = owner_launch
+        ? maplesu::payload::webui::deployment_data_dir(deployment)
+        : "/data/" + std::string(credential.value, 16) + credential.value[0] + "/";
+    const std::string private_dir = data_directory + "modules/" + args.mod_id32 + "/";
+    const std::string elf_path = private_dir + args.mod_id32;
+    const std::string webroot_dir = private_dir + "webroot";
 
     ModuleHost module;
     int port = args.port;
@@ -178,6 +180,7 @@ int main(int argc, char* argv[]) {
         // The module runs with its private directory as the working directory
         // (its webroot and data files are addressed relatively).
         if (::chdir(private_dir.c_str()) != 0) {
+            maplesu::payload::webui::clear_legacy_credential(credential);
             report_startup(as_code(KModErr::ERR_MODULE_OPEN_DIR), 0);
             return 1;
         }
@@ -185,9 +188,11 @@ int main(int argc, char* argv[]) {
         if (load_err != as_code(KModErr::OK)) {
             server_err = load_err;
         } else {
-            server_err = module.start_web_ui(root_key, private_dir.c_str(),
+            server_err = module.start_web_ui(private_dir.c_str(),
                                              webroot_dir.c_str(),
-                                             args.mod_id32.c_str(), args.port);
+                                             args.mod_id32.c_str(), args.port,
+                                             credential.value);
+            maplesu::payload::webui::clear_legacy_credential(credential);
             out_printf("[webui_loader] start_module_web_ui_server -> rc=%s\n",
                        error_name(server_err).c_str());
             if (server_err == as_code(KModErr::OK)) {
@@ -205,6 +210,7 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+    maplesu::payload::webui::clear_legacy_credential(credential);
     if (server_err != as_code(KModErr::OK)) {
         out_printf("[webui_loader] open_module_web_ui -> rc=%s\n",
                    error_name(server_err).c_str());
@@ -215,6 +221,10 @@ int main(int argc, char* argv[]) {
     // that case; the loader guarantees the documented file-serving contract.
     WebRootServer fallback;
     if (server_err != as_code(KModErr::OK)) {
+        if (server_err == as_code(KModErr::ERR_MODULE_ROOT_KEY)) {
+            report_startup(server_err, 0);
+            return 1;
+        }
         ServerConfig config;
         config.document_root = webroot_dir;
         config.port = port;

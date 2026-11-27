@@ -766,7 +766,7 @@ public final class UltraInitBootProducerTest {
 
     private static java.util.Map<String, byte[]> kmiBundle(String release) throws Exception {
         byte[] bridge = parameterModule(32);
-        byte[] info = ascii("vermagic=" + release + " SMP\0parmtype=credential:string\0" +
+        byte[] info = ascii("vermagic=" + release + " SMP\0" +
                 "parmtype=deployment_namespace:string\0maplesu_runtime_facts=1\0");
         int infoAt = bridge.length;
         bridge = Arrays.copyOf(bridge, infoAt + info.length);
@@ -775,7 +775,7 @@ public final class UltraInitBootProducerTest {
                 .putLong(64 + 5 * 64 + 32, info.length);
         String json = "{\"schemaVersion\":2,\"kind\":\"kmi-component\",\"kmi\":\"android15-6.6\"," +
                 "\"architecture\":\"arm64\",\"pageSize\":4096,\"cfiMode\":\"kcfi\"," +
-                "\"kernelRelease\":\"" + release + "\",\"credentialMode\":\"module-parameter\"," +
+                "\"kernelRelease\":\"" + release + "\",\"credentialMode\":\"keyless\"," +
                 "\"metadataDisplacement\":4064,\"runtimeFactsAbi\":\"maplesu-runtime-facts/1\"," +
                 "\"sourceGenerationSha256\":\"" + "a".repeat(64) + "\",\"handoff\":\"handoff.bin\"," +
                 "\"handoffSha256\":\"" + KernelIdentity.sha256(handoff()) + "\",\"bridge\":\"bridge.ko\"," +
@@ -799,9 +799,12 @@ public final class UltraInitBootProducerTest {
         Path source = work.resolve("init_boot.img"), output = work.resolve("patched.img"),
                 repeated = work.resolve("repeated.img"), restored = work.resolve("restored.img");
         Files.write(source, baseline);
-        var bound = component.withCredential(ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"))
-                .withDeploymentNamespace(namespaceRecord("DeploySpace123ab"));
+        var bound = component.withDeploymentNamespace(namespaceRecord("DeploySpace123ab"));
+        fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), component));
+        fails("ULTRA_INIT_BOOT_CREDENTIAL_MODE", () -> component.withCredential(ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL")));
         var produced = UltraInitBootProducer.produce(source.toFile(), output.toFile(), bound);
+        check(RamdiskInspector.inspect(output.toFile()).entries.stream().noneMatch(entry -> entry.path.equals(".maplesu_ultra/credential")),
+                "keyless carrier contains no credential entry");
         check(UltraInitBootProducer.recognizes(output.toFile()), "single-file component uses the real owned recovery envelope");
         Path record = work.resolve("record.bin");
         check(BootImageRebuilder.extractRecoveryRecord(output.toFile(), record.toFile(), BootImageRebuilder.OutputPolicy.STRICT) &&
@@ -849,11 +852,10 @@ public final class UltraInitBootProducerTest {
         Path source = work.resolve("init_boot.img"), output = work.resolve("patched.img"), snapshot = work.resolve("snapshot.bin");
         Files.write(source, baseline);
         var artifact = UltraInitBootProducer.readArtifact(work.resolve("manifest.json").toFile())
-                .withCredential(ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"))
                 .withDeploymentNamespace(namespaceRecord("DeploySpace123ab"));
         byte[] cpio = KernelCompression.decode(original, "GZIP", 8 * 1024 * 1024);
         byte[] installed = KernelCompression.encode(UltraInitRamdisk.install(cpio, handoff(), bridge, null,
-                ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"), namespaceRecord("DeploySpace123ab")), "GZIP");
+                null, namespaceRecord("DeploySpace123ab")), "GZIP");
         BootImageRecovery.capture(source.toFile(), BootImageRecovery.Component.RAMDISK, snapshot.toFile(), BootImageRebuilder.OutputPolicy.STRICT);
         long recordBytes = 64 + Files.size(snapshot) + original.length + 32;
         check(4096L + align(installed.length) + 4096 < baseline.length, "component alone fits the eight MiB container");
@@ -865,9 +867,76 @@ public final class UltraInitBootProducerTest {
                 ", recoveryRecord=" + recordBytes + ", container=8388608; rejected with complete recovery retained");
     }
 
+    private static void compactTemplate(Path work) throws Exception {
+        var files = kmiBundle("6.6.1-fixture");
+        byte[] bridge = files.get("bridge.ko"), handoff = handoff();
+        byte[] config = ascii("CONFIG_MODULES=y\nCONFIG_ARM64=y\nCONFIG_ARM64_4K_PAGES=y\n");
+        byte[] contract = ascii("{}\n"), facts = ascii("{\"schema\":\"maplesu-init-bridge-reference-facts/1\"}\n");
+        Files.write(work.resolve("bridge.ko"), bridge); Files.write(work.resolve("handoff.bin"), handoff);
+        Files.write(work.resolve("target.config"), config); Files.write(work.resolve("contract.json"), contract);
+        Files.write(work.resolve("reference-facts.json"), facts);
+        String json = "{\"schemaVersion\":3,\"kind\":\"target-template\",\"targetBootSha256\":\"" + "a".repeat(64) +
+                "\",\"kernelRelease\":\"6.6.1-fixture\",\"kernelSha256\":\"" + "b".repeat(64) +
+                "\",\"credentialMode\":\"keyless\",\"metadataDisplacement\":4064,\"handoff\":\"handoff.bin\",\"handoffSha256\":\"" +
+                KernelIdentity.sha256(handoff) + "\",\"bridge\":\"bridge.ko\",\"bridgeSha256\":\"" + KernelIdentity.sha256(bridge) +
+                "\",\"targetVermagic\":\"6.6.1-fixture SMP\",\"sourceGenerationSha256\":\"" + "c".repeat(64) +
+                "\",\"config\":\"target.config\",\"configSha256\":\"" + KernelIdentity.sha256(config) +
+                "\",\"targetContract\":\"contract.json\",\"targetContractSha256\":\"" + KernelIdentity.sha256(contract) +
+                "\",\"referenceFacts\":\"reference-facts.json\",\"referenceFactsSha256\":\"" + KernelIdentity.sha256(facts) + "\"}";
+        Path manifest = work.resolve("manifest.json"); Files.writeString(manifest, json);
+        var template = UltraInitBootProducer.readArtifact(manifest.toFile());
+        check(template.isTargetTemplate && !template.isKmiComponent && template.targetBoot == null,
+                "compact template has no source Image and keeps its separate kind");
+        check(template.templateManifest.equals(manifest.toFile().getAbsoluteFile()) &&
+                template.bundleDirectory.equals(work.toFile().getAbsoluteFile()), "source sidecar origin retained");
+        check(template.targetBootSha256.equals("a".repeat(64)) && template.kernelSha256.equals("b".repeat(64)),
+                "reference identities do not imply an actual target binding");
+        Path source = work.resolve("init_boot.img"), output = work.resolve("patched.img"), restored = work.resolve("restored.img");
+        byte[] baseline = image(new byte[0], KernelCompression.encode(stock(false, false), "GZIP"));
+        Files.write(source, baseline);
+        fails("ULTRA_INIT_BOOT_TARGET_BINDING_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), template));
+        var namespaced = template.withDeploymentNamespace(namespaceRecord("DeploySpace123ab"));
+        check(namespaced.isTargetTemplate && namespaced.templateManifest.equals(template.templateManifest), "namespace cannot bind a target");
+        fails("ULTRA_INIT_BOOT_TARGET_BINDING_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), namespaced));
+        byte[] actualKernel = kernel(); byte[] magic = ascii("6.6.1-fixture SMP\0");
+        System.arraycopy(magic, 0, actualKernel, 256, magic.length);
+        Path target = work.resolve("actual-boot.img"); byte[] actualBoot = image(actualKernel, new byte[0]); Files.write(target, actualBoot);
+        var bound = namespaced.forTarget(target.toFile(), KernelIdentity.sha256(actualBoot), "6.6.1-fixture",
+                KernelIdentity.sha256(actualKernel), bridge, template.targetInputSha256, 4096, 4064, "6.6.1-fixture SMP", false);
+        check(!bound.isTargetTemplate && bound.targetBoot.equals(target.toFile()) &&
+                bound.templateManifest.equals(template.templateManifest), "forTarget binds the real Image and preserves source origin");
+        var copied = bound.withTaskProfileMetadata(ascii("{}")).withDeploymentNamespace(namespaceRecord("DeploySpace123ab"));
+        check(copied.templateManifest.equals(template.templateManifest) && !copied.isTargetTemplate, "bound copies retain source origin");
+        fails("ULTRA_INIT_ARTIFACT_TARGET_BOOT", () -> template.forTarget(target.toFile(), "0".repeat(64), "6.6.1-fixture",
+                KernelIdentity.sha256(actualKernel), bridge, template.targetInputSha256, 4096, 4064, "6.6.1-fixture SMP", false));
+        UltraInitBootProducer.produce(source.toFile(), output.toFile(), bound);
+        check(UltraInitBootProducer.recognizes(output.toFile()), "bound compact template uses production carrier and recovery");
+        UltraInitBootProducer.restore(output.toFile(), restored.toFile());
+        check(Arrays.equals(baseline, Files.readAllBytes(restored)), "compact carrier restores byte-exact original input");
+        check(!Files.exists(work.resolve("target-boot.img")) && !Files.exists(work.resolve("target.btf")), "compact path never materializes reference Image or BTF");
+        Files.write(work.resolve("reference-facts.json"), ascii("changed"));
+        fails("ULTRA_INIT_ARTIFACT_HASH:referenceFacts", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
+        Files.write(work.resolve("reference-facts.json"), facts);
+        rejectedManifest(manifest, json.replace("\"reference-facts.json\"", "\"../reference-facts.json\""), "PATH:referenceFacts");
+        rejectedManifest(manifest, json.replace("\"schemaVersion\":3", "\"schemaVersion\":1"), "FIELDS");
+        rejectedManifest(manifest, json.replace("\"schemaVersion\":3", "\"schemaVersion\":4"), "JSON");
+        rejectedManifest(manifest, json.replace("\"schemaVersion\":3", "\"schemaVersion\":3,\"targetBoot\":\"target-boot.img\""), "TEMPLATE_FIELDS");
+        rejectedManifest(manifest, json.replace("\"schemaVersion\":3", "\"schemaVersion\":3,\"btf\":\"target.btf\",\"btfSha256\":\"" + "d".repeat(64) + "\""), "TEMPLATE_FIELDS");
+        rejectedManifest(manifest, json.replace("\"target-template\"", "\"kmi-component\""), "TEMPLATE_KIND");
+        rejectedManifest(manifest, json.replace("\"keyless\"", "\"module-parameter\""), "TEMPLATE_KIND");
+        rejectedManifest(manifest, json.replace("\"targetVermagic\":\"6.6.1-fixture SMP\"", "\"targetVermagic\":\"6.6.1-fixture PREEMPT\""), "BRIDGE_VERMAGIC");
+        Files.writeString(manifest, json);
+        UltraInitBootArtifact.verifyArtifact(template); checks++;
+    }
+
     public static void main(String[] args) throws Exception {
         Path work = Files.createTempDirectory("maplesu-init-producer-fixture-");
         try {
+            if (args.length == 1 && args[0].equals("compact-template")) {
+                compactTemplate(work);
+                System.out.println("PASS " + checks + " compact template checks; production binding/carrier/recovery, no device execution");
+                return;
+            }
             if (args.length == 1 && args[0].equals("kmi-component")) {
                 kmiComponent(work);
                 System.out.println("PASS " + checks + " single-file KMI component checks; no module/device execution");

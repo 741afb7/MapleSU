@@ -32,9 +32,11 @@ class InjectVerifyAndroidTest {
         val uid = context.packageManager.getApplicationInfo(fixture, 0).uid
         val original = DirectPolicy.hasGrantStrict(context, uid)
         DirectPolicy.grant(context, uid)
-        SuPublication.publish(context)
-        val directory = SuPublication.suDirectory(context)
         try {
+            assertTrue("SU publication failed", SuPublication.publish(context))
+            val directory = requireNotNull(SuPublication.suDirectory(context)) {
+                "SU publication returned no verified directory"
+            }
             shell("am force-stop $fixture")
             Thread.sleep(1_200)
             shell("logcat -c")

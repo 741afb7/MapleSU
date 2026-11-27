@@ -30,12 +30,30 @@ class ModuleWebUiPlanTest {
     @Test
     fun invalidModuleIdsAreRejectedInsteadOfGuessed() {
         assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:"))
+        assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:."))
+        assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:.."))
         assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:../etc"))
-        assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:a b"))
         assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:a/b"))
-        assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:${"x".repeat(65)}"))
-        // 中文/控制字符不是合法 id32（模块 id 由宿主生成，一定是可见 ASCII）
-        assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:模块"))
+        assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:a\u0000b"))
+        assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:${"x".repeat(1024)}"))
+        assertNull(ModuleWebUiPlan.moduleId32OrNull("maplesu:${"模".repeat(342)}"))
+    }
+
+    @Test
+    fun ultraModuleIdsFollowTheNativeSingleFilenameContract() {
+        listOf("模块", "a b", "a\\b", "a..b", "-module", "x".repeat(65),
+            "x".repeat(1023), "模".repeat(341)).forEach { id ->
+            assertEquals(id, ModuleWebUiPlan.moduleId32OrNull("maplesu:$id"))
+        }
+    }
+
+    @Test
+    fun scriptModuleIdsRetainTheirUrlContract() {
+        listOf("", ".", "..", "../etc", "a/b", "a\\b", "a\u0000b", "a b", "a..b",
+            "-module", "模块", "x".repeat(65)).forEach { id ->
+            assertNull(ModuleWebUiPlan.moduleId32OrNull(id))
+        }
+        assertEquals("x".repeat(64), ModuleWebUiPlan.moduleId32OrNull("x".repeat(64)))
     }
 
     // ------------------------------------------------------------------ urls
@@ -81,6 +99,10 @@ class ModuleWebUiPlanTest {
         assertNull(ModuleWebUiPlan.modWebUrl(base, "tee", ".ssh/id_rsa"))
         // 非法 id
         assertNull(ModuleWebUiPlan.modWebUrl(base, "..", "index.html"))
+        listOf("模块", "a b", "a\\b", "a..b", "x".repeat(65)).forEach { id ->
+            assertNull(ModuleWebUiPlan.modWebUrl(base, id))
+            assertNull(ModuleWebUiPlan.modWebUrl(base, "maplesu:$id"))
+        }
     }
 
     @Test
@@ -161,11 +183,11 @@ class ModuleWebUiPlanTest {
     // ------------------------------------------------------------------ failures
 
     @Test
-    fun receiptFailureSeparatesMissingRootKeyFromSdkRejection() {
-        val noKey = ModuleWebUiPlan.failureFromReceipt(false, "MAPLESU_ULTRA_ROOT_KEY_ABSENT", 0)
-        assertNotNull(noKey)
-        assertEquals(WebUiFailureReason.ROOT_KEY_ABSENT, noKey!!.reason)
-        assertEquals("ULTRA_ROOT_KEY_ABSENT", noKey.code)
+    fun receiptFailureSeparatesMissingIdentityFromSdkRejection() {
+        val unavailable = ModuleWebUiPlan.failureFromReceipt(false, "MAPLESU_ULTRA_IDENTITY_UNAVAILABLE", 0)
+        assertNotNull(unavailable)
+        assertEquals(WebUiFailureReason.IDENTITY_UNAVAILABLE, unavailable!!.reason)
+        assertEquals("ULTRA_IDENTITY_UNAVAILABLE", unavailable.code)
 
         val rejected = ModuleWebUiPlan.failureFromReceipt(false, "ERR_MODULE_NOT_RUNNING", 0)
         assertEquals(WebUiFailureReason.SDK_REJECTED, rejected!!.reason)

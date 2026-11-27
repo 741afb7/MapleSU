@@ -93,9 +93,10 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
 
     /** [base] is the recovery baseline; the installation input keeps its own pre-normalization digest. */
     fun generateInitBoot(base: File, artifact: UltraInitBootProducer.Artifact,
-                         credential: UltraKernelCredential, installationInput: File = base,
+                         installationInput: File = base,
                          installationInputSha256: String = UltraKernelSpec.sha256(installationInput),
                          normalizationSource: UltraKernelOriginalRecovery.Source? = null): Candidate = synchronized(lock) {
+        check(artifact.isKmiComponent || artifact.targetBoot != null) { "ULTRA_INIT_TARGET_BINDING_REQUIRED" }
         val source = BootImageInspector.inspect(base)
         val input = if (installationInput == base) source else BootImageInspector.inspect(installationInput)
         check(input.sha256 == installationInputSha256) { "ULTRA_KERNEL_INIT_BOOT_INPUT_CHANGED" }
@@ -115,17 +116,7 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
                 "ULTRA_KERNEL_MODULE_CARRIER_COMPONENT_KMI"
             }
         }
-        if (artifact.credentialMode == "module-parameter") {
-            check(credential.sdkMetadataValid && credential.metadataDisplacement == artifact.metadataDisplacement) {
-                "ULTRA_KERNEL_INIT_BOOT_CREDENTIAL_METADATA_MISMATCH"
-            }
-        }
-        val secret = credential.copySecret()
-        try {
-            check(UltraKernelSpec.sha256(secret) == artifact.credentialSha256) {
-                "ULTRA_KERNEL_INIT_BOOT_CREDENTIAL_MISMATCH"
-            }
-        } finally { secret.fill(0) }
+        check(artifact.credentialMode == "keyless") { "ULTRA_KERNEL_KEYLESS_COMPONENT_REQUIRED" }
         if (!artifact.isKmiComponent && sourceKernel != null) check(UltraKernelSpec.sha256(sourceKernel) == artifact.kernelSha256) {
             "ULTRA_KERNEL_MODULE_CARRIER_TARGET_CHANGED"
         }
@@ -151,14 +142,10 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
                 (artifact.isKmiComponent || UltraKernelSpec.sha256(artifact.targetBoot) == targetBootSha)) {
                 "ULTRA_KERNEL_INIT_BOOT_READBACK_MISMATCH"
             }
-            if (artifact.credentialMode == "module-parameter") {
-                val ramdisk = dev.maplesu.image.RamdiskInspector.inspect(output)
-                val entry = ramdisk.entries.singleOrNull { it.path == ".maplesu_ultra/credential" }
-                check(!ramdisk.malformed && entry != null && entry.isRegularFile &&
-                    entry.permissions() == 0x180 && entry.size == UltraKernelCredential.LENGTH.toLong() &&
-                    entry.sha256 == artifact.credentialSha256) {
-                    "ULTRA_KERNEL_INIT_BOOT_CREDENTIAL_READBACK_MISMATCH"
-                }
+            val ramdisk = dev.maplesu.image.RamdiskInspector.inspect(output)
+            check(!ramdisk.malformed && ramdisk.entries.none { it.path == ".maplesu_ultra/credential" } &&
+                UltraInitBootProducer.readDeploymentNamespace(output) != null) {
+                "ULTRA_KERNEL_INIT_BOOT_DEPLOYMENT_READBACK_MISMATCH"
             }
             val receiptBytes = buildJsonObject {
                 put("schemaVersion", 1)
@@ -431,7 +418,7 @@ internal class UltraKernelBuilder @JvmOverloads constructor(
                 // Keep the exact generated records for a later receipt-bound upgrade/reversal.
                 if (asset is UltraKernelGeneratedAsset) {
                     val retained = File(workspace, "candidate-${asset.id}-${asset.specSha256}.spec")
-                    val bytes = asset.plan.specText(asset.plan.credential).toByteArray(Charsets.UTF_8)
+                    val bytes = asset.plan.specText().toByteArray(Charsets.UTF_8)
                     check(UltraKernelSpec.sha256(bytes) == asset.specSha256) { "ULTRA_KERNEL_GENERATED_SPEC_CHANGED" }
                     if (!retained.isFile) {
                         val pending = File(workspace, retained.name + ".pending")

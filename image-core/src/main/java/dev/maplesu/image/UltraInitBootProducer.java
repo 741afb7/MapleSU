@@ -30,6 +30,9 @@ public final class UltraInitBootProducer {
         /** Build identity of a reusable component, never facts observed from a target kernel. */
         public final KmiComponent component;
         public final boolean isKmiComponent;
+        /** Unbound source ABI template; only forTarget may supply an actual input Image. */
+        public final boolean isTargetTemplate;
+        public final File templateManifest, bundleDirectory;
         public final String componentKmi;
         /** Present only for an exact-target artifact. Reusable components carry no target Image. */
         public final File targetBoot;
@@ -98,6 +101,21 @@ public final class UltraInitBootProducer {
                          String credentialMode, int metadataDisplacement, boolean supportsDeploymentNamespace,
                          byte[] credential, byte[] deploymentNamespace, byte[] taskProfileMetadata,
                          KmiComponent component) {
+            this(targetBoot, targetHash, release, kernelHash, credentialHash, handoff, bridge, ksuInitSha256,
+                    targetInputs, configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace,
+                    credential, deploymentNamespace, taskProfileMetadata, component, null);
+        }
+
+        private Artifact(File targetBoot, String targetHash, String release, String kernelHash,
+                         String credentialHash, byte[] handoff, byte[] bridge, String ksuInitSha256,
+                         java.util.Map<String, String> targetInputs, int configPageSize,
+                         String credentialMode, int metadataDisplacement, boolean supportsDeploymentNamespace,
+                         byte[] credential, byte[] deploymentNamespace, byte[] taskProfileMetadata,
+                         KmiComponent component, File templateManifest) {
+            this.templateManifest = templateManifest;
+            this.bundleDirectory = templateManifest != null ? templateManifest.getAbsoluteFile().getParentFile() :
+                    targetBoot == null ? null : targetBoot.getAbsoluteFile().getParentFile();
+            isTargetTemplate = targetBoot == null && templateManifest != null;
             this.component = component; isKmiComponent = component != null;
             componentKmi = component == null ? "" : component.kmi;
             this.targetBoot = targetBoot; targetBootSha256 = targetHash;
@@ -118,8 +136,17 @@ public final class UltraInitBootProducer {
         static Artifact component(KmiComponent component, String release, byte[] handoff, byte[] bridge,
                                   String ksuInitSha256, int displacement) {
             return new Artifact(null, "", release, "", null, handoff, bridge, ksuInitSha256,
-                    java.util.Map.of(), component.pageSize, "module-parameter", displacement, true,
+                    java.util.Map.of(), component.pageSize, "keyless", displacement, true,
                     null, null, null, component);
+        }
+
+        static Artifact template(File manifest, String bootHash, String release, String kernelHash,
+                                 byte[] handoff, byte[] bridge, String ksuInitSha256,
+                                 java.util.Map<String, String> inputs, int page, int displacement,
+                                 boolean deployment) {
+            return new Artifact(null, bootHash, release, kernelHash, null, handoff, bridge, ksuInitSha256,
+                    inputs, page, "keyless", displacement, deployment, null, null, null, null,
+                    manifest.getAbsoluteFile());
         }
 
         /** A copy of the source module; a target resolver never mutates the retained template. */
@@ -130,18 +157,18 @@ public final class UltraInitBootProducer {
                                   byte[] module, java.util.Map<String, String> inputs,
                                   int pageBytes, int displacement, String vermagic,
                                   boolean modversions) throws IOException {
-            if (isKmiComponent || !"module-parameter".equals(credentialMode) || boot == null || module == null ||
+            if (isKmiComponent || !"keyless".equals(credentialMode) || boot == null || module == null ||
                     inputs == null || !bootHash.matches("[0-9a-f]{64}") ||
                     !kernelHash.matches("[0-9a-f]{64}")) throw error("TARGET_BINDING");
             Artifact result = new Artifact(boot, bootHash, release, kernelHash,
                     declaredCredentialSha256, handoff, module, ksuInitSha256, inputs,
                     pageBytes, credentialMode, displacement, supportsDeploymentNamespace,
-                    credential, deploymentNamespace, taskProfileMetadata);
+                    credential, deploymentNamespace, taskProfileMetadata, null, templateManifest);
             UltraInitBootArtifact.verifyRebound(result, vermagic, modversions);
             return result;
         }
 
-        /** Retain authenticated module facts across target rebinding and namespace/credential copies. */
+        /** Retain authenticated module facts across target rebinding and public namespace copies. */
         public byte[] taskProfileMetadataBytes() {
             return taskProfileMetadata == null ? null : taskProfileMetadata.clone();
         }
@@ -153,10 +180,10 @@ public final class UltraInitBootProducer {
             return new Artifact(targetBoot, targetBootSha256, kernelRelease, kernelSha256,
                     declaredCredentialSha256, handoff, bridge, ksuInitSha256, targetInputSha256,
                     configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace,
-                    credential, deploymentNamespace, metadata);
+                    credential, deploymentNamespace, metadata, component, templateManifest);
         }
 
-        /** Bind Manager's actual metadata-bound bytes; the package and caller's array stay unchanged. */
+        /** Historic artifact decoder only; production rejects credential-bearing artifacts. */
         public Artifact withCredential(byte[] actualBound) throws IOException {
             if (!"module-parameter".equals(credentialMode)) throw error("CREDENTIAL_MODE");
             if (actualBound == null || actualBound.length != 48) throw error("CREDENTIAL_INVALID");
@@ -167,7 +194,7 @@ public final class UltraInitBootProducer {
                     throw error("CREDENTIAL_HASH");
                 return new Artifact(targetBoot, targetBootSha256, kernelRelease, kernelSha256,
                         declaredCredentialSha256, handoff, bridge, ksuInitSha256, targetInputSha256,
-                        configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace, copy, deploymentNamespace, taskProfileMetadata, component);
+                        configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace, copy, deploymentNamespace, taskProfileMetadata, component, templateManifest);
             } finally { Arrays.fill(copy, (byte) 0); }
         }
 
@@ -179,7 +206,7 @@ public final class UltraInitBootProducer {
             deploymentNamespaceShape(copy);
             return new Artifact(targetBoot, targetBootSha256, kernelRelease, kernelSha256,
                     declaredCredentialSha256, handoff, bridge, ksuInitSha256, targetInputSha256,
-                    configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace, credential, copy, taskProfileMetadata, component);
+                    configPageSize, credentialMode, metadataDisplacement, supportsDeploymentNamespace, credential, copy, taskProfileMetadata, component, templateManifest);
         }
     }
 
@@ -222,7 +249,8 @@ public final class UltraInitBootProducer {
 
     static Report produce(File source, File output, Artifact artifact, Checkpoint checkpoint) throws IOException {
         if (artifact == null) throw error("ARTIFACT_REQUIRED");
-        if ("module-parameter".equals(artifact.credentialMode) && artifact.credential == null) throw error("CREDENTIAL_REQUIRED");
+        if (artifact.isTargetTemplate) throw error("TARGET_BINDING_REQUIRED");
+        if (!"keyless".equals(artifact.credentialMode) || artifact.credential != null) throw error("KEYLESS_COMPONENT_REQUIRED");
         if (artifact.supportsDeploymentNamespace && artifact.deploymentNamespace == null) throw error("DEPLOYMENT_NAMESPACE_REQUIRED");
         BootImageInspector.Report before = requireInitBoot(source);
         UltraInitBootArtifact.verifyArtifact(artifact);

@@ -5,13 +5,9 @@ import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.maplesu.core.ui.MainActivity
-import dev.maplesu.manager.modules.UltraRootKeyStore
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import dev.maplesu.manager.ultrakernel.UltraKernelSpec
-import dev.maplesu.manager.runtime.ultra.UltraInstallCredentials
 import dev.maplesu.manager.runtime.ultra.UltraIdentityRecovery
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
-import dev.maplesu.manager.runtime.ultra.UltraPendingInstallCredentialStore
 import dev.maplesu.manager.workmode.detect.ProcBootIdSource
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -43,14 +39,14 @@ class UltraBootRepairAndroidTest {
         val candidate = File(directory, "candidate-boot.img")
         assertEquals(required("sourceSha256"), UltraKernelSpec.sha256(original))
         assertEquals(required("candidateSha256"), UltraKernelSpec.sha256(candidate))
-        val current = requireNotNull(UltraRootKeyStore.read(context))
-        val credential = UltraKernelCredential.of(current)
-            .withMetadataDisplacement(required("metadataDelta").toInt())
         InstallerServiceClient.beginInstallation(context, task, InstallTargetMode.ULTRA)
-        UltraInstallCredentials.retainCandidate(context, candidate, required("candidateSha256"), credential, task)
-        assertEquals(credential, UltraPendingInstallCredentialStore(context).credential(task, required("candidateSha256")))
         val result = InstallerServiceClient.prepareBootInstall(context, candidate, before, original, task)
         assertEquals("PREPARED", result.getString("state"))
+        assertEquals(task, result.getString("taskId"))
+        assertEquals(required("candidateSha256"), result.getString("candidateSha256"))
+        val persisted = InstallerServiceClient.installationStatus(context, task, InstallTargetMode.ULTRA)
+        assertEquals("PREPARED", persisted.getString("state"))
+        assertEquals(required("candidateSha256"), persisted.getString("candidateSha256"))
         assertEquals(sourceBoot(), ProcBootIdSource.read())
         report(result)
     }
@@ -59,7 +55,9 @@ class UltraBootRepairAndroidTest {
         selected("commit")
         assertEquals(sourceBoot(), ProcBootIdSource.read())
         assertEquals(taskId(), InstallerServiceClient.lastTaskId(context))
-        assertNotNull(UltraPendingInstallCredentialStore(context).credential(taskId(), required("candidateSha256")))
+        val prepared = InstallerServiceClient.installationStatus(context, taskId(), InstallTargetMode.ULTRA)
+        assertEquals("PREPARED", prepared.getString("state"))
+        assertEquals(required("candidateSha256"), prepared.getString("candidateSha256"))
         val result = InstallerServiceClient.continueInstallation(context, taskId())
         assertEquals("REBOOT_REQUIRED", result.getString("state"))
         assertEquals(required("candidateSha256"), result.getString("candidateSha256"))
@@ -75,22 +73,21 @@ class UltraBootRepairAndroidTest {
         assertNotEquals(sourceBoot(), ProcBootIdSource.read())
         assertEquals(taskId(), InstallerServiceClient.lastTaskId(context))
         stage("CREDENTIAL_READ_STARTED")
-        val key = requireNotNull(UltraRootKeyStore.read(context))
-        val active = UltraKernelCredential.of(key)
-        assertEquals(required("metadataDelta").toInt(), active.metadataDisplacement)
+        val client = UltraRuntimeClient()
+        val owner = requireNotNull(client.queryManagerOwnerIdentity().identity)
+        assertEquals(android.os.Process.myUid(), owner.fullUid)
         stage("CREDENTIAL_READ_COMPLETED")
-        val client = UltraRuntimeClient { key }
         stage("SDK_UID_STARTED")
         assertEquals(0, UltraIdentityRecovery.uid(client))
         stage("SDK_UID_COMPLETED")
         if (through == "credential") return
         stage("IDENTITY_RECOVER_STARTED")
-        assertEquals("RECOVERY_LOCAL_KEY_VERIFIED", UltraIdentityRecovery.recover(context))
+        assertEquals("RECOVERY_OWNER_VERIFIED", UltraIdentityRecovery.recover(context))
         stage("IDENTITY_RECOVER_COMPLETED")
-        // The old boot broker is paused during handoff. Redeploy only after the
-        // running kernel has authenticated the newly promoted credential.
+        // Recheck the current owner after recovery before accepting the transaction.
         stage("IDENTITY_ENSURE_STARTED")
-        assertEquals("IDENTITY_READY", UltraIdentityRecovery.ensure(context, key, client, force = true))
+        assertEquals(owner, client.queryManagerOwnerIdentity().identity)
+        assertEquals(0, UltraIdentityRecovery.uid(client))
         stage("IDENTITY_ENSURE_COMPLETED")
         if (through == "identity") return
         stage("TRANSACTION_VERIFY_STARTED")

@@ -43,117 +43,153 @@ def write(out, name, value):
 KOTLIN_TEST = r'''package dev.maplesu.manager.runtime.ultra
 import dev.maplesu.manager.runtime.PageReadDeadline
 import dev.maplesu.manager.runtime.ultra.bridge.NativeBridge
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 
 class RootCommandIdentityTest {
- private val valid = String(UltraKernelCredential.of("A".repeat(48)).withMetadataDisplacement(4096).copySecret(), Charsets.US_ASCII)
  private val denied = """{"schemaVersion":1,"backend":"maplesu_ultra","operation":"run_root_cmd","ok":false,"sdkError":"ERR_MODULE_OPEN_FILE","sdkErrorCode":-19934,"data":{"rootCommand":{"phase":5,"systemError":13,"rootAttempted":false}}}"""
- @Before fun reset() { NativeBridge.calls = 0; NativeBridge.lastKey = "unset"; NativeBridge.answer = denied; PageReadDeadline.beforeRead = null }
- private fun runner(client: UltraRuntimeClient, body: (String) -> SuExecResult?) {
-  client.javaClass.getDeclaredField("rootCommands").apply { isAccessible = true }.set(client, RootScriptRunner(body))
+ @Before fun reset() {
+  Thread.interrupted(); NativeBridge.calls = 0; NativeBridge.lastCommand = "unset"; NativeBridge.answer = denied
+  PageReadDeadline.beforeRead = null; PageReadDeadline.deadline = null
  }
  private fun noSubmission(receipt: NativeReceipt, error: String) {
   assertFalse(receipt.succeeded); assertEquals(error, receipt.sdkError); assertEquals(0, NativeBridge.calls)
  }
- @Test fun genuineNullSelectsOwnerOnceAndPreservesTheNativeFailure() {
-  val result = UltraRuntimeClient { null }.runRootCommand("id")
-  assertEquals(1, NativeBridge.calls); assertNull(NativeBridge.lastKey); assertEquals(denied, result.raw)
+ @Test fun keylessCallSubmitsTheCommandOnceAndPreservesTheNativeFailure() {
+  val result = UltraRuntimeClient().runRootCommand("id")
+  assertEquals(1, NativeBridge.calls); assertEquals("id", NativeBridge.lastCommand); assertEquals(denied, result.raw)
  }
- @Test fun explicitValidKeyIsSubmittedUnchangedOnce() {
-  val result = UltraRuntimeClient { valid }.runRootCommand("id")
-  assertEquals(1, NativeBridge.calls); assertEquals(valid, NativeBridge.lastKey); assertEquals(denied, result.raw)
+ @Test fun successfulNativeReceiptRetainsOutputAndCompletion() {
+  NativeBridge.answer = """{"schemaVersion":1,"backend":"maplesu_ultra","operation":"run_root_cmd","ok":true,"sdkError":"OK","sdkErrorCode":0,"operationCompleted":true,"data":{"result":"uid%3D0","resultBytes":5}}}"""
+  val result = UltraRuntimeClient().runRootCommand("id")
+  assertTrue(result.succeeded); assertTrue(result.operationCompleted); assertEquals("uid%3D0", result.string("result"))
+  assertEquals(1, NativeBridge.calls)
  }
- @Test fun malformedNonNullKeysNeverBecomeOwnerRequests() {
-  for (key in listOf("", "malformed", "A".repeat(48))) {
-   noSubmission(UltraRuntimeClient { key }.runRootCommand("id"), "MAPLESU_ULTRA_ROOT_KEY_ABSENT")
-  }
+ @Test fun invalidatedCallerScopeDoesNotSubmit() {
+  noSubmission(UltraRuntimeClient().scoped { false }.runRootCommand("id"), "SDK_IDENTITY_SCOPE_CHANGED")
  }
- @Test fun invalidatedKeyScopeDoesNotSubmit() {
-  noSubmission(UltraRuntimeClient { valid }.scoped(valid) { false }.runRootCommand("id"), "SDK_CREDENTIAL_SCOPE_CHANGED")
- }
- @Test fun invalidatedOwnerScopeDoesNotSubmit() {
-  noSubmission(UltraRuntimeClient { null }.scoped(null) { false }.runRootCommand("id"), "SDK_CREDENTIAL_SCOPE_CHANGED")
- }
- @Test fun keyChangingWhileEnteringAdmissionDoesNotSubmit() {
-  var supplied: String? = valid
-  PageReadDeadline.beforeRead = { supplied = null }
-  noSubmission(UltraRuntimeClient { supplied }.runRootCommand("id"), "SDK_CREDENTIAL_SCOPE_CHANGED")
- }
- @Test fun ownerChangingWhileEnteringAdmissionDoesNotSubmit() {
-  var supplied: String? = null
-  PageReadDeadline.beforeRead = { supplied = valid }
-  noSubmission(UltraRuntimeClient { supplied }.runRootCommand("id"), "SDK_CREDENTIAL_SCOPE_CHANGED")
- }
- @Test fun verifiedKeyKeepsItsRunnerAndNeverReplaysFailureThroughJni() {
+ @Test fun invalidatedRunnerScopeDoesNotRunOrFallBackToJni() {
   var count = 0
-  val client = UltraRuntimeClient { valid }
-  runner(client) { count++; SuExecResult(7, "runner output") }
+  val client = UltraRuntimeClient(RootScriptRunner { count++; SuExecResult(0, "unexpected") }).scoped { false }
+  noSubmission(client.runRootCommand("id"), "SDK_IDENTITY_SCOPE_CHANGED"); assertEquals(0, count)
+ }
+ @Test fun identityChangingWhileEnteringAdmissionDoesNotSubmit() {
+  var current = true
+  val client = UltraRuntimeClient().scoped { current }
+  PageReadDeadline.beforeRead = { current = false }
+  noSubmission(client.runRootCommand("id"), "SDK_IDENTITY_SCOPE_CHANGED")
+ }
+ @Test fun nestedScopeKeepsTheParentsInvalidation() {
+  var parent = true
+  val client = UltraRuntimeClient().scoped { parent }.scoped { true }
+  parent = false
+  noSubmission(client.runRootCommand("id"), "SDK_IDENTITY_SCOPE_CHANGED")
+ }
+ @Test fun nestedScopeKeepsTheChildsInvalidation() {
+  noSubmission(UltraRuntimeClient().scoped { true }.scoped { false }.runRootCommand("id"), "SDK_IDENTITY_SCOPE_CHANGED")
+ }
+ @Test fun everySubmissionRechecksTheSameLifetime() {
+  var current = true
+  val client = UltraRuntimeClient().scoped { current }
+  assertEquals(denied, client.runRootCommand("id").raw); current = false
+  val result = client.runRootCommand("unexpected")
+  assertEquals("SDK_IDENTITY_SCOPE_CHANGED", result.sdkError); assertEquals(1, NativeBridge.calls)
+ }
+ @Test fun activeScopedRunnerExecutesExactlyOnce() {
+  var count = 0
+  val client = UltraRuntimeClient(RootScriptRunner { command ->
+   count++; assertEquals("id", command); SuExecResult(0, "runner output")
+  }).scoped { true }.scoped { true }
+  val receipt = client.runRootCommand("id")
+  assertTrue(receipt.succeeded); assertEquals("runner+output", receipt.string("result"))
+  assertEquals(1, count); assertEquals(0, NativeBridge.calls)
+ }
+ @Test fun runnerExitFailureIsNeverReplayedThroughJni() {
+  var count = 0
+  val client = UltraRuntimeClient(RootScriptRunner { count++; SuExecResult(7, "runner output") })
   val receipt = client.runRootCommand("id")
   assertEquals(1, count); assertEquals(0, NativeBridge.calls); assertEquals("MAPLESU_ROOT_COMMAND_EXIT", receipt.sdkError)
   assertEquals("runner+output", receipt.string("result")); assertEquals(7, receipt.int("exitCode"))
  }
- @Test fun ownerDoesNotUseAnExistingKeyRunner() {
+ @Test fun missingRunnerResponseIsNotReplayedThroughJni() {
   var count = 0
-  val client = UltraRuntimeClient { null }
-  runner(client) { count++; SuExecResult(0, "unexpected") }
-  assertEquals(denied, client.runRootCommand("id").raw)
-  assertEquals(0, count); assertEquals(1, NativeBridge.calls); assertNull(NativeBridge.lastKey)
+  val client = UltraRuntimeClient(RootScriptRunner { count++; null })
+  assertEquals("MAPLESU_ROOT_CHANNEL_UNAVAILABLE", client.runRootCommand("id").sdkError)
+  assertEquals(1, count); assertEquals(0, NativeBridge.calls)
+ }
+ @Test fun timedOutRunnerIsNotReplayedThroughJni() {
+  var count = 0
+  val client = UltraRuntimeClient(RootScriptRunner { count++; SuExecResult(-1, "partial", timedOut = true) })
+  assertEquals("MAPLESU_ROOT_COMMAND_TIMEOUT", client.runRootCommand("id").sdkError)
+  assertEquals(1, count); assertEquals(0, NativeBridge.calls)
+ }
+ @Test fun runnerIoFailureIsNotReplayedThroughJni() {
+  var count = 0
+  val client = UltraRuntimeClient(RootScriptRunner { count++; SuExecResult(-1, "partial", failure = "EIO") })
+  assertEquals("MAPLESU_ROOT_COMMAND_IO_FAILURE", client.runRootCommand("id").sdkError)
+  assertEquals(1, count); assertEquals(0, NativeBridge.calls)
  }
  @Test fun runnerExceptionIsReportedOnceWithoutTransportReplay() {
   var count = 0
-  val client = UltraRuntimeClient { valid }
-  runner(client) { count++; throw IllegalStateException("runner fixture") }
+  val client = UltraRuntimeClient(RootScriptRunner { count++; throw IllegalStateException("runner fixture") })
   assertEquals("MAPLESU_BRIDGE_EXCEPTION", client.runRootCommand("id").sdkError)
   assertEquals(1, count); assertEquals(0, NativeBridge.calls)
+ }
+ @Test fun expiredAdmissionDoesNotSubmit() {
+  PageReadDeadline.deadline = System.nanoTime() - 1
+  noSubmission(UltraRuntimeClient().runRootCommand("id"), "MAPLESU_SDK_BUSY")
+ }
+ @Test fun cancelledAdmissionDoesNotSubmit() {
+  Thread.currentThread().interrupt()
+  try { noSubmission(UltraRuntimeClient().runRootCommand("id"), "MAPLESU_SDK_INTERRUPTED") }
+  finally { Thread.interrupted() }
  }
 }
 '''
 
 
-def kotlin(out, client_text, receipt_text, credential):
+def kotlin(out, client_text, receipt_text):
     imports = '''package dev.maplesu.manager.runtime.ultra
 import dev.maplesu.manager.runtime.ultra.bridge.NativeBridge
 import dev.maplesu.manager.runtime.PageReadDeadline
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
-import java.util.concurrent.Semaphore
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.locks.ReentrantReadWriteLock
+import java.util.concurrent.CancellationException
 '''
     methods = [block(client_text, marker) for marker in ["private fun call(", "private fun busy(",
-        "private fun localCall(", "private fun key(", "internal fun scoped(",
+        "private fun localCall(", "internal fun scoped(", "internal constructor(rootCommands:",
         "fun runRootCommand(", "private fun callWithIdentity(", "companion object {"]]
     # busy() is an expression function; its next brace belongs to localCall().
     methods[1] = client_text[client_text.index("private fun busy("):client_text.index("    // Compiled identity")].strip()
-    methods[4] = client_text[client_text.index("internal fun scoped("):client_text.index("    /** Read-only readiness")].strip()
-    assembled = imports + '''class UltraRuntimeClient(private val rootKeyProvider: () -> String? = { null }) {
+    methods[3] = client_text[client_text.index("internal fun scoped("):client_text.index("    /** Read-only readiness")].strip()
+    assembled = imports + '''class UltraRuntimeClient() {
  private var rootCommands: RootScriptRunner? = null
  private var identityCurrent: () -> Boolean = { true }
  private val loadFailure: String? = null
 ''' + "\n".join(methods) + "\n}\n"
-    sources = [write(out, "UltraRuntimeClient.kt", assembled), credential,
+    types = block(client_text, "internal fun interface RootScriptRunner") + "\n" + block(
+        (ROOT / "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSuChannel.kt").read_text(encoding="utf-8-sig"),
+        "data class SuExecResult(")
+    sources = [write(out, "UltraRuntimeClient.kt", assembled),
+        write(out, "RuntimeTypes.kt", "package dev.maplesu.manager.runtime.ultra\n" + types),
         write(out, "NativeReceipt.kt", "package dev.maplesu.manager.runtime.ultra\nimport org.json.*\nimport java.net.URLEncoder\n" + block(receipt_text, "data class NativeReceipt(")),
         write(out, "RootCommandIdentityTest.kt", KOTLIN_TEST),
         write(out, "Fixtures.kt", '''package dev.maplesu.manager.runtime.ultra
-fun interface RootScriptRunner { fun run(script: String): SuExecResult? }
-data class SuExecResult(val exitCode: Int, val output: String, val timedOut: Boolean = false, val failure: String? = null)
 class UltraAuthorizationResult { companion object { fun parse(value: org.json.JSONObject?): UltraAuthorizationResult? = null } }
 object UltraSdkLogging { fun redact(value: String?) = value.orEmpty() }
 '''),
         write(out, "Deadline.kt", '''package dev.maplesu.manager.runtime
-object PageReadDeadline { var beforeRead: (() -> Unit)? = null; fun currentNanos(): Long? { beforeRead?.invoke(); return null } }
+object PageReadDeadline { var beforeRead: (() -> Unit)? = null; var deadline: Long? = null; fun currentNanos(): Long? { beforeRead?.invoke(); return deadline } }
 '''),
         write(out, "StoredInputs.kt", '''package dev.maplesu.manager.compat
 object StoredInputs { fun receiptBackend(value: String) = value; fun error(value: String) = value }
 ''')]
-    bridge = write(out, "NativeBridge.java", '''package dev.maplesu.manager.runtime.ultra.bridge;
-public final class NativeBridge {
- public static int calls; public static String lastKey, answer;
- public static String runRootCmd(String key, String command) { calls++; lastKey = key; return answer; }
-}
-''')
+    declaration = re.search(r"public static native String runRootCmd\([^;]*;",
+        (ROOT / "manager/src/main/java/dev/maplesu/manager/runtime/ultra/bridge/NativeBridge.java").read_text(encoding="utf-8-sig"))
+    assert declaration, "Production Root command JNI declaration is absent"
+    bridge_method = declaration[0].replace(" native ", " ").removesuffix(";") + " { calls++; lastCommand = cmd; return answer; }"
+    bridge = write(out, "NativeBridge.java", "package dev.maplesu.manager.runtime.ultra.bridge;\n" +
+        "public final class NativeBridge {\n public static int calls; public static String lastCommand, answer;\n " +
+        bridge_method + "\n}\n")
     deps = [cached_jar(*item) for item in [("org.jetbrains.kotlin", "kotlin-stdlib", "2.4.20"),
         ("org.jetbrains", "annotations", "13.0"), ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm", "1.11.0"),
         ("org.json", "json", "20240303"), ("junit", "junit", "4.13.2"), ("org.hamcrest", "hamcrest-core", "1.3")]]
@@ -169,7 +205,7 @@ public final class NativeBridge {
         [java, "-cp", cp, "org.junit.runner.JUnitCore", "dev.maplesu.manager.runtime.ultra.RootCommandIdentityTest"]]
 
 
-def native(out, source):
+def native(out, source, selected):
     helpers = [block(source, name) for name in ["std::string jstring_to_utf8(", "std::string url_encode_copy(",
         "cJSON* begin(", "void mark_ok(", "void mark_sdk_error(", "void mark_bridge_error(",
         "void mark_call_bridge_error(", "jstring finish(", "struct JsonDeleter", "cJSON* owner_u64(",
@@ -183,30 +219,40 @@ def native(out, source):
     write(out, "root_command_production.inc", "\n\n".join(helpers) + "\n\n" + method)
     binary = out / "native-root-identity.exe"
     return [[(os.environ.get("CXX") or shutil.which("g++") or "g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
-        "-I" + str(out), "-I" + str(ROOT / "runtime/ultra/bridge"),
+        "-I" + str(out), "-I" + str(selected / "runtime/ultra/bridge"), "-I" + str(ROOT / "runtime/ultra/bridge"),
         "-I" + str(ROOT / "runtime/maplesu-sdk/include"), "-I" + str(ROOT / "runtime/maplesu-sdk/sdk/include"),
         "-I" + str(ROOT / "runtime/ultra/third_party/cJSON"), "-I" + str(ROOT / "runtime/ultra/third_party/include"),
-        ROOT / "runtime/tests/ultra_root_command_identity_test.cpp", ROOT / "runtime/ultra/third_party/cJSON/cJSON.cpp",
+        choose(selected, ROOT / "runtime/tests/ultra_root_command_identity_test.cpp"), ROOT / "runtime/ultra/third_party/cJSON/cJSON.cpp",
         "-static-libgcc", "-static-libstdc++", "-o", binary], [binary]]
+
+
+def choose(selected, path):
+    candidate = selected / path.relative_to(ROOT)
+    return candidate if candidate.is_file() else path
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, default=ROOT, help="Read selected test/bridge candidates from this tree; other sources stay read-only")
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    paths = [ROOT / name for name in ["runtime/ultra/bridge/native_lib_ultra.cpp",
+    selected = args.source_root.resolve()
+    paths = [choose(selected, ROOT / name) for name in ["runtime/ultra/bridge/native_lib_ultra.cpp",
         "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
         "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraReceipt.kt",
-        "manager/src/main/java/dev/maplesu/manager/ultrakernel/UltraKernelCredential.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/bridge/NativeBridge.java",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSuChannel.kt",
         "runtime/ultra/bridge/manager_owner_identity.h", "runtime/maplesu-sdk/sdk/include/maplesu_root_command_private.h",
+        "runtime/maplesu-sdk/include/maplesu_sdk/maplesu_root.h", "runtime/maplesu-sdk/sdk/include/maplesu_request_private.h",
+        "runtime/maplesu-sdk/sdk/include/maplesu_root_private.h", "runtime/ultra/bridge/manager_owner_root_probe.h", "runtime/ultra/bridge/sdk_call_scope.h",
         "runtime/ultra/bridge/sdk_error_receipt.h", "runtime/ultra/third_party/cJSON/cJSON.cpp",
         "runtime/tests/ultra_root_command_identity_test.cpp", "scripts/tests/test-root-command-identity.py"]]
     digests = {str(path.relative_to(ROOT)).replace("\\", "/"): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
     texts = [path.read_text(encoding="utf-8-sig") for path in paths[:3]]
     runs = {}
-    for name, commands in [("kotlin", kotlin(out, texts[1], texts[2], paths[3])), ("native", native(out, texts[0]))]:
+    for name, commands in [("kotlin", kotlin(out, texts[1], texts[2])), ("native", native(out, texts[0], selected))]:
         logs = []
         codes = []
         for command in commands:
@@ -225,7 +271,7 @@ def main():
     record = dict(passed=all(run["passed"] for run in runs.values()) and unchanged, runs=runs,
         recordedAt=datetime.now(timezone.utc).isoformat(), sourceSha256=digests, inputsUnchanged=unchanged,
         deviceAccess=False, sdkBuild=False, apkBuild=False,
-        scope="Extracted production Kotlin admission/key/routing/receipt and JNI method/guards/JSON with real cJSON, SDK diagnostic types and RequestAuthModeScope. JNI VM, SDK execution, auth transport, SDK admission and Android observations are host fixtures. No device Root result is asserted.")
+        scope="Extracted production Kotlin identity lifetime/admission/routing/receipt and real RootScriptRunner/SuExecResult declarations and JNI method/guards/JSON with real cJSON, SDK diagnostic types and RequestAuthModeScope; keyless public Root declarations are included without legacy overloads. JNI VM, SDK execution, auth transport, SDK admission and Android observations are host fixtures. No device Root result is asserted.")
     write(out, "RESULT.json", json.dumps(record, indent=2) + "\n")
     raise SystemExit(0 if record["passed"] else 1)
 

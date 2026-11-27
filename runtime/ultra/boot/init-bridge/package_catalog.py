@@ -10,7 +10,7 @@ import shutil
 
 HASH = re.compile(r"[0-9a-f]{64}")
 COMPONENTS = ("targetBoot", "handoff", "bridge", "config", "moduleSymvers", "targetContract",
-              "btf", "sessionAbi", "taskProfileAbi", "abiEvidence", "bundleSources", "ksuInit")
+              "btf", "sessionAbi", "taskProfileAbi", "abiEvidence", "bundleSources", "ksuInit", "referenceFacts")
 
 
 def require(condition, code):
@@ -106,7 +106,7 @@ def inspect_component(row, plan_root):
     require(manifest["architecture"] == "arm64" and type(manifest["pageSize"]) is int and
             manifest["pageSize"] in (4096, 16384, 65536) and
             manifest["cfiMode"] in ("none", "kcfi", "legacy-lto-cfi") and
-            manifest["credentialMode"] == "module-parameter" and
+            manifest["credentialMode"] == "keyless" and
             manifest["runtimeFactsAbi"] == "maplesu-runtime-facts/1", "ULTRA_CATALOG_COMPONENT_ABI")
     require(HASH.fullmatch(manifest["sourceGenerationSha256"]) and
             type(manifest["metadataDisplacement"]) is int, "ULTRA_CATALOG_COMPONENT_FACTS")
@@ -267,7 +267,11 @@ def inspect_variant(row, plan_root):
     build_file = selected_path(plan_root, row["strictBuild"])
     manifest_file = root / "manifest.json"
     manifest = read_json(manifest_file)
-    require(manifest.get("schemaVersion") == 1, "ULTRA_CATALOG_MANIFEST_SCHEMA")
+    require(manifest.get("schemaVersion") in (1, 3), "ULTRA_CATALOG_MANIFEST_SCHEMA")
+    compact = manifest["schemaVersion"] == 3
+    if compact:
+        require(manifest.get("kind") == "target-template" and not ({"targetBoot", "btf", "btfSha256"} & manifest.keys()),
+                "ULTRA_CATALOG_COMPACT_SCHEMA")
     require(all(isinstance(manifest.get(field), str) and HASH.fullmatch(manifest[field]) for field in
                 ("kernelSha256", "targetBootSha256")), "ULTRA_CATALOG_TARGET_IDENTITY")
     files = {"manifest.json": identity(manifest_file)}
@@ -280,7 +284,8 @@ def inspect_variant(row, plan_root):
         require(not component.is_symlink() and component.resolve().is_relative_to(root), "ULTRA_CATALOG_COMPONENT_SYMLINK")
         files[name] = identity(component)
         require(files[name]["sha256"] == manifest.get(field + "Sha256"), "ULTRA_CATALOG_COMPONENT_HASH:" + field)
-    require(all(x in manifest for x in ("targetBoot", "bridge", "handoff", "config", "moduleSymvers", "targetContract", "bundleSources")),
+    require(all(x in manifest for x in (("referenceFacts",) if compact else ("targetBoot",)) +
+                ("bridge", "handoff", "config", "moduleSymvers", "targetContract", "bundleSources")),
             "ULTRA_CATALOG_COMPONENT_REQUIRED")
     sources = read_json(root / manifest["bundleSources"])
     require(sources.get("schemaVersion") == 1 and isinstance(sources.get("inputs"), dict), "ULTRA_CATALOG_BUNDLE_SOURCES")
@@ -319,13 +324,19 @@ def inspect_variant(row, plan_root):
         require(abi.get("bundledModuleSha256") == manifest["bridgeSha256"], "ULTRA_CATALOG_ABI_BUNDLED:" + field)
     generation_inputs = {"moduleSources": common, "handoffSha256": manifest["handoffSha256"]}
     generation = sha(encoded(generation_inputs))
+    if compact:
+        require(manifest.get("sourceGenerationSha256") == generation, "ULTRA_CATALOG_COMPACT_GENERATION")
+        spec = importlib.util.spec_from_file_location("catalog_reference_facts", Path(__file__).with_name("reference_facts.py"))
+        facts_api = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(facts_api)
+        facts_api.verify_projection(root, manifest, sources, generation)
     proof = {"schema": "maplesu-init-bridge-variant/1", "manifestSha256": files["manifest.json"]["sha256"],
              "sourceGenerationSha256": generation, "targetBootSha256": manifest["targetBootSha256"],
              "kernelSha256": manifest["kernelSha256"], "sourceSelection": selection_identity,
              "strictBuild": build_identity, "originalModule": {k: bridge[k] for k in ("bytes", "sha256")},
              "bundledModule": files[manifest["bridge"]], "generationInputs": generation_inputs,
              "targetInputs": {field: manifest[field + "Sha256"] for field in
-                              ("config", "moduleSymvers", "targetContract", "btf", "sessionAbi", "taskProfileAbi", "abiEvidence") if field in manifest},
+                              ("config", "moduleSymvers", "targetContract", "btf", "sessionAbi", "taskProfileAbi", "abiEvidence", "referenceFacts") if field in manifest},
              "artifactQualified": False, "deviceQualified": False}
     dependencies += [(selection_file, selection_identity), (build_file, build_identity),
                      (Path(bridge["path"]), {k: bridge[k] for k in ("bytes", "sha256")})]

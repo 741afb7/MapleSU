@@ -14,17 +14,17 @@ import java.time.format.DateTimeFormatter
  *
  * 背景：用户报告 Ultra 环境已完整接入并成功激活，但工作区没有真机 Ultra `Running` 的归档证据。
  * 本类只做**只读采集**：把当前进程能看到的 Ultra SDK 回执/探针快照/环境目录清单写成一份
- * 可归档、可回读校验的 JSON；**不启动进程、不调用任何写接口、不写入/不记录 root key 本体**。
+ * 可归档、可回读校验的 JSON；**不启动进程、不调用任何写接口、不记录安装身份本体**。
  *
  * 严格判定：
  * `strictReady = 环境回执 state == "Running" && 已安装版本回读成功且非空 && 同次 Root 凭据证明通过`。
  * `Fault`/`NotInstalled`/`NoKey`/`Unknown`/SDK 不可用**都不算激活**。
  *
  * 安全边界：
- * - `rootKey` 只记录 `present: true/false`；目录路径只记录模板 `/data/<rootKey16>/`，
- *   不写实际路径（实际路径含 key 前 16 字符），不写 key 任何片段；
+ * - `ownerIdentity` 只记录 `present: true/false`；目录路径只记录模板 `/data/<deployment>/`，
+ *   不写实际部署路径；
  * - SDK 原始回执里理论上可能回显输入，写入前按 [MAX_RAW_CHARS] 截断，但采集器本身不把
- *   key 传给任何回执字段；
+ *   安装身份传给任何回执字段；
  * - 输出文件位于 App 私有 `filesDir/`，文件名含采集时间戳；写完立刻读回并比对内容，
  *   读回不一致 → `EVIDENCE_READBACK_MISMATCH`。
  *
@@ -34,7 +34,7 @@ import java.time.format.DateTimeFormatter
 class UltraEnvActivationEvidence private constructor(
     private val port: UltraEvidencePort,
     private val snapshot: () -> UltraProbeSnapshot,
-    private val rootKeyPresent: () -> Boolean,
+    private val ownerIdentityPresent: () -> Boolean,
     private val dataDirProbe: () -> UltraDataDirProbe,
     private val outputDir: () -> File,
     private val currentMode: () -> String?,
@@ -66,7 +66,7 @@ class UltraEnvActivationEvidence private constructor(
                 observedAtWallClockMs = 0L,
             )
         }
-        val keyPresent = runCatching { rootKeyPresent() }.getOrDefault(false)
+        val ownerPresent = runCatching { ownerIdentityPresent() }.getOrDefault(false)
         val dataDir = runCatching { dataDirProbe() }.getOrElse {
             UltraDataDirProbe(
                 pathTemplate = PATH_TEMPLATE,
@@ -99,7 +99,7 @@ class UltraEnvActivationEvidence private constructor(
             versionReadbackOk = versionReadbackOk,
             testRootOk = testRootOk,
             strictReady = strictReady,
-            keyPresent = keyPresent,
+            ownerPresent = ownerPresent,
             dataDir = dataDir,
         )
 
@@ -160,7 +160,7 @@ class UltraEnvActivationEvidence private constructor(
         versionReadbackOk: Boolean,
         testRootOk: Boolean,
         strictReady: Boolean,
-        keyPresent: Boolean,
+        ownerPresent: Boolean,
         dataDir: UltraDataDirProbe,
     ): String = buildString {
         append("{\n")
@@ -197,8 +197,8 @@ class UltraEnvActivationEvidence private constructor(
         append("    },\n")
         append("    \"note\": \"").append(ACTIVATION_NOTE).append("\"\n")
         append("  },\n")
-        append("  \"rootKey\": {\n")
-        append("    \"present\": ").append(keyPresent).append(",\n")
+        append("  \"ownerIdentity\": {\n")
+        append("    \"present\": ").append(ownerPresent).append(",\n")
         append("    \"policy\": \"value is never read into, serialized by, or logged from this evidence\"\n")
         append("  },\n")
         append("  \"dataDir\": {\n")
@@ -243,9 +243,8 @@ class UltraEnvActivationEvidence private constructor(
         const val SCHEMA_VERSION = 1
         const val KIND = "ultra-env-activation-evidence"
         const val FILE_PREFIX = "ultra-env-activation-"
-        const val PATH_TEMPLATE = "/data/<rootKey16>/"
+        const val PATH_TEMPLATE = "/data/<deployment>/"
 
-        private const val KEY16_LEN = 16
         private const val MAX_ENTRIES = 64
         private const val MAX_RAW_CHARS = 16_384
         private const val TRUNCATED_MARK = "…(truncated)"
@@ -293,8 +292,8 @@ class UltraEnvActivationEvidence private constructor(
                         observedAtWallClockMs = current.observedAtWallClockMs,
                     )
                 },
-                rootKeyPresent = { UltraSdkCredentials.read(app) != null },
-                dataDirProbe = { probeDataDir(UltraSdkCredentials.read(app)) },
+                ownerIdentityPresent = { UltraEnvironmentProbe.currentSnapshot(app).managerOwnerIdentity != null },
+                dataDirProbe = { probeDataDir(UltraInstalledIdentityProbe.installedHelperPath()) },
                 outputDir = { app.filesDir },
                 currentMode = currentMode,
                 clock = { System.currentTimeMillis() },
@@ -307,7 +306,7 @@ class UltraEnvActivationEvidence private constructor(
             snapshot: () -> UltraProbeSnapshot = {
                 UltraProbeSnapshot("Unknown", null, -1L, 0L)
             },
-            rootKeyPresent: () -> Boolean = { false },
+            ownerIdentityPresent: () -> Boolean = { false },
             dataDirProbe: () -> UltraDataDirProbe = {
                 UltraDataDirProbe(PATH_TEMPLATE, false, false, emptyList(), null)
             },
@@ -317,7 +316,7 @@ class UltraEnvActivationEvidence private constructor(
         ): UltraEnvActivationEvidence = UltraEnvActivationEvidence(
             port = port,
             snapshot = snapshot,
-            rootKeyPresent = rootKeyPresent,
+            ownerIdentityPresent = ownerIdentityPresent,
             dataDirProbe = dataDirProbe,
             outputDir = outputDir,
             currentMode = currentMode,
@@ -344,12 +343,9 @@ class UltraEnvActivationEvidence private constructor(
             raw = raw,
         )
 
-        private fun probeDataDir(rootKey: String?): UltraDataDirProbe {
-            if (rootKey == null || rootKey.length < KEY16_LEN) {
-                return UltraDataDirProbe(PATH_TEMPLATE, false, false, emptyList(), "ROOT_KEY_ABSENT")
-            }
-            // 实际路径含 key 前 16 字符，但**从不序列化**；只记录路径模板与目录内容摘要。
-            val dir = File("/data/" + rootKey.take(KEY16_LEN))
+        private fun probeDataDir(helperPath: String?): UltraDataDirProbe {
+            val dir = helperPath?.takeIf { it.matches(Regex("/data/[A-Za-z0-9]{16}/init")) }?.let { File(it).parentFile }
+                ?: return UltraDataDirProbe(PATH_TEMPLATE, false, false, emptyList(), "DEPLOYMENT_NOT_OBSERVED")
             val exists = runCatching { dir.exists() }.getOrDefault(false)
             if (!exists) {
                 return UltraDataDirProbe(PATH_TEMPLATE, false, false, emptyList(), "NOT_PRESENT_OR_UNREADABLE")
@@ -445,7 +441,7 @@ data class UltraProbeSnapshot(
     val observedAtWallClockMs: Long,
 )
 
-/** `/data/<rootKey16>/` 只读探测结果：只记路径模板，不记实际路径。 */
+/** `/data/<deployment>/` 只读探测结果：只记路径模板，不记实际路径。 */
 data class UltraDataDirProbe(
     val pathTemplate: String,
     val exists: Boolean,

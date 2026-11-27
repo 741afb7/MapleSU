@@ -41,15 +41,7 @@ object ProductionHiddenEnv {
         // 没有 loader（未打包/未解压）→ 注入必然失败，先 fail-closed，不把用户带进半隐藏。
         if (!loaderPath.isFile || loaderPath.length() <= 0L) return null
 
-        val ultraClient = UltraRuntimeClient(rootKeyProvider = {
-            runCatching {
-                UltraSdkCredentials.read(app) ?: run {
-                    if (UltraSdkCredentials.hookWithoutSdk(app)) return@run null
-                    dev.maplesu.manager.runtime.ultra.UltraIdentityRecovery.recover(app)
-                    UltraSdkCredentials.read(app)
-                }
-            }.getOrNull()
-        })
+        val ultraClient = UltraSdkCredentials.client(app)
         val ultraSdkRoot = UltraEnvRootRunner(ultraClient)
         val routerRoot = RouterRootRunner(app)
         // Stop, activity launch and loader readiness share the same 60s budget as the SDK route.
@@ -94,10 +86,7 @@ object ProductionHiddenEnv {
             identity = identity,
             prepareBoot = {
                 if (UltraSdkSession.current(app) != null) UltraSdkSession.prepareRecovery(app)
-                else if (UltraSdkCredentials.hookWithoutSdk(app)) false
-                else preparePermanentHiddenRecovery(ultraRoot) {
-                    dev.maplesu.manager.runtime.ultra.UltraEnvironmentInstaller.backupKey(app, forceIdentity = true)?.ok == true
-                }
+                else ultraClient.queryManagerOwnerIdentity().identity != null
             },
         )
         val ksuDeps = HiddenModeDeps(
@@ -128,16 +117,6 @@ object ProductionHiddenEnv {
     }.getOrNull()
 }
 
-/** Explicit permanent preparation must finish before changing the daemon's credential owner. */
-internal fun preparePermanentHiddenRecovery(root: HiddenRootRunner, backup: () -> Boolean): Boolean {
-    if (!backup()) return false
-    val path = dev.maplesu.manager.runtime.ultra.UltraBootSdkRecovery.PATH
-    val result = root.run(
-        "[ ! -L '$path' ] && rm -f '$path' && [ ! -e '$path' ] && echo MAPLESU_PERMANENT_RECOVERY_READY",
-    )
-    return result.code == 0 && result.output.trim() == "MAPLESU_PERMANENT_RECOVERY_READY"
-}
-
 /** Ultra `run_root_cmd`（uid 0，`u:r:shell:s0`）—— A 模式的**唯一** root 通道。 */
 class UltraEnvRootRunner internal constructor(private val execute: (String) -> RecoveryCommandResult) : HiddenRootRunner {
     constructor(client: UltraRuntimeClient) : this({ command ->
@@ -159,7 +138,7 @@ class UltraEnvRootRunner internal constructor(private val execute: (String) -> R
     }
 }
 
-/** 既有模式感知路由（LITE 内核凭据 → Ultra 环境）—— B 模式的 root 通道。 */
+/** 既有模式感知路由，按当前 LITE / KSU 的真实通道执行。 */
 class RouterRootRunner(private val context: Context? = null) : HiddenRootRunner {
     override fun run(script: String): RecoveryCommandResult {
         val result = runCatching { RootExec.execute(context, script) }.getOrNull()

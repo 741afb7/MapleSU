@@ -2,8 +2,7 @@
 //
 // This is the only translation unit that calls libc/bionic directly.  It binds
 // the syscall table used by the freestanding logic to real descriptors, real
-// processes and the real dynamic loader, and owns the embedded root-key slot
-// that the environment installer rewrites in place.
+// processes and the real dynamic loader.
 #include "private/helper_core.h"
 
 #include <dirent.h>
@@ -20,14 +19,6 @@
 #include <sys/wait.h>
 #include <sys/xattr.h>
 #include <unistd.h>
-
-// 4096-byte in-image slot: the installer replaces this exact token (the open
-// edition uses the same token string for its payloads) with the real root key
-// and NUL padding.  The helper never takes the key from argv or the environment.
-extern "C" __attribute__((used))
-const char maplesu_helper_root_key_token[4096] =
-    "5d31494d2e18e3fdef2afaf740b0febc19229cb292f57ebc3bc1c96c6d70b709"
-    "8d2dc1f356b733e8c999e6ac85bdca24c8c74f03ae7d5b2a402e96804576e925";
 
 namespace {
 

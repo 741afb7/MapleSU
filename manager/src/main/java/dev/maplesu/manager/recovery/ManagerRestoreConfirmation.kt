@@ -106,7 +106,6 @@ class ManagerRestoreConfirmation(private val activity: ComponentActivity) {
 
     private fun load(): Result<Pending?> = runCatching {
         if (ModeRuntime.active == WorkMode.KSU) return@runCatching null
-        check(UltraSdkCredentials.read(activity) != null) { "RESTORE_KEY_NOT_READY" }
         // The SDK root read itself proves readiness; a separate cached probe may be stale/busy.
         val result = root().run(
             "[ \"\$(id -u)\" = 0 ] && " +

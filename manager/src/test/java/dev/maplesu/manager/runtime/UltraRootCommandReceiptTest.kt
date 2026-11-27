@@ -76,7 +76,7 @@ class UltraRootCommandReceiptTest {
             override fun available() = true
             override fun run(script: String): RootExecResult = error("submitted command was replayed")
         }
-        val router = RootExecutionRouter(legacy, ultra, modeProvider = { dev.maplesu.manager.workmode.WorkMode.LITE })
+        val router = RootExecutionRouter(ultra, modeProvider = { dev.maplesu.manager.workmode.WorkMode.LITE })
         val result = router.execute("printf once; exit 7")
         assertFalse(result.ok)
         assertEquals(7, result.code)
@@ -93,7 +93,7 @@ class UltraRootCommandReceiptTest {
             runner = { calls++; UltraRootCommandReceipt(it, "lost").decode("truncated") },
             running = { true }, onFailure = { invalidations++ },
         )
-        val result = RootExecutionRouter(null, ultra).execute("write-once")
+        val result = RootExecutionRouter(ultra).execute("write-once")
         assertFalse(result.ok)
         assertEquals("ULTRA_ROOT_COMMAND_RESULT_UNCONFIRMED", result.detail)
         assertEquals(1, calls)
@@ -110,7 +110,7 @@ class UltraRootCommandReceiptTest {
                 running = { available },
                 onFailure = { available = false; invalidations++ },
             )
-            val router = RootExecutionRouter(null, ultra,
+            val router = RootExecutionRouter(ultra,
                 modeProvider = { dev.maplesu.manager.workmode.WorkMode.LITE }, ultraIdentity = { true })
             val result = router.execute("read-only-startup-probe")
             assertFalse(result.ok)

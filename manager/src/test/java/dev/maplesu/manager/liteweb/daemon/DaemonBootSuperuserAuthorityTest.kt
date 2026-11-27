@@ -18,7 +18,7 @@ class DaemonBootSuperuserAuthorityTest {
                 calls += op
                 when (op) {
                     "snapshot" -> "wire=${SuperuserWire.encode(state)}"
-                    "revoke" -> { state = AuthorizationSnapshot(true, emptyMap(), rev = 2); "rev=2" }
+                    "revoke" -> { state = AuthorizationSnapshot(true, emptyMap(), rev = 2); "rev=2 pending=1" }
                     "mark-applied" -> "rev=2 pending=1"
                     else -> error(op)
                 }
@@ -35,7 +35,7 @@ class DaemonBootSuperuserAuthorityTest {
         )
         assertFalse(authority.setAllowed(pkg, false))
         assertTrue(state.grants.isEmpty())
-        assertEquals(listOf("revoke", "snapshot", "mirror", "mark-applied"), calls)
+        assertEquals(listOf("snapshot", "revoke", "snapshot", "mirror", "mark-applied"), calls)
     }
 
     @Test fun webReadsOnlyLiveIdentityDecisionsFromTheAuthority() {
@@ -59,7 +59,7 @@ class DaemonBootSuperuserAuthorityTest {
                 "revoke" -> {
                     assertEquals(listOf(uid.toString()), args)
                     state = state.copy(grants = emptyMap(), rev = 2)
-                    "rev=2"
+                    "rev=2 pending=1"
                 }
                 "mark-applied" -> "rev=2 pending=0"
                 else -> error(op)
@@ -76,7 +76,7 @@ class DaemonBootSuperuserAuthorityTest {
         val authority = DaemonBootSuperuserAuthority(
             execute = { op, _ -> when (op) {
                 "snapshot" -> "wire=${SuperuserWire.encode(state)}"
-                "revoke" -> "rev=2"
+                "revoke" -> "rev=2 pending=1"
                 "mark-applied" -> "rev=3 pending=1 detail=STALE_MIRROR_REVISION"
                 else -> error(op)
             } },
@@ -111,4 +111,71 @@ class DaemonBootSuperuserAuthorityTest {
         assertFalse(state.pendingApply())
     }
 
+    @Test fun failedOrIncompleteRevokeNeverMirrorsTheOldGrantAsSuccess() {
+        for (reply in listOf("ERR", "rev=2", "rev=2 pending=1", "rev=1 pending=1")) {
+            var mirrored = false
+            val state = AuthorizationSnapshot(true, mapOf(uid to identity), rev = 1)
+            val authority = DaemonBootSuperuserAuthority(
+                execute = { op, _ -> when (op) {
+                    "snapshot" -> "wire=${SuperuserWire.encode(state)}"
+                    "revoke" -> reply
+                    else -> error(op)
+                } },
+                identityOf = { identity }, uidOfPackage = { uid },
+                mirror = object : SuperuserMirror {
+                    override val backend = "ULTRA_ALLOWLIST"
+                    override fun apply(snapshot: AuthorizationSnapshot): MirrorOutcome {
+                        mirrored = true
+                        return MirrorOutcome(true)
+                    }
+                },
+            )
+            assertFalse(reply, authority.setAllowed(pkg, false))
+            assertFalse(reply, mirrored)
+        }
+    }
+
+    @Test fun revokeCoversInstalledAndHistoricalFullUidsIncludingTombs() {
+        val otherUid = 1010123
+        val tombUid = 2010123
+        val revoked = mutableListOf<Int>()
+        val other = ApplicationIdentity(otherUid, pkg, listOf(pkg), setOf("a".repeat(64)),
+            1000L, 2000L, "/data/app/other/base.apk")
+        var state = AuthorizationSnapshot(true, mapOf(uid to identity, otherUid to other), rev = 2,
+            tombs = listOf(SuperuserTomb(tombUid, pkg, 2, 1)))
+        val authority = DaemonBootSuperuserAuthority(
+            execute = { op, args -> when (op) {
+                "snapshot" -> "wire=${SuperuserWire.encode(state)}"
+                "revoke" -> {
+                    val target = args.single().toInt()
+                    revoked += target
+                    state = state.copy(grants = state.grants - target, rev = state.rev + 1)
+                    "rev=${state.rev} pending=1"
+                }
+                "mark-applied" -> "rev=${state.rev} pending=0"
+                else -> error(op)
+            } },
+            identityOf = { identity }, uidOfPackage = { uid }, mirror = NoSuperuserMirror,
+        )
+        assertTrue(authority.setAllowed(pkg, false))
+        assertEquals(listOf(uid, otherUid, tombUid), revoked)
+        assertTrue(state.grants.isEmpty())
+    }
+
+    @Test fun committedTombAllowsRevocationReadbackWhileOldStoreGrantRemains() {
+        var state = AuthorizationSnapshot(true, mapOf(uid to identity), rev = 1, uidRev = mapOf(uid to 1))
+        val authority = DaemonBootSuperuserAuthority(
+            execute = { op, _ -> when (op) {
+                "snapshot" -> "wire=${SuperuserWire.encode(state)}"
+                "revoke" -> {
+                    state = state.copy(rev = 2, tombs = listOf(SuperuserTomb(uid, pkg, 2, 1)))
+                    "rev=2 pending=1"
+                }
+                "mark-applied" -> "rev=2 pending=0"
+                else -> error(op)
+            } },
+            identityOf = { identity }, uidOfPackage = { null }, mirror = NoSuperuserMirror,
+        )
+        assertTrue(authority.setAllowed(pkg, false))
+    }
 }

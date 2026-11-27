@@ -232,9 +232,14 @@ class UltraKernelOriginalRecoveryTest {
             assertNotNull(recovered)
             assertEquals(UltraKernelSpec.sha256(fixture.base), UltraKernelSpec.sha256(recovered!!.image))
         }
-        val selected = UltraKernelFlow(temporary.newFolder("current-flow"), assets)
-            .prepare(fixture.base, null)
-        assertNotEquals(fixture.candidate.kernelSha256, selected.candidate!!.kernelSha256)
+        val candidate = buildHistorical(fixture.base, assets, temporary.newFolder("current-builder"))
+        assertNotEquals(fixture.candidate.kernelSha256, candidate.kernelSha256)
+        val flowWorkspace = temporary.newFolder("current-flow")
+        val error = assertThrows(UltraKernelGenerateException::class.java) {
+            UltraKernelFlow(flowWorkspace, assets).prepare(fixture.base)
+        }
+        assertEquals(UltraKernelGenerateCodes.KALLSYMS, error.code)
+        assertTrue(flowWorkspace.listFiles().orEmpty().none { it.name.startsWith("candidate-") })
     }
 
     @Test fun corruptedArchivedSpecDoesNotRestoreAnOldCandidate() {
@@ -243,18 +248,16 @@ class UltraKernelOriginalRecoveryTest {
         assertNull(recover(fixture, assets = upgradedAssets(fixture, corrupt = true)))
     }
 
-    @Test fun sameModeUpgradeRestoresTheReceiptBoundOldPatchBeforeBuilding() {
+    @Test fun explicitHistoricalUpgradeRestoresTheReceiptBoundOldPatchBeforeBuilding() {
         val fixture = fixture()
         val before = UltraKernelSpec.sha256(fixture.candidate.image)
         val upgraded = upgradedAssets(fixture)
-        val flow = UltraKernelFlow(fixture.receipt.parentFile, upgraded)
-        val prepared = flow.prepare(fixture.candidate.image, null as UltraKernelCredential?)
-        assertFalse(prepared.alreadyInstalled)
-        val candidate = requireNotNull(prepared.candidate)
+        val restored = requireNotNull(recover(fixture, assets = upgraded))
+        assertEquals(UltraKernelSpec.sha256(fixture.base), UltraKernelSpec.sha256(restored.image))
+        val candidate = buildHistorical(restored.image, upgraded, temporary.newFolder("historical-upgrade"))
         assertEquals(UltraKernelSpec.sha256(fixture.base), candidate.baseBootSha256)
         assertNotEquals(before, candidate.bootSha256)
         assertEquals(before, UltraKernelSpec.sha256(fixture.candidate.image))
-        assertEquals(candidate.bootSha256, flow.candidateForInstall(fixture.candidate.image, prepared).bootSha256)
     }
 
     @Test fun paddedOldBootUpgradeKeepsTheOldPartitionSnapshotIntact() {
@@ -263,9 +266,11 @@ class UltraKernelOriginalRecoveryTest {
             writeBytes(fixture.candidate.image.readBytes().copyOf(65_536))
         }
         val before = UltraKernelSpec.sha256(installed)
-        val prepared = UltraKernelFlow(fixture.receipt.parentFile, upgradedAssets(fixture))
-            .prepare(installed, null as UltraKernelCredential?)
-        assertEquals(UltraKernelSpec.sha256(fixture.base), requireNotNull(prepared.candidate).baseBootSha256)
+        val assets = upgradedAssets(fixture)
+        val restored = requireNotNull(recover(fixture, currentBoot = installed, assets = assets))
+        assertEquals(UltraKernelSpec.sha256(fixture.base), UltraKernelSpec.sha256(restored.image))
+        val candidate = buildHistorical(restored.image, assets, temporary.newFolder("padded-historical-upgrade"))
+        assertEquals(UltraKernelSpec.sha256(fixture.base), candidate.baseBootSha256)
         assertEquals(before, UltraKernelSpec.sha256(installed))
     }
 
@@ -365,10 +370,10 @@ class UltraKernelOriginalRecoveryTest {
             temporary.newFolder("pre-range-tampered")))
     }
 
-    @Test fun old140ByteExecutorRestoresExactlyBeforeInstallingThe188ByteExecutor() =
+    @Test fun old140ByteExecutorRestoresExactlyBeforeExplicitHistoricalRebuild() =
         oldExecutorRestoresExactlyBeforeInstallingTailStub("pre-range-tlbi", 140)
 
-    @Test fun intermediate180ByteExecutorRestoresExactlyBeforeInstallingThe188ByteExecutor() =
+    @Test fun intermediate180ByteExecutorRestoresExactlyBeforeExplicitHistoricalRebuild() =
         oldExecutorRestoresExactlyBeforeInstallingTailStub("pre-tail-stub-180", 180)
 
     private fun oldExecutorRestoresExactlyBeforeInstallingTailStub(archive: String, oldLength: Int) {
@@ -388,10 +393,10 @@ class UltraKernelOriginalRecoveryTest {
             files["ultra-kernels/recovery/$archive/$directory"] = assets.read("ultra-kernels/recovery/$directory")
         }
         val before = UltraKernelSpec.sha256(fixture.candidate.image)
-        val prepared = UltraKernelFlow(requireNotNull(fixture.receipt.parentFile), UltraKernelMemoryAssets(files))
-            .prepare(fixture.candidate.image, null as UltraKernelCredential?)
-        assertFalse(prepared.alreadyInstalled)
-        val candidate = requireNotNull(prepared.candidate)
+        val archived = UltraKernelMemoryAssets(files)
+        val restored = requireNotNull(recover(fixture, assets = archived))
+        assertEquals(UltraKernelSpec.sha256(fixture.base), UltraKernelSpec.sha256(restored.image))
+        val candidate = buildHistorical(restored.image, archived, temporary.newFolder("executor-historical-upgrade"))
         assertEquals(UltraKernelSpec.sha256(fixture.base), candidate.baseBootSha256)
         assertArrayEquals(next, UltraKernelPlan.readKernel(candidate.image).copyOfRange(1024, 1024 + next.size))
         assertEquals(before, UltraKernelSpec.sha256(fixture.candidate.image))
@@ -401,9 +406,10 @@ class UltraKernelOriginalRecoveryTest {
         val fixture = fixture()
         fixture.candidate.image.writeBytes(fixture.candidate.image.readBytes().apply { this[4096 + 2048] = 1 })
         val before = UltraKernelSpec.sha256(fixture.candidate.image)
+        assertNull(recover(fixture, assets = upgradedAssets(fixture)))
         assertThrows(IllegalStateException::class.java) {
             UltraKernelFlow(fixture.receipt.parentFile, upgradedAssets(fixture))
-                .prepare(fixture.candidate.image, null as UltraKernelCredential?)
+                .prepare(fixture.candidate.image)
         }
         assertEquals(before, UltraKernelSpec.sha256(fixture.candidate.image))
     }
@@ -559,6 +565,12 @@ class UltraKernelOriginalRecoveryTest {
                 if (corrupt) nextSpec else originalSpec
         }
         return UltraKernelMemoryAssets(files)
+    }
+
+    private fun buildHistorical(base: File, assets: UltraKernelAssetSource, output: File): UltraKernelBuilder.Candidate {
+        val asset = UltraKernelReleaseCatalog.load(assets).assetsFor(release).single()
+        val spec = UltraKernelSpec.parse(assets.read(asset.specAsset).toString(Charsets.UTF_8))
+        return UltraKernelBuilder(output).generate(base, asset, spec)
     }
 
     private fun recover(fixture: Fixture, originals: List<File> = emptyList(), currentBoot: File = fixture.candidate.image,

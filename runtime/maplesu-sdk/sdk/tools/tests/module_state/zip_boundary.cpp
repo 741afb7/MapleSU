@@ -7,6 +7,7 @@ static constexpr char payload[] = "fixture:fixture_mod";
 extern "C" {
 zip_t* zip_open(const char*, int, int*) { return new zip; }
 int zip_close(zip_t* archive) { delete archive; return 0; }
+void zip_discard(zip_t* archive) { delete archive; }
 zip_int64_t zip_get_num_entries(zip_t*, zip_flags_t) { return 1; }
 int zip_stat_index(zip_t*, zip_uint64_t, zip_flags_t, zip_stat_t* stat) {
     memset(stat, 0, sizeof(*stat)); stat->size = sizeof(payload) - 1; return 0;

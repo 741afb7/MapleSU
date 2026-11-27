@@ -22,12 +22,11 @@ static int run_child(bool inherited) {
     maplesu::sdk::fork_pipe_info pipe;
     if (maplesu::sdk::fork_pipe_child_process(pipe)) {
         const auto selected = kernel_module::maplesu_request_set_auth_mode(
-            kernel_module::RequestAuthMode::LegacyKey);
+            kernel_module::RequestAuthMode::ManagerOwner);
         if (selected != KModErr::OK) _exit(2);
         if (inherited && (kernel_module::owner_management.session ||
             kernel_module::owner_management.uncertain ||
             !kernel_module::owner_management.allocations.empty() ||
-            !kernel_module::legacy_address_ranges.empty() ||
             kernel_module::management_reply.completed || kernel_module::owner_channel.ready)) _exit(3);
         dprintf(1, "child TLS destructor registrations=%d inherited=%d\n", child_registrations, inherited);
         _exit(child_registrations ? 1 : 0);
@@ -54,14 +53,12 @@ int main() {
     kernel_module::owner_management.session = 41;
     kernel_module::owner_management.uncertain = true;
     kernel_module::owner_management.allocations.push_back({0x1234, 29, 4096});
-    kernel_module::legacy_address_ranges.push_back({0x1234, 0x2233});
     kernel_module::management_reply.completed = true;
     kernel_module::owner_channel.ready = true;
     if (const int error = run_child(true)) return error;
     if (kernel_module::owner_management.session != 41 ||
         !kernel_module::owner_management.uncertain ||
         kernel_module::owner_management.allocations.size() != 1 ||
-        kernel_module::legacy_address_ranges.size() != 1 ||
         !kernel_module::management_reply.completed || !kernel_module::owner_channel.ready) return 7;
     puts("30 cold-thread forks + inherited session reset passed");
 }

@@ -321,11 +321,24 @@ const char* get_module_eng_name() {
 // the kit's original load -> publish -> persist order, minus the cross process
 // locking that the transaction layer adds around them.
 extern "C" KModErr maplesu_sdk_get_su_allowlist(void (*callback)(const maplesu::sdk::su_auth_item*)) {
+    if (!callback) return KModErr::ERR_MODULE_PARAM;
     if (kernel_module::maplesu_request_owner_mode()) {
-        errno = EOPNOTSUPP;
-        return KModErr::ERR_MODULE_TEST_CHANNEL;
+        maplesu_uid_metadata_v3 metadata{};
+        std::vector<maplesu_uid_record_v3> rows;
+        const auto read = maplesu::su_auth::detail::owner_runtime_rows(0, metadata, rows);
+        if (is_failed(read)) return read;
+        for (const auto& row : rows)
+            if (!maplesu::su_auth::detail::owner_runtime_package_valid(row.package))
+                return KModErr::ERR_MODULE_TEST_CHANNEL;
+        for (const auto& row : rows) {
+            if (!row.decision || row.full_uid >= 100000) continue;
+            maplesu::sdk::su_auth_item item{};
+            std::memcpy(item.app_package_name, row.package, sizeof(item.app_package_name));
+            callback(&item);
+        }
+        return KModErr::OK;
     }
-    const auto error = maplesu::sdk::get_root(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    const auto error = maplesu::sdk::get_root();
     if (is_failed(error)) {
         return error;
     }
@@ -349,7 +362,7 @@ extern "C" KModErr maplesu_sdk_get_su_allowlist(void (*callback)(const maplesu::
 }
 
 KModErr maplesu::su_auth::detail::sdk_add(const char* package, ResultV1& result) {
-    KModErr error = maplesu::sdk::get_root(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    KModErr error = maplesu::sdk::get_root();
     if (is_failed(error)) {
         return fail(result, error, Phase::ActionRoot);
     }
@@ -378,7 +391,7 @@ KModErr maplesu::su_auth::detail::sdk_add(const char* package, ResultV1& result)
 }
 
 KModErr maplesu::su_auth::detail::sdk_remove(const char* package, ResultV1& result) {
-    KModErr error = maplesu::sdk::get_root(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    KModErr error = maplesu::sdk::get_root();
     if (is_failed(error)) {
         return fail(result, error, Phase::ActionRoot);
     }
@@ -401,7 +414,7 @@ KModErr maplesu::su_auth::detail::sdk_remove(const char* package, ResultV1& resu
 }
 
 KModErr maplesu::su_auth::detail::sdk_clear(ResultV1& result) {
-    KModErr error = maplesu::sdk::get_root(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    KModErr error = maplesu::sdk::get_root();
     if (is_failed(error)) {
         return fail(result, error, Phase::ActionRoot);
     }
@@ -430,7 +443,7 @@ KModErr maplesu::su_auth::detail::sdk_set_uid_profile(
         }
         return owner_runtime_sync(uid, package, allow, result);
     }
-    auto error = maplesu::sdk::get_root(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    auto error = maplesu::sdk::get_root();
     if (is_failed(error)) return fail(result, error, Phase::ActionRoot);
     if (!default_modules::module_su_redirect::g_suAllowList.load())
         return fail(result, KModErr::ERR_MODULE_OPEN_FILE, Phase::ActionLoad);
@@ -457,7 +470,7 @@ KModErr maplesu::su_auth::detail::sdk_get_uid_profiles(void (*callback)(const Ui
     if (kernel_module::maplesu_request_owner_mode()) {
         return owner_runtime_profiles(callback);
     }
-    const auto error = maplesu::sdk::get_root(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    const auto error = maplesu::sdk::get_root();
     if (is_failed(error)) return error;
     if (!default_modules::module_su_redirect::g_suAllowList.load())
         return KModErr::ERR_MODULE_OPEN_FILE;
@@ -465,32 +478,9 @@ KModErr maplesu::su_auth::detail::sdk_get_uid_profiles(void (*callback)(const Ui
     const auto collected = collect_uid_profiles(
         default_modules::module_su_redirect::g_suAllowList.get_apps(), profiles);
     if (is_failed(collected)) return collected;
-    std::vector<uint32_t> expected;
-    for (const auto& profile : profiles) if (profile.allow) expected.push_back(profile.uid);
-    std::sort(expected.begin(), expected.end());
-    expected.erase(std::unique(expected.begin(), expected.end()), expected.end());
-    if (expected.size() > 4095) return ERR_SU_DELIVERY_INCOMPLETE;
-    uint64_t control = 0, table = 0;
-    auto observed = kernel_module::read_uint64_disk_storage(
-        default_modules::module_su_redirect::kUidControlStorageKey, control);
-    if (is_failed(observed)) return observed;
-    if (!control) return ERR_SU_DELIVERY_INCOMPLETE;
-    observed = kernel_module::read_kernel_mem(control, &table, sizeof(table));
-    if (is_failed(observed)) return observed;
-    if (!table && !expected.empty()) return ERR_SU_DELIVERY_INCOMPLETE;
-    // The caller holds the shared transaction lock. Compare one word at a
-    // time so an earlier live terminator never permits an out-of-table read.
-    for (size_t index = 0; table && index <= expected.size(); ++index) {
-        uint32_t actual = 0;
-        if (table > UINT64_MAX - index * sizeof(actual)) return ERR_SU_DELIVERY_INCOMPLETE;
-        observed = kernel_module::read_kernel_mem(table + index * sizeof(actual), &actual, sizeof(actual));
-        if (is_failed(observed)) return observed;
-        const uint32_t wanted = index < expected.size() ? expected[index] : 0;
-        if (actual != wanted) return ERR_SU_DELIVERY_INCOMPLETE;
-    }
-    observed = maplesu_verify_su_copies_from_control(
-        __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(), control);
-    if (is_failed(observed)) return observed;
+    // Reading the stored decisions does not claim that native SU delivery is
+    // ready. The collector retains installation-bound grants and explicit denies;
+    // mutation transactions independently prepare and verify their delivery.
     for (const auto& profile : profiles) callback(&profile);
     return KModErr::OK;
 }
@@ -501,7 +491,7 @@ KModErr maplesu::su_auth::detail::sdk_refresh_uid_profiles(ResultV1& result) {
         // including newly saved full UIDs and retained revocation tombstones.
         return owner_runtime_sync(0, nullptr, false, result);
     }
-    const auto error = maplesu::sdk::get_root(__get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW());
+    const auto error = maplesu::sdk::get_root();
     if (is_failed(error)) return fail(result, error, Phase::ActionRoot);
     if (!default_modules::module_su_redirect::g_suAllowList.load())
         return fail(result, KModErr::ERR_MODULE_OPEN_FILE, Phase::ActionRefreshList);

@@ -2,7 +2,6 @@ package dev.maplesu.manager.ultra
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import dev.maplesu.manager.modules.UltraRootKeyStore
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
 import dev.maplesu.manager.runtime.ultra.UltraInstalledIdentityProbe
 import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
@@ -25,12 +24,11 @@ class UltraInstalledIdentityAndroidTest {
         assumeTrue("Supply that artifact's actual installed size", expectedSize != null && expectedSize >= 4096L)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         assertEquals(UltraEnvironmentProbe.State.Running, UltraEnvironmentProbe.refresh(context))
-        val client = UltraRuntimeClient { UltraRootKeyStore.read(context) }
-        val path = requireNotNull(UltraInstalledIdentityProbe.installedHelperPath(UltraRootKeyStore.read(context)))
+        val client = UltraRuntimeClient()
         UltraInstalledIdentityProbe.invalidate()
         val observed = UltraInstalledIdentityProbe.read(context, client, force = true)
         assertEquals(Source.Readback, observed.source)
-        assertEquals(path, observed.helperPath)
+        assertEquals(requireNotNull(UltraInstalledIdentityProbe.installedHelperPath()), observed.helperPath)
         assertEquals(expectedSha, observed.helperSha256)
         assertEquals(expectedSize, observed.helperSize)
     }

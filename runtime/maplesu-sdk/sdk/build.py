@@ -19,14 +19,14 @@ Stages (in pipeline order)
 ``compose``     multi-TU members fused (ld.lld -r / llvm-link)       exit 4
 ``pack``        llvm-ar qc member-by-member + llvm-ar s            exit 5
 ``assets``      helper + embedded payload assets -> build/out/     exit 8
-``gate``        per-member T/U/layout diff vs the freeze            exit 7
+``gate``        keyless public ABI + archive/ordinal/layout checks  exit 7
 ``report``      build/report/build-report.json + console summary
 
 Legacy stages kept for compatibility: ``--check``, ``--compile``,
 ``--partial-link`` (alias of compose), ``--link-sample`` (exit 5) and
 ``--verify`` (substitution contract for the four sample members, exit 6).
-``--all`` runs the eight stages above, then link-sample/verify when the four
-sample members are declared.
+Current ``--all --source-selection <receipt>`` links the complete archive and
+all public APIs/macros; historical reference mode retains link-sample/verify.
 
 Inputs, and what is *never* read
 --------------------------------
@@ -74,6 +74,7 @@ if str(TOOLS_DIR) not in sys.path:
 import sdk_common as S                     # noqa: E402
 import gen_manifest                        # noqa: E402
 import member_gate                         # noqa: E402
+import keyless_gate                        # noqa: E402
 import build_helper as HB                   # noqa: E402
 import source_backend as SB                 # noqa: E402
 import gen_payload_headers as PH            # noqa: E402
@@ -267,6 +268,23 @@ class ManifestEntry:
 
 def resolve_source(raw: str) -> Path | None:
     return gen_manifest.resolve_source(raw)
+
+
+def validate_keyless_sources(entries: list[ManifestEntry]) -> dict[str, Any]:
+    """Keep active API members on their first-party source, not frozen ABI objects."""
+    critical = {23, 35, 39, 41, 42, *range(45, 64), 70, 81, 255, 256}
+    selected = []
+    for entry in entries:
+        if entry.idx not in critical:
+            continue
+        if entry.status == S.STATUS_VENDOR_COPY or not entry.sources or any(
+                source.suffix not in (".c", ".cpp", ".cc", ".S", ".s") or
+                not (source.is_relative_to(SDK_DIR / "src") or
+                     source.is_relative_to(REPO_ROOT / "runtime/ultra"))
+                for source in entry.sources):
+            raise StageError(f"m{entry.idx:03d} requires current first-party keyless sources", EXIT_MANIFEST)
+        selected.append({"idx": entry.idx, "sources": [rel(source) for source in entry.sources]})
+    return {"rootKeyRequired": False, "members": selected}
 
 
 def load_manifest(path: Path, allow_partial: bool) -> tuple[list[ManifestEntry], dict[str, Any]]:
@@ -1824,6 +1842,72 @@ def stage_source_validation_archive(tc: S.Toolchain, report: dict[str, Any]) -> 
 # --------------------------------------------------------------------------- #
 
 
+def stage_keyless_public_abi(tc: S.Toolchain, report: dict[str, Any]) -> dict[str, Any]:
+    """Compile and link every public SDK API and a real module macro consumer."""
+    source = TOOLS_DIR / "keyless_public_abi.cpp"
+    directory = LINK_DIR / "keyless-public-abi"
+    directory.mkdir(parents=True, exist_ok=True)
+    obj, output = directory / "public-abi.o", directory / "public-abi.so"
+    # Match the production WebUI module consumers and CivetWeb's no-RTTI ABI.
+    compile_argv = [str(tc.tool("clang++")), "--target=aarch64-linux-android21", "-std=c++20",
+                    "-fPIC", "-g0", "-Oz", "-fexceptions", "-fno-rtti", *include_flags(),
+                    *P.dependency_flags(source, obj), "-c", str(source), "-o", str(obj)]
+    tools_before = P.snapshot_inputs([(tc.tool(name), "validation_tool") for name in
+        ("clang++", "ld.lld", "llvm-nm", "llvm-cxxfilt")], S.REPO_ROOT)
+    precompile = P.precompile_snapshot(compile_argv, source, obj, Path.cwd(), S.REPO_ROOT)
+    run_checked("gate", "compile keyless public API and module macros", compile_argv,
+                "keyless-public-abi-compile.log", EXIT_GATE)
+    dependencies = P.dependency_receipt(source, obj, Path.cwd(), S.REPO_ROOT, precompile=precompile)
+    unit = dict(source=rel(source), build_source=rel(source), object=rel(obj),
+                bytes=obj.stat().st_size, sha256=S.sha256_file(obj), stage="public-abi", **dependencies)
+    archive_before = P.file_record(ARCHIVE_OUT, S.REPO_ROOT)
+    link_argv = [str(tc.tool("clang++")), "--target=aarch64-linux-android21", "-shared",
+                 "-Wl,--no-undefined", "-Wl,--no-gc-sections", "-Wl,-z,relro,-z,now",
+                 str(obj), str(ARCHIVE_OUT), "-lc++_shared", "-llog", "-lz", "-ldl", "-lm",
+                 "-o", str(output)]
+    run_checked("gate", "link keyless public API and module macros", link_argv,
+                "keyless-public-abi-link.log", EXIT_GATE)
+    archive_symbols = S.nm_symbols(tc, ARCHIVE_OUT)
+    probe_symbols = S.nm_symbols(tc, obj)
+    linked_symbols = S.nm_symbols(tc, output, ("--dynamic", "--defined-only"))
+    raw = sorted(archive_symbols.defined | archive_symbols.undefined |
+                 archive_symbols.weak_defined | archive_symbols.weak_undefined)
+    required = sorted(probe_symbols.undefined | probe_symbols.weak_undefined)
+    all_symbols = list(dict.fromkeys([*raw, *required]))
+    tool = tc.tool("llvm-cxxfilt")
+    tool_before = P.file_record(tool, S.REPO_ROOT)
+    completed = subprocess.run([str(tool)], input="\n".join(all_symbols) + "\n",
+                               capture_output=True, text=True, encoding="utf-8")
+    names = completed.stdout.splitlines()
+    if completed.returncode or len(names) != len(all_symbols):
+        raise StageError("keyless ABI signature capture failed", EXIT_GATE)
+    signatures = dict(zip(all_symbols, names))
+    problems = keyless_gate.retired_api_problems(raw, [signatures[name] for name in raw],
+                                                [signatures[name] for name in required])
+    problems += keyless_gate.legacy_credential_problems(required)
+    header = INCLUDE_DIR / "maplesu/compat/native_module_abi.h"
+    module_symbols = keyless_gate.module_entry_symbols(header.read_text(encoding="utf-8-sig"))
+    defined = linked_symbols.defined | linked_symbols.weak_defined
+    problems += ["module macro export missing: " + name for name in module_symbols if name not in defined]
+    problems += ["retired module export/reference: " + name.removesuffix("_keyless_v1")
+                 for name in module_symbols if name.endswith("_keyless_v1") and
+                 name.removesuffix("_keyless_v1") in raw]
+    if P.file_record(ARCHIVE_OUT, S.REPO_ROOT) != archive_before or any(
+            P.file_record(S.REPO_ROOT / item["path"], S.REPO_ROOT) !=
+            {key: item[key] for key in ("path", "size", "sha256")} for item in tools_before):
+        problems.append("keyless ABI archive/tool changed during validation")
+    result = dict(schema="maplesu-sdk-keyless-public-abi/1", status="FAIL" if problems else "PASS",
+                  source=P.file_record(source, S.REPO_ROOT), archive=archive_before,
+                  object=P.file_record(obj, S.REPO_ROOT), output=P.file_record(output, S.REPO_ROOT),
+                  compile_argv=compile_argv, link_argv=link_argv, dependencies=dependencies,
+                  unit=unit, tools_before=tools_before, signature_tool=tool_before, required_symbols={name: signatures[name] for name in required},
+                  module_symbols=module_symbols,
+                  legacy_credential_symbols=sorted(set(raw).intersection(keyless_gate.LEGACY_CREDENTIAL_SYMBOLS)),
+                  problems=problems, runtime_acceptance=False)
+    S.write_json(REPORT_DIR / "keyless-public-abi.json", result)
+    return result
+
+
 def stage_gate(args: argparse.Namespace, report: dict[str, Any], tc: S.Toolchain) -> None:
     if not ARCHIVE_OUT.is_file():
         raise StageError(f"{rel(ARCHIVE_OUT)} not built; run --pack first", EXIT_GATE)
@@ -1839,6 +1923,10 @@ def stage_gate(args: argparse.Namespace, report: dict[str, Any], tc: S.Toolchain
         quiet=False,
         ndk=str(tc.ndk),
     )
+    if SOURCE_PAYLOADS:
+        if not report.get("source_validation"):
+            stage_source_validation_archive(tc, report)
+        report["source_validation"]["raw_gate"] = P.file_record(REPORT_DIR / "member-gate.json", S.REPO_ROOT)
     if getattr(args, "capture_source_validation", False):
         validation = report["source_validation"]
         symbols = sorted({symbol for row in gate["members"]
@@ -1858,6 +1946,23 @@ def stage_gate(args: argparse.Namespace, report: dict[str, Any], tc: S.Toolchain
         validation["signatures"] = P.file_record(demangled, S.REPO_ROOT)
         validation["signature_tool"] = signature_tool_before
         validation["raw_gate"] = P.file_record(REPORT_DIR / "member-gate.json", S.REPO_ROOT)
+    if SOURCE_PAYLOADS:
+        if not report.get("source_validation"):
+            stage_source_validation_archive(tc, report)
+        problems = keyless_gate.structural_problems(gate)
+        public_abi = stage_keyless_public_abi(tc, report)
+        problems += public_abi["problems"]
+        report["keyless_public_abi"] = public_abi
+        report["gate"] = dict(schema="maplesu-sdk-keyless-delivery-gate/1",
+            status="FAIL" if problems else "PASS", exit_code=EXIT_GATE if problems else 0, problems=problems,
+            historical_reference=dict(status=gate["status"], summary=gate.get("summary"),
+                                      report=rel(REPORT_DIR / "member-gate.json")),
+            reference_equivalence=False, complete_archive_link=report["source_validation"]["link"],
+            public_abi=rel(REPORT_DIR / "keyless-public-abi.json"), runtime_acceptance=False)
+        if problems:
+            raise StageError("keyless delivery gate failed: " + "; ".join(problems[:12]), EXIT_GATE)
+        log("gate", "current keyless ABI and complete archive link PASS; historical T/U migration recorded")
+        return
     gate.pop("members", None)          # the JSON on disk keeps the per-member rows
     report["gate"] = gate
     if gate.get("status") != "PASS":
@@ -2047,6 +2152,13 @@ def collect_build_provenance(args: argparse.Namespace, report: dict[str, Any],
              for row in stage_rows[stage]
              for output in row.get("outputs") or []]
     units += (report.get("link_sample") or {}).get("outputs") or []
+    public_abi = report.get("keyless_public_abi")
+    if public_abi:
+        units.append(public_abi["unit"])
+        inputs += [(TOOLS_DIR / "keyless_gate.py", "build_script"),
+                   (TOOLS_DIR / "keyless_public_abi.cpp", "abi_contract"),
+                   (REPORT_DIR / "keyless-public-abi.json", "validation_artifact"),
+                   (S.REPO_ROOT / public_abi["output"]["path"], "validation_artifact")]
     selection = report.get("source_selection")
     if selection:
         inputs.append((S.REPO_ROOT / selection["manifest"]["path"], "source_selection"))
@@ -2364,9 +2476,9 @@ def _select_stages(args: argparse.Namespace) -> dict[str, bool]:
     }
     if args.all or not any(selected.values()):
         selected = {key: True for key in selected}
-        # Legacy link/verify only make sense when the four sample members exist.
-        selected["link_sample"] = selected["link_sample"]
-        selected["verify"] = selected["verify"]
+        # Current source archives use the complete archive and public API links.
+        if args.source_payloads:
+            selected["link_sample"] = selected["verify"] = False
     if args.source_payloads and selected['payloads']:
         for stage in ('manifest', 'compile', 'compose', 'pack'):
             selected[stage] = True
@@ -2376,6 +2488,8 @@ def _select_stages(args: argparse.Namespace) -> dict[str, bool]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(list(argv if argv is not None else sys.argv[1:]))
     selected = _select_stages(args)
+    if args.source_payloads and args.all and not args.source_selection:
+        raise SystemExit("complete source builds require --source-selection")
     if args.capture_source_validation and (not args.all or not args.source_payloads or
             args.allow_partial or args.gate_scope == "partial" or not args.source_selection):
         raise SystemExit("--capture-source-validation requires complete --all source payloads and source selection")
@@ -2446,7 +2560,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             build_inputs += [(Path(PH.__file__), "build_script"), (ASSETS_SPEC_PATH, "manifest")]
         if selected["gate"]:
             gate_allow = Path(args.gate_allow) if args.gate_allow else GATE_ALLOW_PATH
-            build_inputs += [(Path(member_gate.__file__), "build_script")]
+            build_inputs += [(Path(member_gate.__file__), "build_script"),
+                             (Path(keyless_gate.__file__), "build_script"),
+                             (TOOLS_DIR / "keyless_public_abi.cpp", "abi_contract")]
             build_inputs += [(path, "build_rule") for path in (gate_allow, member_gate.DEFAULT_BASELINE)
                              if path.is_file()]
         report["input_snapshots"] = P.snapshot_inputs(build_inputs, S.REPO_ROOT)
@@ -2468,6 +2584,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             report["input_snapshots"].extend(P.snapshot_inputs(
                 [(Path(args.manifest), "manifest")], S.REPO_ROOT))
             entries, meta = load_manifest(Path(args.manifest), args.allow_partial)
+            if SOURCE_PAYLOADS:
+                report["keyless_selection"] = validate_keyless_sources(entries)
             report.setdefault("manifest", meta)
             log("manifest", f"{len(entries)} member(s) declared: "
                             f"{meta['status_counts']} (missing {len(meta['missing_idx'])})")
@@ -2506,7 +2624,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         {row[4] for row in PH.TABLE}, BUILD_DIR / 'final-archive-stability')
                 except (OSError, ValueError, KeyError) as exc:
                     raise StageError(f'final archive pairing failed: {exc}', EXIT_ARCHIVE) from exc
-        if getattr(args, "capture_source_validation", False):
+        if SOURCE_PAYLOADS and selected["pack"]:
             stage_source_validation_archive(tc, report)
         if selected["assets"]:
             snapshot = S.find_freeze(args.archive)

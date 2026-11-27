@@ -1,7 +1,5 @@
-#include "rootkit_command.h"
 #include "su_protocol.h"
 #include <algorithm>
-#include <cctype>
 #include <climits>
 #include <csignal>
 #include <cstdio>
@@ -160,41 +158,6 @@ struct Bootstrap {
         return true;
     }
 };
-// The Manager appends a fixed trailer to the image it delivers to an authorised
-// application: an eight byte marker followed by that application's credential. The
-// trailer is only ever appended to a copy inside the application's own library
-// directory, so only that application and root can read it. A published image has no
-// trailer and is unaffected.
-constexpr char DELIVERED_MAGIC[8] = {'M', 'P', 'L', 'S', 'U', 'K', 'E', 'Y'};
-constexpr off_t DELIVERED_TRAILER = 56;
-
-bool read_delivered_credential(std::array<char, 49>& key) {
-    const int descriptor = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
-    if (descriptor < 0) return false;
-    struct stat info {};
-    bool accepted = false;
-    if (fstat(descriptor, &info) == 0 && info.st_size > DELIVERED_TRAILER &&
-        lseek(descriptor, info.st_size - DELIVERED_TRAILER, SEEK_SET) == info.st_size - DELIVERED_TRAILER) {
-        char magic[8] = {};
-        char bytes[48] = {};
-        if (maplesu::read_all(descriptor, magic, sizeof(magic)) &&
-            maplesu::read_all(descriptor, bytes, sizeof(bytes)) &&
-            memcmp(magic, DELIVERED_MAGIC, sizeof(magic)) == 0) {
-            bool valid = true;
-            for (const char value : bytes)
-                if (!isalnum(static_cast<unsigned char>(value))) valid = false;
-            if (valid) {
-                memcpy(key.data(), bytes, sizeof(bytes));
-                accepted = true;
-            }
-        }
-        volatile char* wipe = bytes;
-        for (size_t i = 0; i < sizeof(bytes); ++i) wipe[i] = 0;
-    }
-    close(descriptor);
-    return accepted;
-}
-
 uint32_t frame_size(const maplesu::SuRequest& request) {
     size_t size = 48 + request.executable.size() + request.directory.size();
     for (const auto& value : request.arguments) size += 4 + value.size();
@@ -314,28 +277,8 @@ int relay(int socket, int master, const maplesu::SuRequest& request) {
     return result;
 }
 /**
- * Directory of a shared deployment, or empty for a per-application image.
- *
- * <p>A shared deployment is recognised by the authorization list the Manager writes next
- * to the client. Per-application images live in the application's own library directory
- * and carry no such list, so they keep the old behaviour of admitting their owner only.
- */
-/**
- * Path of the authorization list for a shared deployment, or empty for a per-application
- * image.
- *
- * <p>The executable's own path is read from `/proc/self/exe`, never from `argv[0]`: a
- * caller that resolves `su` through PATH passes bare `su` as argv[0], and keying the check
- * on that would have skipped it entirely - any application could then run the image and be
- * admitted by the credential it carries.
- */
-/**
- * Shared client that carries no credential: forwards to the caller's own delivered image.
- *
- * <p>The shared file is world-executable and world-unreadable (0711), so it can neither
- * contain a credential nor read one back out of itself. The caller's application directory
- * does hold a copy it can read (0700, owned by that application), and that copy admits
- * itself. Forwarding keeps the credential inside per-application directories only.
+ * Shared client: forwards to the caller's own delivered image. Both images use
+ * the existing Binder admission path under the caller's actual full UID.
  *
  * <p>Both facts are read from the process itself, so nothing is guessed: the executable
  * lives next to an `authorized` list, and the application's library directory is a mapped
@@ -383,7 +326,7 @@ std::string shared_authorization_list() {
     return access(candidate.c_str(), R_OK) == 0 ? candidate : "";
 }
 
-/** Looks the calling uid up in the table the Manager publishes next to this client. */
+/** Resolve the Manager's nonsecret u/<fullUID> link for this caller. */
 std::string directory_from_uid_table(int uid) {
     char self[PATH_MAX] = {0};
     const ssize_t length = readlink("/proc/self/exe", self, sizeof(self) - 1);
@@ -625,14 +568,11 @@ bool g_short_command = false;
 }
 int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);
-    // Thin shared client: no credential here. Hand over to the copy the executing
-    // application owns, which admits itself. Refusing is the honest answer when that copy
-    // is missing, because nothing at this path can grant anything.
+    // Hand over to the application's delivered image before normal UID admission.
     if (thin_shared_client()) {
-        // The Manager publishes `uid <space> library-directory` next to the client, so the
-        // lookup needs neither /proc nor a directory listing - both of which are denied to
-        // an ordinary application. The table is the authoritative answer; the other
-        // resolvers are only a fallback for a table that has not been written yet.
+        // The Manager publishes u/<fullUID> as a link to that installation's library
+        // directory. Read the exact caller's link before the existing own-process
+        // fallback; this lookup does not enumerate another user's granted identities.
         std::string directory = directory_from_uid_table(static_cast<int>(getuid()));
         if (directory.empty()) directory = own_library_directory();
         if (directory.empty()) return fail("this application has no delivered client", 76);
@@ -680,7 +620,7 @@ int main(int argc, char** argv) {
                 "  -M, -mm, --mount-master     Use the global mount namespace\n"
                 "  -v, --version               Version name\n"
                 "  -V                          Runtime protocol version\n"
-                "Requires a granted installation and the unlocked MapleSU broker."); return 0;
+                "Requires a granted installation."); return 0;
         }
         if (option == "-v" || option == "--version") { puts("1:MapleSU"); return 0; }
         if (option == "-V") { puts("1"); return 0; }
@@ -773,21 +713,6 @@ int main(int argc, char** argv) {
             if (!caller_is_authorized(shared, static_cast<int>(getuid()))) {
                 return fail("this application is not authorized for su", 78);
             }
-        }
-    }
-    // Delivered client: the Manager appends this application's own credential to the
-    // image it places in that application's library directory. Such an image admits
-    // itself and executes directly - no Binder helper, no directory owner, no root
-    // service and no Manager UI participate, which is the non-resident shape the
-    // requirements ask for. A published image without the trailer keeps the previous
-    // cooperative path, so both can coexist during the migration.
-    {
-        std::array<char, 49> delivered{};
-        if (read_delivered_credential(delivered)) {
-            const KRootErr status = kernel_root::get_root(delivered.data());
-            volatile char* wipe = delivered.data();
-            for (size_t i = 0; i < delivered.size(); ++i) wipe[i] = 0;
-            if (!is_ok(status)) return fail("delivered credential rejected", 77);
         }
     }
     // Already-root module scripts keep conventional su semantics without consulting an app grant.

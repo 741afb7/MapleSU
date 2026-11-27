@@ -1,6 +1,6 @@
 # su payload program
 
-Source tree for the `su` program the SDK installs as `<root key dir>/su`.
+Source tree for the `su` program the SDK installs as `<deployment dir>/u-00000000/su`.
 `sdk/build.py` compiles this tree into `build/out/assets/su.bin`, and the
 `maplesu_unsafe_su_install.o` member embeds those bytes as `maplesu::sdk::su_data`.
 
@@ -10,12 +10,10 @@ Source tree for the `su` program the SDK installs as `<root key dir>/su`.
 | --- | --- |
 | `.research/MapleSU/Lite_version/src/testRoot/kernel_root_kit/src/jni/su/su.cpp` | the whole CLI: option table, usage text, `-cn`/`-mm` legacy rewrites, `-c` command folding, login/keepenv/mount-master flags, environment and exec shape |
 | `.research/MapleSU/Lite_version/src/testRoot/kernel_root_kit/src/jni/su/su.h` | request structure, default shell, version identity (`ROOT_VER_CODE` = 1, `ROOT_VERSION` = "1.0") |
-| `.research/MapleSU/Lite_version/src/testRoot/kernel_root_kit/src/jni/su/su_inline.h` | the 4096-byte installer feature token (128-character root-key placeholder + NUL padding) |
-| `runtime/upstream/src/jni/rootkit_command.cpp` (`kernel_root::get_root`) | the root-key handshake: `execve(root_key_without_last_char)` makes the kernel module grant uid 0; the result is verified from the process identity |
 
-The vendor `su` additionally links the kernel-module kit, so it also carries the
-kit's userland helpers.  This program implements the su duty itself and uses only
-the kernel-level handshake the kit wraps, which keeps the program source-only.
+The native execution gate validates the installed application, its full UID and
+authorization, then applies its Profile and passes a one-shot session descriptor.
+The program validates and consumes that receipt; no shared image credential is used.
 
 ## Contract
 
@@ -39,15 +37,14 @@ Options (identical to the reference usage text):
 
 Exit statuses: `0` after help/version and after a successful exec attempt; `2`
 for a usage error (getopt diagnostic, then the help text on stderr); the shell's
-own status otherwise.  A failed root handshake does not abort the program: the
-shell still runs, in the caller's identity, which is the reference client's
-shape (the kernel enforces the grant).
+own status otherwise. A failed session scan or invalid receipt exits 1 before a
+shell starts. With no receipt only an already-root caller may continue.
 
 Privileged operations the installer expects:
 
-1. **Root handshake** - the module root key written into the feature token is
-   presented with the final character removed as an exec path; the kernel module
-   turns the caller into uid 0.  The program verifies `getuid() == 0` afterwards.
+1. **Profile receipt** - validate the inherited kernel session descriptor, consume
+   it exactly once and verify all real/effective/saved UID/GID values. A failed
+   receipt is terminal; no further grant is attempted.
 2. **Target identity** - a user name resolves through `getpwnam`, an all-digit
    argument is the uid; for a non-root target the program restores effective uid
    0 and applies `setresgid`/`setresuid` so saved ids are replaced too.
@@ -60,5 +57,5 @@ Privileged operations the installer expects:
 
 `sdk/build.py --payloads` runs `sdk/tools/build_payloads.py --only su`; the recipe
 lives in `program.json` (AArch64 Android PIE, static libc++, `-fno-exceptions
--fno-rtti`, stripped).  The build validates that the 4096-byte feature token occurs
-exactly once, so the install-time root-key rewrite is never a no-op.
+-fno-rtti`, stripped).  The installed bytes are published as built. The program has no feature token or
+install-time secret rewrite.

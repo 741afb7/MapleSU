@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import com.maplesu.core.ui.util.AppearancePreferences
 import com.maplesu.core.ui.util.WallpaperPrefs
 import org.json.JSONObject
@@ -11,7 +12,12 @@ import java.io.File
 
 object ThemeRuntime {
     fun document(context: Context, prefs: android.content.SharedPreferences = AppearancePreferences.prefs(context)): JSONObject = runCatching {
-        JSONObject(prefs.getString("theme_document", "{}") ?: "{}")
+        val config = JSONObject(prefs.getString("theme_document", "{}") ?: "{}")
+        val dark = when (prefs.getInt("color_mode", 0)) {
+            1, 4 -> false; 2, 5, 6 -> true
+            else -> context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        SukisuThemeDocument.select(config, dark)
     }.getOrElse { JSONObject() }
 
     fun generation(context: Context, prefs: android.content.SharedPreferences = AppearancePreferences.prefs(context)): File? = prefs
@@ -25,6 +31,8 @@ object ThemeRuntime {
             val name = document(context, prefs).optString(audioKey)
             if (name.isNotEmpty()) return namedFile(context, name, prefs)
         }
+        document(context, prefs).optJSONObject("sukisu.resources")?.optString(base)?.takeIf { it.isNotBlank() }
+            ?.let { return namedFile(context, it, prefs) }
         // Deterministic names avoid scanning an asset directory during composition.
         val extensions = when (base) {
             "font" -> listOf("ttf","otf")
@@ -44,7 +52,8 @@ object ThemeRuntime {
     fun observe(): JSONObject {
         val context = LocalContext.current
         val rev = WallpaperPrefs.observe()
-        return remember(rev) { document(context) }
+        val mode = LocalConfiguration.current.uiMode
+        return remember(rev, mode) { document(context) }
     }
 }
 

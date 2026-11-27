@@ -37,7 +37,7 @@ fun interface UltraEnvLiteWebDaemon {
 
 /**
  * 经既有根通道写入当前 App 身份，再以 `app_process` 启动 daemon。
- * 身份用于解密已有恢复备份；本路径不重写 rootkey，也不重新准备寄生恢复包。
+ * 受保护身份用于核对安装归属；SDK 按 daemon 当前任务逐次核权。
  * 启动脚本先用配置中的 token 完成 HTTP 探活，再回传同一配置的端口。
  */
 class RootCmdUltraEnvLiteWebDaemon(

@@ -35,6 +35,8 @@ data class LiteFacts(
     val ultraKernelRootVerified: Boolean = false,
     /** Signed Manager identity from this observation, without Root or helper readiness. */
     val managerOwnerBound: Boolean = false,
+    /** Current-scope owned carrier bytes, independent of the current SDK owner. */
+    val installedCarrierVerified: Boolean = false,
 )
 
 /** 一次 root 会话取到的磁盘证据；null 字段 = 该项未能读取（≠ 不存在）。 */

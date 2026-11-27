@@ -217,7 +217,14 @@ fun SettingPagerMiuix(
                 ultraPanel?.let { panel ->
                     item(key = "ultra-env") {
                         Box(Modifier.animateItem(fadeInSpec = tween(120), placementSpec = tween(160), fadeOutSpec = null)) {
-                            UltraEnvironmentSectionMiuix(panel)
+                            UltraEnvironmentSectionMiuix(panel, uiState.installedKernelUpdateRequired)
+                        }
+                    }
+                }
+                if (uiState.installedKernelUpdateRequired && ultraPanel == null) {
+                    item(key = "ultra-kernel-update") {
+                        SettingsCardMiuix(Modifier.animateItem(fadeInSpec = tween(120), placementSpec = tween(160), fadeOutSpec = null)) {
+                            InstalledUltraUpgradeRowMiuix()
                         }
                     }
                 }

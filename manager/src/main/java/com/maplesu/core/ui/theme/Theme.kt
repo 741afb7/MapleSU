@@ -72,7 +72,8 @@ fun ColorSpec.SpecVersion.effectiveFor(style: PaletteStyle): ColorSpec.SpecVersi
     }
 
 object ThemeController {
-    fun getAppSettings(repo: SettingsRepository = SettingsRepositoryImpl()): AppSettings {
+    fun getAppSettings(repo: SettingsRepository = SettingsRepositoryImpl(),
+        theme: org.json.JSONObject = com.maplesu.core.theme.ThemeRuntime.document(com.maplesu.core.ksuApp)): AppSettings {
         // ⚠️ v0.13.157:隐身时**不再套默认主题**。
         //    原来这里有一段 `if (StealthLook.isPlain()) return 默认配色` —— 已撤:
         //    主题配色(含壁纸主色)不是 root 特征,没 root 的用户也有自己选的配色。
@@ -80,7 +81,6 @@ object ThemeController {
         val uiMode = repo.uiMode
         var colorModeValue = repo.themeMode
 
-        val theme = com.maplesu.core.theme.ThemeRuntime.document(com.maplesu.core.ksuApp)
         if (uiMode == "miuix" && !theme.has("colorGenerationMode")) {
             val miuixMonet = repo.miuixMonet
             val colorMode = ColorMode.fromValue(colorModeValue)
@@ -97,14 +97,15 @@ object ThemeController {
 
         // 「用壁纸主色」:开启且有壁纸时,用从壁纸里提取出来的主色当种子色
         val wallpaperColor = if (repo.wallpaperSeed && theme.optBoolean("isBackgroundEnabled",true)) repo.wallpaperSeedColor else 0
-        val keyColor = repo.keyColor
-        val paletteStyleStr = repo.colorStyle
+        val suki = theme.has("sukisu.original")
+        val keyColor = if (suki) theme.optInt("finasu_keyColor", repo.keyColor) else repo.keyColor
+        val paletteStyleStr = if (suki) theme.optString("colorStyle", "TONAL_SPOT").lowercase().split('_').joinToString("") { it.replaceFirstChar(Char::uppercase) } else repo.colorStyle
         val paletteStyle = try {
             PaletteStyle.valueOf(paletteStyleStr)
         } catch (_: Exception) {
             PaletteStyle.TonalSpot
         }
-        val colorSpecStr = repo.colorSpec
+        val colorSpecStr = if (suki) { if (theme.optString("colorStandard") == "MD3_2021") "SPEC_2021" else "SPEC_2025" } else repo.colorSpec
         val colorSpec = try {
             ColorSpec.SpecVersion.valueOf(colorSpecStr)
         } catch (_: Exception) {
@@ -125,17 +126,19 @@ fun KernelSUTheme(
     uiMode: UiMode = LocalUiMode.current,
     content: @Composable () -> Unit
 ) {
+    val imported = com.maplesu.core.theme.ThemeRuntime.observe()
+    val effectiveSettings = if (imported.has("sukisu.original")) ThemeController.getAppSettings(theme = imported) else appSettings
     val skinContent = rememberSkinContent(content)
     val wallpaperFrame = com.maplesu.core.theme.rememberThemeWallpaperFrame()
     androidx.compose.runtime.CompositionLocalProvider(com.maplesu.core.theme.LocalThemeWallpaperFrame provides wallpaperFrame) {
         when (uiMode) {
             UiMode.Miuix -> MiuixKernelSUTheme(
-                appSettings = appSettings,
+                appSettings = effectiveSettings,
                 content = skinContent
             )
 
             UiMode.Material -> MaterialKernelSUTheme(
-                appSettings = appSettings,
+                appSettings = effectiveSettings,
                 content = skinContent
             )
         }

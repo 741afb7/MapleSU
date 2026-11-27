@@ -25,13 +25,17 @@ class HomeRecoveryRefreshContractTest {
             .substringBefore("private suspend fun checkEnvironmentPresence()")
         assertFalse(refresh.contains("publishMutex.isLocked"))
         assertTrue(refresh.contains("probeAndPublish("))
-        assertTrue(viewModel.contains("): HomeUiState = coroutineScope { environmentMutex.withLock {"))
+        val probe = viewModel.substringAfter("private suspend fun probeAndPublish(")
+            .substringBefore("private suspend fun refreshInformation(")
+        assertTrue(probe.contains("): HomeUiState = coroutineScope {"))
+        assertTrue(probe.contains("environmentMutex.withLock {"))
         assertTrue(viewModel.contains("private val environmentMutex = Mutex()"))
         assertTrue(viewModel.contains("private val publishMutex = Mutex()"))
         val publication = viewModel.substringAfter("private suspend fun publishState(")
             .substringBefore("fun refreshEntryFacts()")
         assertTrue(publication.contains("publishMutex.withLock"))
-        assertTrue(publication.indexOf("if (!owner.isCurrent())") < publication.indexOf("_uiState.update"))
+        val ownerGuard = publication.indexOf("if (!owner.isCurrent(environmentOwner)) return@withLock")
+        assertTrue(ownerGuard >= 0 && publication.indexOf("_uiState.update") > ownerGuard)
     }
 
     @Test fun aPageReturnRefreshesAfterTheFirstVisibleEntry() {

@@ -126,7 +126,7 @@ class UltraKernelArchivedRecoveryTest {
             UltraKernelOriginalRecovery(fixture.assets()).recover(fixture.boot, temporary.newFolder(),
                 emptyList(), output, generatedOnly = true)
         }
-        assertFalse(output.exists())
+        assertTrue("no recovery image is published", output.walkTopDown().none { it.isFile })
         assertEquals(before, UltraKernelSpec.sha256(fixture.boot))
     }
 
@@ -177,7 +177,22 @@ class UltraKernelArchivedRecoveryTest {
             try {
                 val credential = UltraKernelCredential.of(bytes)
                 val original = requireNotNull(UltraKernelOriginalRecovery(assets).generatedKernel(image, receipts))
-                val plan = UltraKernelSpecGenerator().generate(original, credential)
+                // Legacy identity binding is an explicit retained recipe boundary;
+                // current SpecGenerator never accepts a caller credential.
+                val preserved = credential.metadataDisplacement.takeIf { credential.sdkMetadataValid }
+                val rendered = UltraKernelRecipe.k22().renderDetailed(
+                    UltraKernelExecveEntry.resolve(UltraKernelKallsymsTable.decode(original), original),
+                    original, credential, preservedMetadataDisplacement = preserved)
+                val metadata = rendered.records.single { it.role == "free_initmem+0x0" }.site.toLong() + 4
+                val executor = rendered.records.single { it.role == "__drm_printfn_coredump+0x0" }.site.toLong()
+                val displacement = preserved ?: Math.toIntExact(metadata - executor - UltraKernelBodies.EXECUTOR_CALL_OFFSET)
+                val legacy = UltraKernelPlan.fromRecords(UltraKernelSpec.releaseOf(original),
+                    rendered.records.map { UltraKernelPlan.PatchRecord(it.role, it.site.toLong(), it.original, it.replacement) },
+                    credential, sdkMetadataDisplacement = displacement, layout = rendered.layout)
+                val plan = legacy.rebind(credential)
+                val keyless = UltraKernelSpecGenerator().generate(original)
+                assertNull(keyless.credential)
+                assertTrue(keyless.records.none { it.role == "panic+0x0" })
                 val bound = requireNotNull(plan.credential)
                 assertTrue("published identity must address the generated metadata", bound.sdkMetadataValid)
                 if (credential.sdkMetadataValid) {

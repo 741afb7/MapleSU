@@ -23,8 +23,8 @@ class UltraEnvironmentInstallReadinessTest {
 
     @Test fun savedButMismatchedCredentialsNeverPermitAnEnvironmentInstall() {
         val readiness = UltraEnvironmentInstallReadiness.from(channel("ERR_MODULE_ROOT_KEY"))
-        assertEquals(UltraEnvironmentInstallReadiness.KeyMismatch, readiness)
-        assertTrue(readiness.needsImage)
+        assertEquals(UltraEnvironmentInstallReadiness.Unavailable, readiness)
+        assertFalse(readiness.needsImage)
     }
 
     @Test fun bridgeFailuresAndUnknownErrorsRequireAnotherObservation() {

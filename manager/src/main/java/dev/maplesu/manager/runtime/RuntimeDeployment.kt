@@ -6,14 +6,17 @@ import android.os.UserManager
 import android.system.Os
 import android.util.Log
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup
+import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
+import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
+import dev.maplesu.manager.runtime.ultra.UltraSdkCredentials
 import dev.maplesu.manager.runtime.ultra.UltraSdkSession
+import dev.maplesu.manager.workmode.ModeActivation
 import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.WorkMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
-import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
@@ -22,7 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Publishes the credential-free traditional client after unlock.
+ * Publishes the traditional client after unlock.
  *
  * ## Where the entry lives, and why not `/dev`
  *
@@ -33,11 +36,7 @@ import java.util.concurrent.atomic.AtomicLong
  * by the product.
  *
  *  - `/data` is mode 0771, so an ordinary app can traverse it but cannot list it.
- *    Without the name, the entry is not discoverable at all.
- *  - The name is 16 hex characters derived from SHA-256 of the installed credential
- *    (or a persisted random value for a jailbreak attempt, which has no credential).
- *    It therefore looks like any other opaque directory and leaks no key characters -
- *    unlike the baseline, whose directory name is the first 16 characters of the key.
+ *  - This legacy client path uses a persisted non-secret random name.
  *  - The directory is root-owned 0755 and carries the pre-existing `system_file` type
  *    so an ordinary app domain can traverse and execute. No policy is loaded and no
  *    new type, allow rule or attribute is added.
@@ -49,11 +48,11 @@ import java.util.concurrent.atomic.AtomicLong
  * Nothing about the client is copied or modified: the executable bytes are the
  * package manager's own file, byte-identical to the APK payload.
  *
- * ## Credential-backed publication
+ * ## Direct client publication
  *
- * The description below is the credential-backed path. Ultra Hook traditional
+ * The description below is the direct client path. Ultra Hook traditional
  * clients use [HookSuCompatibility]'s boot-scoped SDK UID redirect, without an overlay.
- * No mount, no overlay, no tmpfs entry is created by the credential-backed path. `standard_path` is permanently
+ * No mount, no overlay, no tmpfs entry is created by the direct client path. `standard_path` is permanently
  * `none`, and the publication script removes the artefacts of earlier revisions by
  * exact ownership test (an overlay whose source is `maplesu-su`, a bind mount whose
  * mount point is a known former client path, the former `/dev/maplesu` tree).
@@ -75,7 +74,8 @@ object RuntimeDeployment {
     private const val KEY_LAST_NAME = "last_directory_name"
 
     data class Status(val clientPath: String? = null, val standardPath: String? = null,
-        val brokerReady: Boolean = false, val error: String? = null)
+        val brokerReady: Boolean = false, val error: String? = null,
+        internal val entryCurrent: (() -> Boolean)? = null)
     private val _status = MutableStateFlow(Status())
     val statusChanges: StateFlow<Status> = _status.asStateFlow()
     private var current: Status
@@ -114,21 +114,9 @@ object RuntimeDeployment {
     /**
      * 16 hex characters that name the published directory.
      *
-     * <p>Derived from the installed credential so it stays stable across app data
-     * clearing and reboots without any stored mapping, and so it reveals nothing about
-     * the credential itself (one-way digest prefix). A jailbreak attempt has no
-     * credential, so it uses a persisted random name instead - still opaque, still not
-     * product-derived.
+     * <p>The persisted name is non-secret and never grants authorization.
      */
     private fun directoryName(context: Context): String {
-        runCatching { MapleSuCredentialStore(context).load() }.getOrNull()?.let { credential ->
-            try {
-                val digest = MessageDigest.getInstance("SHA-256").digest(credential)
-                return digest.take(8).joinToString("") { "%02x".format(it.toInt() and 0xFF) }
-            } finally {
-                credential.fill(0)
-            }
-        }
         val stored = preferences(context).getString(KEY_NAME, null)
         if (stored != null && stored.length == 16 && stored.all { it in "0123456789abcdef" }) return stored
         val random = ByteArray(8).also { SecureRandom().nextBytes(it) }
@@ -172,8 +160,8 @@ object RuntimeDeployment {
             val publishClient = mode == SuEntryMode.Mode.TRADITIONAL_COMPAT
             Log.i("MapleSU", "SU_ENTRY_MODE:${mode.wire} publishClient=$publishClient")
             try {
-                // Hook has no Direct credential to deliver. Traditional exec uses
-                // the SDK UID redirect; cooperative clients retain the broker.
+                // Traditional Hook exec uses the SDK UID redirect;
+                // cooperative clients retain the broker.
                 if (!publicationCurrent(application, retry, expectedSession)) return@execute
                 hook = HookRootExecutor.production(application).available()
                 if (hook) {
@@ -231,7 +219,7 @@ object RuntimeDeployment {
                     val next = (if (expectedSession == null) RuntimePublicationRetry(latestGeneration) else retry)
                         .next(latestGeneration)
                     if (session != null && next != null && session.entryMode == mode &&
-                        (expectedSession == null || expectedSession == session)) {
+                        (expectedSession == null || expectedSession.current() && expectedSession.sameOwner(session))) {
                         publicationRetryExecutor.schedule({ start(application, null, next, session) },
                             next.delayMillis, TimeUnit.MILLISECONDS)
                     }
@@ -241,8 +229,13 @@ object RuntimeDeployment {
     }
 
     private data class PublicationSession(val bootId: String, val origin: TrustedRuntime.Origin,
-        val attemptId: String?, val workMode: WorkMode?, val entryMode: SuEntryMode.Mode, val sdkKey: String) {
+        val attemptId: String?, val workMode: WorkMode?, val entryMode: SuEntryMode.Mode,
+        val activation: ModeActivation, val owner: UltraRuntimeClient.ManagerOwnerIdentity?,
+        val current: () -> Boolean) {
         override fun toString() = "PublicationSession"
+        fun sameOwner(other: PublicationSession): Boolean = bootId == other.bootId && origin == other.origin &&
+            attemptId == other.attemptId && workMode == other.workMode && entryMode == other.entryMode &&
+            activation === other.activation && owner == other.owner
     }
 
     private fun publicationSession(context: Context): PublicationSession? {
@@ -252,15 +245,17 @@ object RuntimeDeployment {
         if (!runtime.ready || sdk.bootId != bootId || !HookRootExecutor.production(context).available() ||
             UltraEnvironmentAutoSetup.blockedReason(context, bootSession = true) != null) return null
         return PublicationSession(bootId, runtime.origin, runtime.attemptId, ModeRuntime.active,
-            SuEntryMode.read(context), sdk.key)
+            SuEntryMode.read(context), ModeRuntime.activation,
+            UltraEnvironmentProbe.currentSnapshot().managerOwnerIdentity, UltraSdkCredentials.captureOwnerMarker(context))
     }
 
     private fun publicationCurrent(context: Context, retry: RuntimePublicationRetry,
         expected: PublicationSession?): Boolean = expected == null ||
-        (retry.generation == publicationGeneration.get() && publicationSession(context) == expected)
+        (retry.generation == publicationGeneration.get() && expected.current() &&
+            publicationSession(context)?.let(expected::sameOwner) == true)
 
     /**
-     * A boot or package-replace broadcast can arrive before the internal credential
+     * A boot or package-replace broadcast can arrive before the internal task transport
      * probe has finished, and `start` is also what that probe calls when it succeeds.
      * If the process is torn down in between, nothing publishes at all. Retry on a
      * bounded window so recovery does not depend on that race.
@@ -369,7 +364,7 @@ object RuntimeDeployment {
                 fi
             done
             stage=legacy_directory
-            # A re-paired credential changes the derived name; remove the directory the
+            # A changed legacy locator names a different directory; remove the directory the
             # previous name published, but only when it is provably ours.
             previous=${quote(previous ?: "")}
             if [ -n "${'$'}previous" ] && [ "${'$'}previous" != ${quote(base)} ] && [ -d "${'$'}previous" ]; then

@@ -34,16 +34,27 @@ internal class DaemonBootSuperuserAuthority(
     }
 
     fun setAllowed(packageName: String, allowed: Boolean): Boolean = runCatching {
-        val uid = uidOfPackage(packageName) ?: if (allowed) return false else {
-            val current = snapshot() ?: return false
-            val matches = (current.grants.values.filter { packageName in it.members }.map { it.uid } +
-                current.tombs.filter { it.packageName == packageName }.map { it.uid }).distinct()
-            if (matches.isEmpty()) return sync(current)
-            matches.singleOrNull() ?: return false
+        val before = snapshot() ?: return false
+        val installedUid = uidOfPackage(packageName)
+        val targets = if (allowed) {
+            val uid = installedUid ?: return false
+            if (identityOf(uid)?.members?.containsKey(packageName) != true) return false
+            listOf(uid)
+        } else {
+            (listOfNotNull(installedUid) +
+                before.grants.values.filter { packageName in it.members }.map { it.uid } +
+                before.tombs.filter { it.packageName == packageName }.map { it.uid }).distinct()
         }
-        if (allowed && identityOf(uid)?.members?.containsKey(packageName) != true) return false
-        execute(if (allowed) "grant" else "revoke", listOf(uid.toString()))
-        val current = snapshot() ?: return false
+        var current = before
+        for (uid in targets) {
+            val result = SuperuserControl.parseOutcome(execute(if (allowed) "grant" else "revoke", listOf(uid.toString())))
+            if (!result.ok) return false
+            current = snapshot() ?: return false
+            if (current.rev != result.rev) return false
+            if (allowed) {
+                if (!ManagerSuperuserPolicy.decide(current, uid, identityOf(uid)).allowed) return false
+            } else if (current.grantOf(uid) != null && !current.revoked(uid)) return false
+        }
         sync(current)
     }.getOrDefault(false)
 

@@ -28,8 +28,6 @@
 // 导出、以及 module_descriptor.h 里的 private_desc_parser.h（弱符号 webui 钩子）。
 #include "a_kernel_module_kit_umbrella.h"
 
-extern "C" const char* __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(void);
-extern "C" void __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(const char* root_key);
 
 //      _ZN15default_modules11module_root16set_current_rootEb
 //      _ZN15default_modules11module_root19get_module_eng_nameEv

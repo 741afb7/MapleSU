@@ -3,7 +3,10 @@
 #include <atomic>
 #include <cstdint>
 #include <vector>
-namespace metadata_test { inline std::atomic<unsigned> init_count{0}; }
+namespace metadata_test {
+inline std::atomic<unsigned> init_count{0}, patch_calls{0}, execmem_frees{0}, module_frees{0};
+inline std::vector<uint8_t>& embedded() { static thread_local std::vector<uint8_t> value; return value; }
+}
 namespace asmjit {
 struct Imm { template<class T> explicit Imm(T) {} };
 struct Label {};
@@ -19,6 +22,10 @@ struct Mem { Mem pre(int) { return {}; } Mem post(int) { return {}; } };
 inline Mem ptr(GpX, int = 0) { return {}; }
 namespace Predicate { enum class SysReg { kPAR_EL1 }; }
 struct Assembler {
+    void embed(const void* data, size_t size) {
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        metadata_test::embedded().insert(metadata_test::embedded().end(), bytes, bytes + size);
+    }
     Label newLabel() { return {}; }
     size_t offset() { return 0; }
 #define METADATA_TEST_INSN(name) template<class... T> void name(T...) {}
@@ -26,7 +33,7 @@ struct Assembler {
     METADATA_TEST_INSN(ldr) METADATA_TEST_INSN(ldrb) METADATA_TEST_INSN(str)
     METADATA_TEST_INSN(stlr) METADATA_TEST_INSN(ubfm) METADATA_TEST_INSN(lsr)
     METADATA_TEST_INSN(lsl) METADATA_TEST_INSN(orr) METADATA_TEST_INSN(b)
-    METADATA_TEST_INSN(bind) METADATA_TEST_INSN(embed) METADATA_TEST_INSN(stp)
+    METADATA_TEST_INSN(bind) METADATA_TEST_INSN(stp)
     METADATA_TEST_INSN(ldp) METADATA_TEST_INSN(blr) METADATA_TEST_INSN(cbnz)
     METADATA_TEST_INSN(tbnz) METADATA_TEST_INSN(msr)
 #undef METADATA_TEST_INSN
@@ -40,7 +47,7 @@ struct aarch64_asm_ctx {
     Assembler* assembler() { return &value; }
     bool has_error() { return false; }
 };
-inline aarch64_asm_ctx init_aarch64_asm() { ++metadata_test::init_count; return {}; }
+inline aarch64_asm_ctx init_aarch64_asm() { ++metadata_test::init_count; metadata_test::embedded().clear(); return {}; }
 inline std::vector<uint8_t> aarch64_asm_to_bytes(Assembler*) { return {0,0,0,0}; }
 struct RegProtectGuard { template<class... T> explicit RegProtectGuard(T...) {} };
 #define METADATA_TEST_HELPER(name) template<class... T> inline void name(T...) {}

@@ -67,28 +67,25 @@ void snapshot_root_result(RootCommandResult& result) {
     result.root_report_received = result.root_transition.phase != nullptr;
 }
 
-KModErr select_root_identity(bool owner) {
+KModErr select_root_identity() {
     const auto state = kernel_module::maplesu_request_auth_state();
     if (!kernel_module::maplesu_request_auth_usable(state)) return KModErr::ERR_MODULE_ROOT_KEY;
-    if (!owner) {
-        // An Owner failure is never repaired by selecting the compatibility Key.
-        return kernel_module::maplesu_request_auth_legacy(state) ? KModErr::OK : KModErr::ERR_MODULE_ROOT_KEY;
-    }
-    // An installed helper is not a signed Manager, including after fork.
-    if (kernel_module::maplesu_request_auth_helper(state)) return KModErr::ERR_MODULE_ROOT_KEY;
-    return kernel_module::maplesu_request_auth_manager(state) ? KModErr::OK : kernel_module::maplesu_request_set_auth_mode(
-        kernel_module::RequestAuthMode::ManagerOwner);
+    if (kernel_module::maplesu_request_auth_helper(state) ||
+        kernel_module::maplesu_request_auth_manager(state) ||
+        kernel_module::maplesu_request_auth_legacy(state)) return KModErr::OK;
+    return kernel_module::maplesu_request_set_auth_mode(kernel_module::RequestAuthMode::ManagerOwner);
 }
 
-void transition_root(RootCommandResult& result, bool owner) {
+void transition_root(RootCommandResult& result) {
     result.phase = RootCommandPhase::Root;
     result.root_attempted = true;
     result.root_process = getpid();
     errno = 0;
     try {
-        // Owner uses authenticated credential/task/procattr commands, not the
-        // Legacy process-name generated-code path or vendor prelude.
-        const KModErr error = default_modules::module_root::set_current_root(!owner);
+        // The explicit legacy selection retains its existing Root environment.
+        const bool legacy = kernel_module::maplesu_request_auth_legacy(
+            kernel_module::maplesu_request_auth_state());
+        const KModErr error = default_modules::module_root::set_current_root(legacy);
         const int system_error = errno;
         result.root_returned = true;
         snapshot_root_result(result);
@@ -403,134 +400,15 @@ RootCommandResult current_root_command_result() {
     return last_command_process == getpid() ? last_command : RootCommandResult{};
 }
 
-// ROOT 密钥前 16 个字符既是模块目录名，也是 /data/ 下的私有目录名。
-static std::string get_kernel_file_dir_name() {
-    const char* root_key = __get_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW();
-    return std::string(root_key).substr(0, FOLDER_HEAD_ROOT_KEY_LEN);
-}
-
-static std::string get_kernel_file_dir_path() {
-    char dir_path[1024] = {0};
-    snprintf(dir_path, sizeof(dir_path), "/data/%s/", get_kernel_file_dir_name().c_str());
-    return std::string(dir_path);
-}
-
-KModErr get_root(const char* root_key) {
+KModErr get_root() {
     const int original_errno = errno;
     RootCommandResult result = begin_command();
-    if (root_key == nullptr) {
-        result.root_transition.owner_mode = true;
-        result.error = select_root_identity(true);
-        if (is_ok(result.error)) transition_root(result, true);
-        return finish_command(result, original_errno);
-    }
-    const size_t root_key_len = strnlen(root_key, 1024);
-    if (root_key_len < FOLDER_HEAD_ROOT_KEY_LEN || root_key_len >= 1024) {
-        result.error = KModErr::ERR_MODULE_ROOT_KEY;
-        return finish_command(result, original_errno);
-    }
-    result.error = select_root_identity(false);
-    if (is_failed(result.error)) return finish_command(result, original_errno);
-    char key_snapshot[1024] = {};
-    memcpy(key_snapshot, root_key, root_key_len);
-    __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key_snapshot);
-
-    // The vendor flag paths belong to Root. Acquire the same Key's existing
-    // credentials in this requesting task before forking its vendor worker.
-    transition_root(result, false);
-    if (is_failed(result.error)) return finish_command(result, original_errno);
-
-    // This worker never performs the caller's Root transition. Keep its pipe
-    // receipt separate so the strict child-PID check cannot erase caller facts.
-    RootCommandResult vendor_result;
-    fork_pipe_info pipe;
-    if (fork_pipe_child_process(pipe)) {
-        bool sent = false;
-        try {
-            // Bind the exact validated input after the existing atfork key lock.
-            __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key_snapshot);
-            // 子进程：隐藏自身输出，逐个拉起 bypass 模块，全部结束后直接退出。
-            ScopedStdToDevNull std_to_dev_null(true);
-            if (std_to_dev_null.error()) {
-                command_failure(vendor_result, KModErr::ERR_MODULE_OPEN_FILE,
-                                RootCommandPhase::Output, std_to_dev_null.error());
-            } else {
-                puts("bypass security modules...");
-                // 一次 basic_string D2），因此这里必须把它放进独立作用域。
-                vendor_result.phase = RootCommandPhase::WorkingDirectory;
-                {
-                    const std::string kernel_file_dir_path = get_kernel_file_dir_path();
-                    if (chdir(kernel_file_dir_path.c_str()) < 0)
-                        vendor_result.working_directory_error = errno;
-                }
-
-                KModErr module_err = KModErr::OK;
-                vendor_result.phase = RootCommandPhase::VendorMtk;
-                {
-                    module_desc desc{};
-                    strncpy(desc.name, default_modules::module_bypass_mtk_mkp::get_module_eng_name(),
-                            sizeof(desc.name) - 1);
-                    RootModuleBannerGuard banner(desc, true);
-                    errno = 0;
-                    module_err = default_modules::module_bypass_mtk_mkp::init();
-                    vendor_result.error = module_err;
-                    if (is_failed(module_err)) vendor_result.system_error = errno;
-                    banner.module_err_ = module_err;
-                }
-                if (module_err == KModErr::OK) {
-                    vendor_result.phase = RootCommandPhase::VendorOplusGuard;
-                    {
-                        module_desc desc{};
-                        strncpy(desc.name,
-                                default_modules::module_bypass_oplus_secure_guard::get_module_eng_name(),
-                                sizeof(desc.name) - 1);
-                        RootModuleBannerGuard banner(desc, true);
-                        errno = 0;
-                        module_err = default_modules::module_bypass_oplus_secure_guard::init();
-                        vendor_result.error = module_err;
-                        if (is_failed(module_err)) vendor_result.system_error = errno;
-                        banner.module_err_ = module_err;
-                    }
-                    if (module_err == KModErr::OK) {
-                        vendor_result.phase = RootCommandPhase::VendorOplusInte;
-                        module_desc desc{};
-                        strncpy(desc.name, default_modules::module_bypass_oplus_inte::get_module_eng_name(),
-                                sizeof(desc.name) - 1);
-                        RootModuleBannerGuard banner(desc, true);
-                        errno = 0;
-                        module_err = default_modules::module_bypass_oplus_inte::init();
-                        vendor_result.error = module_err;
-                        if (is_failed(module_err)) vendor_result.system_error = errno;
-                        banner.module_err_ = module_err;
-                    }
-                }
-                vendor_result.error = module_err;
-                if (is_ok(module_err)) vendor_result.phase = RootCommandPhase::Complete;
-            }
-            std_to_dev_null.restore();
-            if (std_to_dev_null.error())
-                command_failure(vendor_result, KModErr::ERR_MODULE_WRITE_FILE,
-                                RootCommandPhase::Output, std_to_dev_null.error());
-        } catch (const std::bad_alloc&) {
-            command_failure(vendor_result, KModErr::ERR_NO_MEM, vendor_result.phase);
-        } catch (const std::length_error&) {
-            command_failure(vendor_result, KModErr::ERR_NO_MEM, vendor_result.phase);
-        }
-        try { sent = send_command_result(pipe, vendor_result); } catch (...) {}
-        pipe.close_all();
-        _exit(sent ? 0 : 1);
-    }
-    const int fork_error = errno;
-    receive_command_result(pipe, vendor_result, nullptr, fork_error);
-    vendor_result.root_transition = result.root_transition;
-    vendor_result.root_process = result.root_process;
-    vendor_result.root_attempted = result.root_attempted;
-    vendor_result.root_returned = result.root_returned;
-    vendor_result.root_report_received = result.root_report_received;
-    return finish_command(vendor_result, original_errno);
+    result.error = select_root_identity();
+    if (is_ok(result.error)) transition_root(result);
+    return finish_command(result, original_errno);
 }
 
-KModErr run_root_cmd(const char* root_key, const char* cmd, std::string& out_result) {
+KModErr run_root_cmd(const char* cmd, std::string& out_result) {
     const int original_errno = errno;
     RootCommandResult result = begin_command();
     if (cmd == nullptr) {
@@ -541,23 +419,14 @@ KModErr run_root_cmd(const char* root_key, const char* cmd, std::string& out_res
         result.error = KModErr::ERR_MODULE_PARAM;
         return finish_command(result, original_errno);
     }
-    const bool owner = root_key == nullptr;
-    char key_snapshot[1024] = {};
-    if (!owner) {
-        const size_t root_key_len = strnlen(root_key, sizeof(key_snapshot));
-        if (root_key_len < FOLDER_HEAD_ROOT_KEY_LEN || root_key_len >= sizeof(key_snapshot)) {
-            result.error = KModErr::ERR_MODULE_ROOT_KEY;
-            return finish_command(result, original_errno);
-        }
-        result.error = select_root_identity(false);
-        if (is_failed(result.error)) return finish_command(result, original_errno);
-        memcpy(key_snapshot, root_key, root_key_len);
+    result.error = kernel_module::maplesu_request_worker_admission();
+    if (is_failed(result.error)) {
+        result.system_error = errno;
+        return finish_command(result, original_errno);
     }
-    result.root_transition.owner_mode = owner;
     std::string shell_cmd;
     std::string cmd_output;
     try {
-        if (!owner) __set_current_module_root_key_hd04aBTnbSZlTRP7S4mQpIeVvr2ssGjW(key_snapshot);
         shell_cmd.assign(cmd);
         shell_cmd.append(" 2>&1");
     } catch (const std::bad_alloc&) {
@@ -577,12 +446,12 @@ KModErr run_root_cmd(const char* root_key, const char* cmd, std::string& out_res
             errno = 0;
             // No parent session/token crosses fork. The request layer drops
             // its copied local view, then this child authenticates and OPENs.
-            const KModErr root_error = get_root(owner ? nullptr : key_snapshot);
+            const KModErr root_error = get_root();
             result = current_root_command_result();
             result.error = root_error;
             result.vendor_child_status = result.child_status;
             result.vendor_child_status_valid = result.child_status_valid;
-            if (is_ok(root_error) && owner) {
+            if (is_ok(root_error) && result.root_transition.credentials_managed) {
                 maplesu_metadata_owner_v3 metadata{};
                 uint64_t descriptor = 0;
                 kernel_module::RequestOwnerBinding binding{};
@@ -631,7 +500,7 @@ KModErr run_root_cmd(const char* root_key, const char* cmd, std::string& out_res
                 WEXITSTATUS(result.shell_status) != 0)
                 command_failure(result, KModErr::ERR_READ_CHILD_ERRCODE, RootCommandPhase::Pclose, result.shell_error);
         }
-        if (owner || result.root_transition.credentials_managed) close_command_owner(result);
+        if (result.root_transition.credentials_managed) close_command_owner(result);
         if (is_ok(result.error)) result.phase = RootCommandPhase::Complete;
         try { sent = send_command_result(pipe, result, &cmd_output); } catch (...) {}
         pipe.close_all();
@@ -651,12 +520,12 @@ KModErr run_root_cmd(const char* root_key, const char* cmd, std::string& out_res
 
 namespace skroot_env {
 
-KModErr get_root(const char* root_key) {
-    return maplesu::sdk::get_root(root_key);
+KModErr get_root() {
+    return maplesu::sdk::get_root();
 }
 
-KModErr run_root_cmd(const char* root_key, const char* cmd, std::string& out_result) {
-    return maplesu::sdk::run_root_cmd(root_key, cmd, out_result);
+KModErr run_root_cmd(const char* cmd, std::string& out_result) {
+    return maplesu::sdk::run_root_cmd(cmd, out_result);
 }
 
 }  // namespace skroot_env

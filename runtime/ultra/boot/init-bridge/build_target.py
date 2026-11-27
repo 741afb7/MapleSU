@@ -47,6 +47,32 @@ def strip_module_debug(module, tool, evidence):
             "input": before, "unstripped": identity(original), "output": identity(module)}, result.returncode
 
 
+def selected_layout(repo, reference, error_prefix):
+    path = repo / reference["repositoryPath"] if "repositoryPath" in reference else Path(reference["path"])
+    if any(identity(path)[key] != reference[key] for key in ("bytes", "sha256")):
+        raise ValueError(error_prefix + "_IDENTITY")
+    layout = json.loads(path.read_text(encoding="utf-8-sig"))
+    if layout.get("schema") == "maplesu-claim-current-source-selection/1":
+        sys.path.insert(0, str(repo / "scripts"))
+        try:
+            from claim_current_sources import read_current_source_selection
+            layout = read_current_source_selection(repo, path, reference["sha256"])
+        finally:
+            sys.path.pop(0)
+        inputs = [repo / row["after"]["path"] for row in layout["files"]]
+        inputs.extend(repo / row["path"] for row in layout["tools"])
+        return path, layout, "current-source-selection", inputs
+    if layout.get("schema") != "maplesu-claim-runtime-layout-source-selection/1":
+        raise ValueError(error_prefix + "_SCHEMA")
+    return path, layout, "runtime-layout-source-successor", []
+
+
+def layout_members(layout, logical):
+    # The current cohort may name one file in both native and bridge roles.
+    members = [row["after"] for row in layout.get("files", []) if row.get("logicalPath") == logical]
+    return [dict(item) for item in dict.fromkeys(tuple(sorted(member.items())) for member in members)]
+
+
 def staged_target_inputs(source, kdir, repo, kernel_source=None, target_contract=None):
     profile = source / "host/manager_su_runtime_target_profile.h"
     if not profile.is_file():
@@ -61,21 +87,17 @@ def staged_target_inputs(source, kdir, repo, kernel_source=None, target_contract
         if (receipt.get("runtimeFactsSelected") is not True or not reference or
                 reference not in receipt.get("formalRuntimeSuccessors", [])):
             raise ValueError("ULTRA_BRIDGE_RUNTIME_FACTS_SELECTION_REQUIRED")
-        layout_path = repo / reference["repositoryPath"] if "repositoryPath" in reference else Path(reference["path"])
-        if any(identity(layout_path)[key] != reference[key] for key in ("bytes", "sha256")):
-            raise ValueError("ULTRA_BRIDGE_RUNTIME_FACTS_SELECTION_IDENTITY")
-        layout = json.loads(layout_path.read_text(encoding="utf-8-sig"))
-        if layout.get("schema") != "maplesu-claim-runtime-layout-source-selection/1":
-            raise ValueError("ULTRA_BRIDGE_RUNTIME_FACTS_SELECTION_SCHEMA")
+        layout_path, layout, selection_kind, generation_inputs = selected_layout(
+            repo, reference, "ULTRA_BRIDGE_RUNTIME_FACTS_SELECTION")
         required = {"manager_su_runtime_target_profile.h", "manager_task_profile_workbit.h",
                     *(unit + suffix for unit in ("manager_runtime_btf", "manager_runtime_accessor", "manager_task_profile_runtime")
                       for suffix in (".c", ".h"))}
         members = {}
         for name in required:
             logical = "runtime/ultra/identity/kernel/" + name
-            declared = [row["after"] for row in layout.get("files", []) if row.get("logicalPath") == logical]
+            declared = layout_members(layout, logical)
             staged = [row for row in receipt.get("inputs", []) if row.get("repositoryPath") == logical and
-                      row.get("staged") == "host/" + name and row.get("selection") == "runtime-layout-source-successor"]
+                      row.get("staged") == "host/" + name and row.get("selection") == selection_kind]
             path = source / "host" / name
             if len(declared) != 1 or len(staged) != 1 or any(
                     identity(path)[key] != declared[0][key] or staged[0]["selected"][key] != declared[0][key]
@@ -90,7 +112,7 @@ def staged_target_inputs(source, kdir, repo, kernel_source=None, target_contract
                 "host/" + unit + ".o" not in flags for unit in
                 ("manager_runtime_btf", "manager_runtime_accessor", "manager_task_profile_runtime"))):
             raise ValueError("ULTRA_BRIDGE_RUNTIME_FACTS_KBUILD")
-        return [receipt_path, layout_path, *members.values()]
+        return [receipt_path, layout_path, *members.values(), *generation_inputs]
     if binding.get("kind") == "maplesu-init-bridge-kmi-target/1":
         spec = importlib.util.spec_from_file_location("bridge_target_kmi", Path(__file__).with_name("target_kmi.py"))
         kmi = importlib.util.module_from_spec(spec)
@@ -109,28 +131,23 @@ def staged_target_inputs(source, kdir, repo, kernel_source=None, target_contract
             layout_ref = binding.get("runtimeLayoutProfile")
             if not layout_ref or layout_ref not in receipt.get("formalRuntimeSuccessors", []):
                 raise ValueError("ULTRA_BRIDGE_RUNTIME_PROFILE_SELECTION_REQUIRED")
-            layout_path = (repo / layout_ref["repositoryPath"] if "repositoryPath" in layout_ref
-                           else Path(layout_ref["path"]))
-            if any(identity(layout_path)[key] != layout_ref[key] for key in ("bytes", "sha256")):
-                raise ValueError("ULTRA_BRIDGE_RUNTIME_PROFILE_SELECTION_IDENTITY")
-            layout = json.loads(layout_path.read_text(encoding="utf-8-sig"))
-            if layout.get("schema") != "maplesu-claim-runtime-layout-source-selection/1":
-                raise ValueError("ULTRA_BRIDGE_RUNTIME_PROFILE_SELECTION_SCHEMA")
-            selected_profiles = [row for row in layout.get("files", []) if row.get("logicalPath") ==
-                                 "runtime/ultra/identity/kernel/manager_su_runtime_target_profile.h"]
+            layout_path, layout, selection_kind, generation_inputs = selected_layout(
+                repo, layout_ref, "ULTRA_BRIDGE_RUNTIME_PROFILE_SELECTION")
+            selected_profiles = layout_members(layout,
+                "runtime/ultra/identity/kernel/manager_su_runtime_target_profile.h")
             staged_profiles = [row for row in receipt.get("inputs", [])
                                if row.get("repositoryPath") ==
                                "runtime/ultra/identity/kernel/manager_su_runtime_target_profile.h" and
                                row.get("staged") == "host/manager_su_runtime_target_profile.h"]
             actual_profile = identity(profile)
             if (len(selected_profiles) != 1 or len(staged_profiles) != 1 or
-                    staged_profiles[0].get("selection") != "runtime-layout-source-successor" or any(
-                    actual_profile[key] != selected_profiles[0]["after"][key] or
-                    binding["profile"][key] != selected_profiles[0]["after"][key] or
-                    staged_profiles[0]["selected"][key] != selected_profiles[0]["after"][key]
+                    staged_profiles[0].get("selection") != selection_kind or any(
+                    actual_profile[key] != selected_profiles[0][key] or
+                    binding["profile"][key] != selected_profiles[0][key] or
+                    staged_profiles[0]["selected"][key] != selected_profiles[0][key]
                     for key in ("bytes", "sha256"))):
                 raise ValueError("ULTRA_BRIDGE_RUNTIME_TARGET_PROFILE_IDENTITY")
-            selected_inputs.append(layout_path)
+            selected_inputs.extend([layout_path, *generation_inputs])
         elif any(identity(profile)[key] != contract["profile"][key] or
                  binding["profile"][key] != contract["profile"][key]
                for key in ("bytes", "sha256")):

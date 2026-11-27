@@ -25,6 +25,7 @@ class UltraStartupRegressionTest {
         val ultraProbeFailed: Boolean = false,
     ) {
         val store = EnvironmentStateStore(InMemoryEnvironmentStatePersistence(initial))
+        var detection: DetectionResult? = null
         var active: WorkMode? = null
         var hookReads = 0
         private val probes = object : EnvironmentProbes {
@@ -50,7 +51,7 @@ class UltraStartupRegressionTest {
                         bootIdSource = BootIdSource { BOOT },
                     ),
                     runtime = object : ModeRuntimePort {
-                        override fun recordDetection(result: DetectionResult) {}
+                        override fun recordDetection(result: DetectionResult) { detection = result }
                         override fun completeBootstrap(result: DetectionResult) {}
                         override fun activate(mode: WorkMode, bootId: String, source: ActivationSource): Boolean {
                             if (activate) active = mode
@@ -110,7 +111,7 @@ class UltraStartupRegressionTest {
             val f = Fixture(hookReady = false, readiness = su, ultraState = UltraState.NOT_INSTALLED,
                 initial = EnvironmentSnapshot(WorkMode.LITE, true, "ultra:running", boot, 1))
             f.start()
-            assertNull("an external manager's root is not Ultra", f.active)
+            assertNull("an external manager's root is not Ultra: boot=$boot su=$su result=${f.detection}", f.active)
             assertNull(f.store.snapshot()?.mode)
             assertEquals(BOOT, f.store.snapshot()?.bootId)
         }
@@ -239,19 +240,19 @@ class UltraStartupRegressionTest {
             EnvironmentHomeProjection.Facts(f.store.snapshot(), BOOT),
         ).confirmedNotInstalled)
 
-        var paired = false
-        val pairing = UltraAutoPair.complete(observation, current = { true }, alreadyPaired = { false },
-            persist = { paired = true }, maintain = {})
+        var verified = false
+        val pairing = UltraAutoPair.complete(observation, current = { true },
+            verifyManagerSu = { verified = true; true }, maintain = {})
         assertTrue(pairing.paired)
-        assertTrue(paired)
+        assertTrue(verified)
         assertEquals(helper, pairing.state)
         val install = UltraEnvironmentInstaller.install(object : UltraEnvironmentInstaller.InstallPort {
             override fun environmentState() = dev.maplesu.manager.runtime.ultra.NativeReceipt.parse(
-                """{"backend":"maplesu_ultra","ok":true,"sdkError":"OK","data":{"state":"NotInstalled"}}""")!!
+                """{"backend":"maplesu_ultra","ok":true,"sdkError":"OK","sdkErrorCode":0,"data":{"state":"NotInstalled"}}""")!!
             override fun submitInstall(): dev.maplesu.manager.runtime.ultra.NativeReceipt =
                 error("failed backend preparation must not submit a reboot-capable helper")
         }, UltraEnvironmentInstaller.Intent.ReuseRunning, UltraEnvironmentInstaller.Attachments(
-            whitelist = { error("no helper was submitted") }, backup = { null },
+            whitelist = { error("no helper was submitted") },
             prepareInstall = { "FIXTURE_PREPARATION_FAILURE" },
         ))
         assertFalse(install.ok)
@@ -267,6 +268,52 @@ class UltraStartupRegressionTest {
         f.start()
         assertNull(f.active)
         assertNull(f.store.snapshot()?.mode)
+    }
+
+    @Test fun firstAuthenticatedSafeModePublishesWithoutAStoredOrSameBootRecord() = runBlocking {
+        for (initial in listOf(null, EnvironmentSnapshot(null, false, null, "old-boot", 1))) {
+            val f = Fixture(hookReady = false, readiness = SuReadiness.NOT_USABLE,
+                initial = initial, ultraState = UltraState.FAULT)
+            f.start()
+            assertEquals(WorkMode.LITE, f.active)
+            assertEquals(BOOT, f.store.snapshot()?.bootId)
+            assertEquals("ultra:fault", f.store.snapshot()?.ultraEnvFingerprint)
+            assertEquals(false, f.store.snapshot()?.suAvailable)
+        }
+    }
+
+    @Test fun failedUltraReadDoesNotRewriteASameBootNegativeOrAnEarlierBootRecord() = runBlocking {
+        for (initial in listOf(EnvironmentSnapshot(null, false, null, BOOT, 1),
+            EnvironmentSnapshot(WorkMode.LITE, true, "ultra:fault", "old-boot", 1))) {
+            val f = Fixture(hookReady = false, readiness = SuReadiness.UNKNOWN,
+                initial = initial, ultraProbeFailed = true)
+            f.start()
+            assertNull(f.active)
+            assertEquals(initial, f.store.snapshot())
+        }
+    }
+
+    @Test fun explicitUltraAbsenceAllowsTheForeignKsuProbeToCompleteDetection() {
+        val previous = EnvironmentSnapshot(WorkMode.LITE, true, "ultra:running", BOOT, 1)
+        val store = EnvironmentStateStore(InMemoryEnvironmentStatePersistence(previous))
+        var foreignReads = 0
+        var rootReads = 0
+        val probes = object : EnvironmentProbes {
+            override fun suPresent() = false
+            override fun suReadiness() = SuReadiness.UNKNOWN
+            override fun ksuNormal(): Boolean? = null
+            override fun ultraFingerprint() = UltraEnvironmentProbe.recoveryFingerprint(
+                UltraEnvironmentProbe.State.Unknown, false, kernelChannelAbsent = true)
+            override fun foreignKsuKernel(): Boolean { foreignReads++; return true }
+            override fun rootShellAvailable(): Boolean { rootReads++; return true }
+        }
+        val result = EnvironmentResolver(probes, store).resolve(BOOT)
+        assertEquals(EnvironmentVerdict.NOT_INSTALLED, result.verdict)
+        assertNull(result.mode)
+        assertNull(store.snapshot()?.mode)
+        assertEquals(1, foreignReads)
+        assertEquals(0, rootReads)
+        assertTrue(result.probes.contains("foreignKsu"))
     }
 
     private companion object { const val BOOT = "current-boot" }

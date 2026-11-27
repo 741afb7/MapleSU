@@ -708,10 +708,7 @@ const char* get_module_eng_name() {
 }
 
 KModErr init(maplesu::sdk::InstallMode install_mode, maplesu::sdk::ExploitMethod exploit_method) {
-    //   dir_name = root_key.substr(0,16)
-    //   path_buf = "/data/%s/" % (dir_name + dir_name[0])
-    //   resetprop_path = fs::path(path_buf) / "resetprop"
-    //   if (!resetprop_path.empty()) resetprop_bin_path_ref() = resetprop_path
+    // Reuse the authenticated deployment namespace for the published resetprop tool.
     {
         char dir_path_buf[1024] = {0};
         std::string dir_name;

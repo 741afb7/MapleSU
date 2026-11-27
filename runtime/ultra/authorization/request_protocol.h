@@ -51,12 +51,11 @@
 #define MAPLESU_REQUEST_STATUS_FAULT (-14)
 #define MAPLESU_REQUEST_STATUS_UNSUPPORTED (-95)
 
-/* Explicit Manager-owner dialect of the same envelope/selector. This prefix
- * identifies a frame; it is public and never grants authority. The gateway
- * must fully validate v3 before any claim. Only an explicit valid QUERY may
- * claim as the real current caller; READ/ECHO require an existing binding.
- * Every operation then verifies the actual UID in its resident private owner.
- * A rejected v3 operation never enters the Key/v2 path. */
+/* Current-task dialect of the same envelope/selector. This public prefix
+ * identifies a frame and grants no authority. After full v3 validation, QUERY
+ * binds the real APK Manager or an already-root task with its precise lifetime.
+ * READ/ECHO require that binding. Every operation revalidates current identity
+ * and its permitted operation; a rejection never enters another dialect. */
 #define MAPLESU_OWNER_ENVELOPE_PREFIX "MapleSU:owner:v3:UID:epoch:host:0000000000000000"
 #define MAPLESU_OWNER_ENVELOPE_PREFIX_BYTES 48u
 #define MAPLESU_OWNER_PROTOCOL_VERSION 3u
@@ -69,10 +68,11 @@
  * Manager claim and is never published by any Manager QUERY descriptor. */
 #define MAPLESU_OWNER_STATE_HELPER 2u
 
-/* Management extends this same owner dialect; Key/v2 capabilities remain 7.
- * OPEN requires an already claimed Manager task. No command grants persistent
- * UID-SU or trusted-helper qualification. Every subsequent operation binds the
- * returned session, host and epoch; no unknown or uncertain operation replays. */
+/* Management uses the same current-task dialect. OPEN authenticates an existing
+ * Manager/Root binding or the native helper through its restricted service flow.
+ * Root is a separate principal and gains no Manager qualification. Each later
+ * operation binds session, host, epoch and current identity with its own scope;
+ * unknown or uncertain operations are never replayed. */
 #define MAPLESU_REQUEST_SESSION_OPEN 4u
 #define MAPLESU_REQUEST_SESSION_CLOSE 5u
 #define MAPLESU_REQUEST_ALLOC 6u

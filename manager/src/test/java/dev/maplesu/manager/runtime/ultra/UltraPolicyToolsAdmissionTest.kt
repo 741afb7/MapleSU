@@ -1,6 +1,5 @@
 package dev.maplesu.manager.runtime.ultra
 
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import java.io.File
 import java.net.URLDecoder
 import java.util.concurrent.CountDownLatch
@@ -12,10 +11,10 @@ import org.junit.Test
 
 /** Production SDK admission with fixture JNI/shell boundaries; no Android device access. */
 class UltraPolicyToolsAdmissionTest {
-    private fun client(key: () -> String?, runner: RootScriptRunner? = null): UltraRuntimeClient {
+    private fun client(current: () -> Boolean = { true }, runner: RootScriptRunner? = null): UltraRuntimeClient {
         val unsafe = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null) as sun.misc.Unsafe
         return (unsafe.allocateInstance(UltraRuntimeClient::class.java) as UltraRuntimeClient).also { c ->
-            for ((name, value) in mapOf("rootKeyProvider" to key, "rootCommands" to runner, "lock" to Any(), "identityCurrent" to { true }))
+            for ((name, value) in mapOf("rootCommands" to runner, "lock" to Any(), "identityCurrent" to current))
                 UltraRuntimeClient::class.java.getDeclaredField(name).apply { isAccessible = true }.set(c, value)
         }
     }
@@ -29,17 +28,14 @@ class UltraPolicyToolsAdmissionTest {
         printf 'MAPLESU_TOOL_LINK:resetprop resetprop 1.0\n'
     """.trimIndent()
 
-    @Test fun transientReadAdmissionDoesNotAbortRepairAndPublishesExactlyOnce() {
+    @Test fun blockedReadDoesNotDelayRepairAndPublishesExactlyOnce() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val writes = AtomicInteger()
         val admissions = AtomicInteger()
         val commands = mutableSetOf<String>()
-        val holderCalls = AtomicInteger()
-        val holder = client({ if (holderCalls.incrementAndGet() == 3) { entered.countDown(); check(release.await(10, TimeUnit.SECONDS)) }; null })
-        val credential = UltraKernelCredential.of("Aa1".repeat(16)).withMetadataDisplacement(4096)
-            .copySecret().toString(Charsets.US_ASCII)
-        val writer = client({ credential }, RootScriptRunner { script ->
+        val holder = client({ entered.countDown(); check(release.await(10, TimeUnit.SECONDS)); false })
+        val writer = client(runner = RootScriptRunner { script ->
             writes.incrementAndGet()
             val shell = listOf("/bin/sh", "C:/Program Files/Git/bin/bash.exe").first { File(it).canExecute() }
             val process = ProcessBuilder(shell, "-c", script).start()
@@ -53,12 +49,13 @@ class UltraPolicyToolsAdmissionTest {
             val failure = UltraPolicyBackendDeployment.prepareTools(reports, { script ->
                 admissions.incrementAndGet()
                 commands += script
-                writer.runRootCommand(script).also { if (it.sdkError == "MAPLESU_SDK_BUSY") release.countDown() }
+                writer.runRootCommand(script)
             }, ::decode)
-            pending.get(2, TimeUnit.SECONDS)
-            assertNull("Transient unsubmitted SDK admission aborted an explicit environment repair", failure)
+            release.countDown()
+            assertEquals("SDK_IDENTITY_SCOPE_CHANGED", pending.get(2, TimeUnit.SECONDS).sdkError)
+            assertNull("A blocked unrelated read aborted an explicit environment repair", failure)
             assertEquals("The publication script must execute exactly once", 1, writes.get())
-            assertEquals("Only the proven unsubmitted admission may be retried", 2, admissions.get())
+            assertEquals("An unrelated read must not create a global admission conflict", 1, admissions.get())
             assertEquals("Admission must retain the same command receipt", 1, commands.size)
         } finally {
             release.countDown(); worker.shutdownNow(); worker.awaitTermination(3, TimeUnit.SECONDS)

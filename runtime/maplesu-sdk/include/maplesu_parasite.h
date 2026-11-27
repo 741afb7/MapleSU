@@ -24,11 +24,11 @@ constexpr ParasiteError PARASITE_RECOVERY_MISSING = -31001;
 constexpr ParasiteError PARASITE_CONFLICT = -31002;
 
 __attribute__((visibility("default"))) ParasiteError parasite_precheck_app_with_cb(
-    const char* root_key, const char* target_pid_cmdline,
+    const char* target_pid_cmdline,
     void (*callback)(const char*, AppDynlibStatus));
 __attribute__((visibility("default"))) ParasiteError parasite_implant_app(
-    const char* root_key, const char* target_pid_cmdline, const char* original_so_full_path);
+    const char* target_pid_cmdline, const char* original_so_full_path);
 __attribute__((visibility("default"))) ParasiteError parasite_implant_su_env(
-    const char* root_key, const char* target_pid_cmdline, const char* original_so_full_path,
+    const char* target_pid_cmdline, const char* original_so_full_path,
     const char* su_dir_path);
 }

@@ -421,8 +421,11 @@
     <string name="module_operation_interrupted">上次模块操作未返回结果，请先刷新模块列表</string>
     <!-- 5.0.5 Ultra 环境升级卡：可升级显示 from → to；身份读不到时只说「待确认」。 -->
     <string name="ultra_env_update_available_from_to">发现 Ultra 环境更新：%1$s → %2$s，点击升级！</string>
-    <string name="ultra_env_update_unverified">无法确认已安装的 Ultra 环境构建。点击升级到 %1$s：会覆盖安装并写入可验证的构建身份。</string>
-    <string name="ultra_env_update_unverified_confirm">将重新安装 %1$s 覆盖当前环境，以写入可验证的构建身份。\n\n成功后设备会在几秒内自动重启，请先保存工作。</string>
+    <string name="ultra_env_update_unverified">当前运行 %1$s，更新状态待确认。点击升级工作环境。</string>
+    <string name="ultra_env_update_unverified_confirm">升级到 %1$s，保留授权和模块数据，完成后将自动重启设备，请先保存工作。</string>
+    <string name="ultra_env_update_title">环境更新</string>
+    <string name="ultra_env_update_check_none">未发现已确认的环境更新。</string>
+    <string name="ultra_env_update_check_failed">环境更新检查未完成，点击重试。</string>
 
     <string name="work_mode_images_title">选择启动镜像</string>
     <string name="work_mode_images_normal">未找到可用备份，请选择 boot，修补并安装 Normal。</string>

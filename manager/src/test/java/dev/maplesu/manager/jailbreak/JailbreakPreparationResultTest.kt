@@ -40,6 +40,13 @@ class JailbreakPreparationResultTest {
         assertNotNull(preparedJailbreakOutcome(request, status().copy(rootBackend = JailbreakRequest.BACKEND_KSU)).failure)
     }
 
+    @Test fun automaticSelectionKeepsTheObservedBackend() {
+        val automatic = request.copy(rootBackend = null)
+        for (backend in listOf(null, JailbreakRequest.BACKEND_IR, JailbreakRequest.BACKEND_KSU)) {
+            assertNull(preparedJailbreakOutcome(automatic, status().copy(rootBackend = backend)).failure)
+        }
+    }
+
     @Test fun successInvalidatesBeforeSchedulingDetection() {
         val events = mutableListOf<String>()
         val result = preparedJailbreakOutcome(request, status())

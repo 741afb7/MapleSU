@@ -16,7 +16,6 @@ import org.junit.Test
 class UltraKernelCrossReleaseFlowTest {
     private val sample = File("../Boot_Research/簌/boot.img")
     private val assets = UltraKernelFileAssets(File("src/main/assets"))
-    private val credential = UltraKernelCredential.of("Aa1".repeat(16))
     private val workspaces = ArrayList<File>()
 
     @After
@@ -38,62 +37,58 @@ class UltraKernelCrossReleaseFlowTest {
         val selection = requireNotNull(flow.selectForRelease(flow.releaseOf(sample)))
         assertTrue(selection.usable.all { !flow.inspect(sample, it).pristine })
 
-        val preparation = flow.prepare(sample, credential)
+        val preparation = flow.prepare(sample)
         assertFalse(preparation.alreadyInstalled)
         assertTrue(preparation.generated)
         assertEquals("EXPERIMENTAL", preparation.supportLevel)
-        assertEquals("16/16", preparation.siteMatch)
-        assertEquals(flow.generatePlan(sample, credential).credential, preparation.credential)
+        assertEquals(flow.generatePlan(sample).evidence?.summary, preparation.siteMatch)
+        assertTrue(flow.generatePlan(sample).credential == null)
         val candidate = requireNotNull(preparation.candidate)
         assertEquals(sample.length(), candidate.image.length())
         assertEquals(flow.releaseOf(sample), candidate.kernelRelease)
         assertEquals(candidate.bootSha256, BootImageInspector.inspect(candidate.image).sha256)
-        assertEquals(flow.generatePlan(sample, credential).derived?.patchedKernelSha256,
+        assertEquals(flow.generatePlan(sample).derived?.patchedKernelSha256,
             candidate.kernelSha256)
         assertEquals(before, UltraKernelSpec.sha256(sample))
     }
 
     @Test
-    fun aPinnedK22CandidateUsesThePreparedDeviceIdentity() {
+    fun aPinnedK22SelectionUsesCurrentKeylessGeneration() {
         val (flow, selection) = pinnedFixture()
-        var reads = 0
-        val prepared = flow.prepare(sample, selection, { reads++; credential }) {}
-        assertEquals(1, reads)
-        assertEquals(flow.generatePlan(sample, credential).credential, prepared.credential)
+        val prepared = flow.prepare(sample, selection) {}
+        assertTrue(flow.generatePlan(sample).credential == null)
         assertTrue(prepared.generated)
         val candidate = requireNotNull(prepared.candidate)
         assertEquals(candidate.bootSha256, BootImageInspector.inspect(candidate.image).sha256)
-        val again = flow.prepare(candidate.image, selection, { credential }) {}
+        val again = flow.prepare(candidate.image, selection) {}
         assertTrue(again.alreadyInstalled)
-        assertEquals(prepared.credential, again.credential)
+        assertTrue(flow.generatePlan(candidate.image).credential == null)
     }
 
     @Test
-    fun aPinnedK22DigestFailureDoesNotPrepareAnotherIdentity() {
+    fun explicitPinnedBuildKeepsItsOutputDigestFailure() {
         val (flow, selection) = pinnedFixture()
         val asset = (selection.primary as UltraKernelReleaseAsset).copy(expectedKernelSha256 = "0".repeat(64))
         assertThrows(IllegalStateException::class.java) {
-            flow.prepare(sample, selection.copy(usable = listOf(asset)), {
-                error("invalid pinned output must fail before identity generation")
-            }) {}
+            flow.build(sample, asset)
         }
     }
 
     @Test
-    fun aPreparedIdentityFailureNeverFallsBackToAnotherAssetsKey() {
+    fun aPreparationCallbackFailureNeverFallsBackToAnotherAsset() {
         val (flow, selection) = pinnedFixture()
         val fallback = (selection.primary as UltraKernelReleaseAsset).copy(id = "k21")
         val failure = assertThrows(IllegalStateException::class.java) {
-            flow.prepare(sample, selection.copy(usable = selection.usable + fallback), {
-                error("ULTRA_KERNEL_CREDENTIAL_STORE_FAILED")
-            }) {}
+            flow.prepare(sample, selection.copy(usable = selection.usable + fallback)) {
+                error("fixture-preparation-notice-failed")
+            }
         }
-        assertEquals("ULTRA_KERNEL_CREDENTIAL_STORE_FAILED", failure.message)
+        assertEquals("fixture-preparation-notice-failed", failure.message)
     }
 
     private fun pinnedFixture(): Pair<UltraKernelFlow, UltraKernelSelection> {
         val base = flow()
-        val plan = base.generatePlan(sample, UltraKernelCredential.of("Bb2".repeat(16)))
+        val plan = base.generatePlan(sample)
         val spec = plan.specText(plan.credential).toByteArray()
         val report = BootImageInspector.inspect(sample)
         val source = object : UltraKernelAssetSource by assets {
@@ -113,12 +108,14 @@ class UltraKernelCrossReleaseFlowTest {
     }
 
     @Test
-    fun missingCredentialReportsTheActualGenerationPrerequisite() {
+    fun defaultGenerationHasNoCredentialPrerequisiteAndKeepsInput() {
         val flow = flow()
-        val failure = assertThrows(UltraKernelCredentialRequiredException::class.java) {
-            flow.prepare(sample, null as UltraKernelCredential?)
-        }
-        assertTrue(failure.message.orEmpty().startsWith("ULTRA_KERNEL_CREDENTIAL_REQUIRED:"))
+        val before = sample.readBytes()
+        val prepared = flow.prepare(sample)
+        assertTrue(prepared.generated)
+        assertNotNull(prepared.candidate)
+        assertTrue(flow.generatePlan(sample).credential == null)
+        org.junit.Assert.assertArrayEquals(before, sample.readBytes())
     }
 
     @Test
@@ -126,9 +123,9 @@ class UltraKernelCrossReleaseFlowTest {
         val flow = flow()
         val selection = requireNotNull(flow.selectForRelease(flow.releaseOf(sample)))
         val failure = assertThrows(IllegalStateException::class.java) {
-            flow.prepare(sample, selection) {}
+            flow.prepare(sample, selection.copy(usable = selection.usable.filter { it.id == "k21" })) {}
         }
-        assertTrue(failure.message.orEmpty().startsWith("ULTRA_KERNEL_ALL_VARIANTS_FAILED:"))
+        assertEquals("ULTRA_KERNEL_LEGACY_ASSET_READ_ONLY", failure.message)
         assertNotNull(selection.usable.firstOrNull { it.id == "k22" })
     }
 
@@ -137,14 +134,10 @@ class UltraKernelCrossReleaseFlowTest {
         val flow = flow()
         val selection = requireNotNull(flow.selectForRelease(flow.releaseOf(sample)))
         val chosen = selection.copy(usable = selection.usable.filter { it.id == "k22" })
-        var credentialReads = 0
-        val preparation = flow.prepare(sample, chosen, {
-            credentialReads++
-            credential
-        }) {}
+        val preparation = flow.prepare(sample, chosen) {}
         assertTrue(preparation.generated)
         assertNotNull(preparation.candidate)
-        assertEquals(1, credentialReads)
+        assertTrue(flow.generatePlan(sample).slots == null)
     }
 
     @Test
@@ -153,9 +146,9 @@ class UltraKernelCrossReleaseFlowTest {
         val selection = requireNotNull(flow.selectForRelease(flow.releaseOf(sample)))
         val chosen = selection.copy(usable = selection.usable.filter { it.id == "k21" })
         val failure = assertThrows(IllegalStateException::class.java) {
-            flow.prepare(sample, chosen, { error("k21 must not request a k22 credential") }) {}
+            flow.prepare(sample, chosen) {}
         }
-        assertTrue(failure.message.orEmpty().startsWith("ULTRA_KERNEL_ALL_VARIANTS_FAILED:"))
+        assertEquals("ULTRA_KERNEL_LEGACY_ASSET_READ_ONLY", failure.message)
     }
 
     @Test
@@ -165,25 +158,25 @@ class UltraKernelCrossReleaseFlowTest {
             rejected = listOf("fixture:ULTRA_KERNEL_SPEC_DIGEST_MISMATCH"),
         )
         val notices = ArrayList<String>()
-        val preparation = flow.prepare(sample, selection, { credential }, notices::add)
+        val preparation = flow.prepare(sample, selection, notices::add)
         assertTrue(preparation.generated)
         assertNotNull(preparation.candidate)
-        assertEquals(flow.generatePlan(sample, credential).credential, preparation.credential)
-        assertTrue(notices.any { it.contains("fixture:ULTRA_KERNEL_SPEC_DIGEST_MISMATCH") })
+        assertTrue(flow.generatePlan(sample).credential == null)
+        // The public prepare(selection) boundary chooses the current generator;
+        // stale catalog rejection records do not become generated output facts.
+        assertTrue(notices.any { it.contains(flow.releaseOf(sample)) })
     }
 
     @Test
-    fun aRejectedSiblingDoesNotSkipPinnedK22IdentityBinding() {
+    fun aRejectedSiblingDoesNotChangeKeylessIdentityOnRetry() {
         val (flow, selected) = pinnedFixture()
         val selection = selected.copy(rejected = listOf("fixture:ULTRA_KERNEL_SPEC_DIGEST_MISMATCH"))
-        var reads = 0
-        val preparation = flow.prepare(sample, selection, { reads++; credential }) {}
-        assertEquals(1, reads)
+        val preparation = flow.prepare(sample, selection) {}
         assertTrue(preparation.generated)
-        assertEquals(flow.generatePlan(sample, credential).credential, preparation.credential)
+        assertTrue(flow.generatePlan(sample).credential == null)
         val candidate = requireNotNull(preparation.candidate)
-        val again = flow.prepare(candidate.image, selection, { credential }) {}
+        val again = flow.prepare(candidate.image, selection) {}
         assertTrue(again.alreadyInstalled)
-        assertEquals(preparation.credential, again.credential)
+        assertTrue(flow.generatePlan(candidate.image).credential == null)
     }
 }

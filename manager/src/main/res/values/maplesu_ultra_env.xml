@@ -3,15 +3,15 @@
 <resources>
     <string name="ultra_env_update_running">Upgrading Ultra environment</string>
     <string name="ultra_env_update_complete">Ultra environment updated. Restart to apply.</string>
-    <string name="ultra_env_update_pending_restart">An environment update was already submitted. Restart before trying again (ULTRA_ENV_UPGRADE_REBOOT_REQUIRED).</string>
-    <string name="ultra_env_update_interrupted">The environment update was interrupted. Restart and check its status (ULTRA_ENV_UPGRADE_INTERRUPTED).</string>
-    <string name="ultra_env_build_update_available">Environment build update available for %1$s. Tap to update.</string>
-    <string name="ultra_env_build_update_confirm">Update the environment build of %1$s. The version number stays the same. Restart is required for the update to take effect.</string>
+    <string name="ultra_env_update_pending_restart">Restart the device to finish the update.</string>
+    <string name="ultra_env_update_interrupted">The update was interrupted. Restart the device and try again.</string>
+    <string name="ultra_env_build_update_available">Update available for %1$s. Tap to upgrade.</string>
+    <string name="ultra_env_build_update_confirm">Update %1$s, retain authorizations and module data, and restart the device.</string>
     <string name="ultra_env_update_available">Ultra environment update found: %1$s. Tap to upgrade!</string>
-    <string name="ultra_env_update_busy">Preparing and upgrading the Ultra environment to %1$s. Do not power off.</string>
-    <string name="ultra_env_update_rebooting">Upgrade to %1$s submitted. Restart, then verify the installed version.</string>
+    <string name="ultra_env_update_busy">Upgrading to %1$s. Do not power off.</string>
+    <string name="ultra_env_update_rebooting">Restart the device to finish upgrading to %1$s.</string>
     <string name="ultra_env_update_confirm_title">Upgrade Ultra environment</string>
-    <string name="ultra_env_update_confirm_message">Upgrade from %1$s to %2$s.\n\nThis installs over the current environment. The device restarts a few seconds after it succeeds, so save your work first.</string>
+    <string name="ultra_env_update_confirm_message">Upgrade from %1$s to %2$s and retain authorizations and module data. The device will restart afterward; save your work first.</string>
     <string name="ultra_env_update_confirm">Upgrade</string>
     <string name="ultra_env_update_failed">Upgrade did not finish. Try again later.</string>
     <string name="ultra_env_update_refused">The environment changed. Upgrade is unavailable right now.</string>

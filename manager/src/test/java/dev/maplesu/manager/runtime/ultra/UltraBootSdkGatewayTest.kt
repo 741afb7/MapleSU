@@ -1,6 +1,5 @@
 package dev.maplesu.manager.runtime.ultra
 
-import dev.maplesu.manager.ultrakernel.UltraKernelCredential
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -8,12 +7,11 @@ import org.junit.Test
 class UltraBootSdkGatewayTest {
     private val boot = "11111111-2222-4333-8444-555555555555"
     private val base = "0xffff800000000000"
-    private val key = UltraKernelCredential.of("Aa1".repeat(16)).withMetadataDisplacement(4096)
-        .copySecret().toString(Charsets.US_ASCII)
-    private fun ready(capabilities: Int = 7) = UltraBootSdkGateway.Receipt(boot, 1, 0, capabilities, base, key)
-    private fun empty() = UltraBootSdkGateway.Receipt(boot, 0, 0, 0, "0x0000000000000000", "")
+    private val diagnostic = "untrusted-output"
+    private fun ready(capabilities: Int = 7) = UltraBootSdkGateway.Receipt(boot, 1, 0, capabilities, base)
+    private fun empty() = UltraBootSdkGateway.Receipt(boot, 0, 0, 0, "0x0000000000000000")
     private fun json() = JSONObject().put("v", 1).put("bootId", boot).put("state", 1)
-        .put("error", 0).put("capabilities", 7).put("kernelBase", base).put("key", key)
+        .put("error", 0).put("capabilities", 7).put("kernelBase", base)
     private fun parse(record: JSONObject) = UltraBootSdkGateway.parse("MAPLESU_BOOT_SDK:$record", boot)
 
     private inner class Port : UltraBootSdkGateway.Port {
@@ -97,7 +95,7 @@ class UltraBootSdkGatewayTest {
         }
         assertEquals("BOOT_SDK_DYNAMIC_CONFIG:-95", port.run().reason)
         assertEquals(1, port.submissions)
-        port.receipt = UltraBootSdkGateway.Receipt(boot, 2, 0, 0, "0x0000000000000000", "")
+        port.receipt = UltraBootSdkGateway.Receipt(boot, 2, 0, 0, "0x0000000000000000")
         assertEquals("SDK_BOOTSTRAP_RECONCILIATION_REQUIRED", port.run().reason)
         assertEquals(1, port.submissions)
         port.receipt = empty()
@@ -119,7 +117,7 @@ class UltraBootSdkGatewayTest {
 
     @Test fun bootstrapFailureDiagnosticsContainOnlyTheStageAndNumericExit() {
         assertEquals("BOOT_SDK_ABI:prepare_creds", UltraBootSdkGateway.commandFailure(1,
-            "BOOT_SDK_ABI:prepare_creds\n$base $key"))
+            "BOOT_SDK_ABI:prepare_creds\n$base $diagnostic"))
         assertEquals("MODULE_POLICY_LAYOUT_ABI_MISSING:vmalloc", UltraBootSdkGateway.commandFailure(1,
             "{\"event\":\"result\",\"status\":\"error\",\"message\":\"MODULE_POLICY_LAYOUT_ABI_MISSING:vmalloc\"}"))
         assertEquals("BOOT_SDK_DYNAMIC_CONFIG:-95", UltraBootSdkGateway.commandFailure(1,
@@ -133,7 +131,7 @@ class UltraBootSdkGatewayTest {
         assertEquals("BOOT_SDK_CONFIG_PROBE:-22", UltraBootSdkGateway.commandFailure(1,
             "BOOT_SDK_CONFIG_PROBE:-22"))
         assertEquals("SDK_BOOTSTRAP_COMMAND_FAILED:124", UltraBootSdkGateway.commandFailure(124,
-            "$base $key"))
+            "$base $diagnostic"))
     }
 
     @Test fun aMissingReplyAfterSubmissionKeepsTheDurableGuard() {
@@ -157,7 +155,7 @@ class UltraBootSdkGatewayTest {
             val port = Port().apply {
                 guardStored = true
                 receipt = UltraBootSdkGateway.Receipt(boot, state, if (state == 3) -12 else 0,
-                    0, "0x0000000000000000", "")
+                    0, "0x0000000000000000")
             }
             assertFalse(port.run().bound)
             assertEquals(0, port.submissions)
@@ -198,7 +196,7 @@ class UltraBootSdkGatewayTest {
         assertTrue(basic.ready)
         assertFalse(basic.environment)
         assertTrue(requireNotNull(parse(json())).environment)
-        assertFalse(basic.toString().contains(key))
+        assertFalse(basic.toString().contains(diagnostic))
         assertFalse(basic.toString().contains(base))
     }
 
@@ -210,7 +208,7 @@ class UltraBootSdkGatewayTest {
         assertNull(UltraBootSdkGateway.parse("MAPLESU_BOOT_SDK:{}", boot))
         for (record in listOf(json().put("v", 2), json().put("state", 4), json().put("capabilities", 15),
             json().put("capabilities", 4), json().put("kernelBase", "0x1234"),
-            json().put("key", "Aa1".repeat(16)), json().put("state", 3).put("error", -12))) {
+            json().put("state", 3).put("error", -12))) {
             assertNull(parse(record))
         }
     }

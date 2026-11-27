@@ -281,7 +281,7 @@ object SuperuserMirrors {
         val catalog by lazy {
             if (!current()) null else {
                 val result = dev.maplesu.manager.litehidden.UltraEnvRootRunner(
-                    activeScope?.client ?: dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.client(context),
+                    activeScope?.client ?: dev.maplesu.manager.runtime.ultra.UltraRuntimeClient(),
                 ).run("pm list packages -U --user all")
                 if (current() && result.code == 0)
                     dev.maplesu.manager.liteweb.daemon.DaemonSuPackageCatalog.parse(result.output)
@@ -303,7 +303,7 @@ object SuperuserMirrors {
             }
             override fun reconcileUidMapping(): Boolean {
                 if (!current()) return false
-                val client = activeScope?.client ?: dev.maplesu.manager.runtime.ultra.UltraSdkCredentials.client(context)
+                val client = activeScope?.client ?: dev.maplesu.manager.runtime.ultra.UltraRuntimeClient()
                 val observed = client.suUidProfiles()
                 if (!current() || observed.receipt.sdkErrorCode != -21001) return false
                 val receipt = client.refreshSuAuthList()
