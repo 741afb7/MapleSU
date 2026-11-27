@@ -209,6 +209,7 @@ internal object UltraKernelResidentAbi {
                         // The actual void probestub is a probe type source;
                         // the int-returning trace iterator is never substituted.
                         UltraKernelBtf.functionSignature(kernel, symbols, "__probestub_$key")?.let { "*$it" }
+                            ?: UltraKernelBtf.tracepointCallbackSignature(kernel, symbols, key)
                     } else {
                         require(registered != null && registered == unregistered) {
                             "ULTRA_KERNEL_MANAGEMENT_TRACE_REGISTER_PAIR:$key"

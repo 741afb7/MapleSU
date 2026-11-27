@@ -148,6 +148,9 @@ internal object UltraKernelBtf {
         readAbi(kernel, symbols) { managementCallbackTypeids(symbols, callbacks, origins) }
             ?: error("ULTRA_KERNEL_MANAGEMENT_ABI_BTF_REQUIRED")
 
+    fun tracepointCallbackSignature(kernel: ByteArray, symbols: UltraKernelSymbols, key: String): String? =
+        readAbi(kernel, symbols) { tracepointCallbackSignature(symbols, key) }
+
     fun sessionCallbackTypeids(kernel: ByteArray, symbols: UltraKernelSymbols,
         callbacks: Map<String, String>): Map<String, Set<Int>> =
         readAbi(kernel, symbols) { sessionCallbackTypeids(symbols, callbacks) }
@@ -992,6 +995,122 @@ internal object UltraKernelBtf {
             return result
         }
 
+        private data class TracepointCallback(val signature: String, val entry: Int, val end: Int,
+            val funcsAddress: Int, val fields: Map<String, UltraKernelLayoutField>)
+
+        private fun tracepointCallback(symbols: UltraKernelSymbols, key: String): TracepointCallback {
+            requireBtf(symbols is UltraKernelKallsymsTable && key in setOf("sched_process_exec", "sched_process_exit"),
+                "TRACE_CALLBACK_SOURCE:$key")
+            fun unique(name: String) = symbols.memoryOffsetsOf(name).distinct().singleOrNull()
+                ?: throw Invalid("TRACE_CALLBACK_SYMBOL:$name")
+            val expected = typedefSignature("btf_trace_$key") ?: throw Invalid("TRACE_CALLBACK_TYPE_MISSING:$key")
+            requireBtf(expected.startsWith("*fv(") &&
+                functionSignature("__traceiter_$key") == "fi4:16777248" + expected.substring(3),
+                "TRACE_CALLBACK_PROTOTYPE:$key")
+            val fields = abi(setOf("tracepoint.__size", "tracepoint.name", "tracepoint.iterator", "tracepoint.funcs",
+                "tracepoint_func.__size", "tracepoint_func.func", "tracepoint_func.data"), emptySet()).fields
+            val pointerFields = listOf("tracepoint.name", "tracepoint.iterator", "tracepoint.funcs",
+                "tracepoint_func.func", "tracepoint_func.data").map(fields::getValue)
+            requireBtf(pointerFields.all { it.widthBytes == 8 && it.offsetBytes % 8 == 0 } &&
+                pointerFields.take(3).map { it.offsetBytes }.distinct().size == 3 &&
+                pointerFields.drop(3).map { it.offsetBytes }.distinct().size == 2, "TRACE_CALLBACK_FIELDS:$key")
+            val point = unique("__tracepoint_$key"); val entry = unique("__traceiter_$key")
+            val end = symbols.nextOffset(entry) ?: throw Invalid("TRACE_CALLBACK_EXTENT:$key")
+            val pointEnd = symbols.nextOffset(point) ?: throw Invalid("TRACE_CALLBACK_OBJECT_EXTENT:$key")
+            requireBtf(point >= unique("_data") && point % 8 == 0 &&
+                point.toLong() + fields.getValue("tracepoint.__size").widthBytes <= pointEnd &&
+                pointEnd <= unique("_edata") && unique("_edata") <= data.size &&
+                entry >= unique("_stext") + 4 && entry % 4 == 0 && end > entry &&
+                end <= unique("_etext") && end <= data.size && end - entry <= 65536 &&
+                symbols.nameAt(point) == "__tracepoint_$key" && symbols.nameAt(entry) == "__traceiter_$key",
+                "TRACE_CALLBACK_BOUNDS:$key")
+            fun pointer(field: String): Long = java.nio.ByteBuffer.wrap(data, point + fields.getValue(field).offsetBytes, 8)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN).long
+            val raw = symbols as UltraKernelKallsymsTable
+            requireBtf(pointer("tracepoint.iterator") - raw.textBase == entry.toLong(), "TRACE_CALLBACK_ITERATOR:$key")
+            val nameAt = pointer("tracepoint.name") - raw.textBase
+            requireBtf(nameAt >= 0 && nameAt + key.length + 1 <= data.size &&
+                key.toByteArray(Charsets.US_ASCII).indices.all { data[nameAt.toInt() + it] == key[it].code.toByte() } &&
+                data[nameAt.toInt() + key.length] == 0.toByte(), "TRACE_CALLBACK_NAME:$key")
+            return TracepointCallback(expected, entry, end, point + fields.getValue("tracepoint.funcs").offsetBytes, fields)
+        }
+
+        fun tracepointCallbackSignature(symbols: UltraKernelSymbols, key: String): String =
+            tracepointCallback(symbols, key).signature
+
+        /** A narrow native loop proof; a matching typedef alone does not anchor a callsite. */
+        private fun tracepointCallbackTypeid(symbols: UltraKernelKallsymsTable, key: String, expected: String): Int {
+            val trace = tracepointCallback(symbols, key)
+            requireBtf(trace.signature == expected, "TRACE_CALLBACK_TYPE:$key")
+            fun word(at: Int) = UltraKernelA64.le32Bits(data, at)
+            fun branch(at: Int) = at + UltraKernelA64.signExtend(((word(at) ushr 5) and 0x7ffff).toLong(), 19).toInt() * 4
+            val addresses = (trace.entry until trace.end - 4 step 4).filter { at ->
+                val a = word(at); val b = word(at + 4); val base = a and 31
+                if (!UltraKernelA64.isAdrp(a) || b and 0xffc00000.toInt() != 0xf9400000.toInt() ||
+                    b ushr 5 and 31 != base) false else {
+                    val immediate = (((a ushr 5) and 0x7ffff).toLong() shl 2) or ((a ushr 29) and 3).toLong()
+                    (at.toLong() and -4096L) + (UltraKernelA64.signExtend(immediate, 21) shl 12) +
+                        ((b ushr 10) and 4095) * 8 == trace.funcsAddress.toLong()
+                }
+            }
+            requireBtf(addresses.size == 1, "TRACE_CALLBACK_FUNCS_ADDRESS:$key")
+            val first = addresses.single(); val node = word(first + 4) and 31
+            val calls = (trace.entry until trace.end step 4).filter {
+                word(it) and 0xfffffc1f.toInt() == 0xd63f0000.toInt()
+            }
+            requireBtf(calls.size == 1, "TRACE_CALLBACK_CALL_UNIQUE:$key")
+            val call = calls.single(); val fn = word(call) ushr 5 and 31
+            requireBtf(node in 19..28 && fn in 3..15 && first + 12 <= call - 24 && call + 12 < trace.end &&
+                word(first + 8) and 0xff00001f.toInt() == 0xb4000000.toInt() or node,
+                "TRACE_CALLBACK_LIST:$key")
+            for (at in trace.entry until first step 4) {
+                val value = word(at)
+                requireBtf(value in setOf(0xd503233f.toInt(), 0xd503245f.toInt(), 0xd503201f.toInt(), 0x910003fd.toInt()) ||
+                    value and 0x3a400000 == 0x28000000 && value ushr 30 == 2 && value ushr 5 and 31 == 31 &&
+                    value and 31 in 19..30 && value ushr 10 and 31 in 19..30, "TRACE_CALLBACK_PREFIX:$key")
+            }
+            val prototypes = named.getValue("btf_trace_$key").filter { type(it).kind == 8 }.map {
+                val pointer = type(resolved(it))
+                requireBtf(pointer.kind == 2, "TRACE_CALLBACK_POINTER:$key")
+                type(resolved(pointer.value))
+            }.distinct()
+            requireBtf(prototypes.size == 1 && prototypes.single().kind == 13, "TRACE_CALLBACK_PROTOTYPE:$key")
+            val prototype = prototypes.single()
+            val widths = (0 until prototype.count).map { size(u32(prototype.extra + it * 8 + 4)).toInt() }
+            requireBtf(widths.size in 2..8 && widths.first() == 8 && widths.all { it in setOf(4, 8) },
+                "TRACE_CALLBACK_ARGUMENT_WIDTH:$key")
+            fun move(to: Int, from: Int, width: Int) = (if (width == 8) 0xaa0003e0.toInt() else 0x2a0003e0) or (from shl 16) or to
+            val saves = linkedMapOf<Int, Int>()
+            for (index in 1 until widths.size) {
+                val at = first + 8 + index * 4; val value = word(at); val source = value ushr 16 and 31; val target = value and 31
+                requireBtf(source in 1 until widths.size && target in 19..28 && target != node &&
+                    source !in saves && target !in saves.values && value == move(target, source, widths[source]),
+                    "TRACE_CALLBACK_ARGUMENT_SAVE:$key")
+                saves[source] = target
+            }
+            val loop = first + 8 + widths.size * 4
+            val callback = trace.fields.getValue("tracepoint_func.func"); val opaque = trace.fields.getValue("tracepoint_func.data")
+            fun load(at: Int, target: Int, offset: Int) = offset >= 0 && offset % 8 == 0 && offset / 8 <= 4095 &&
+                word(at) == 0xf9400000.toInt() or ((offset / 8) shl 10) or (node shl 5) or target
+            requireBtf(loop + (widths.size + 1) * 4 == call - 24 && load(loop, fn, callback.offsetBytes),
+                "TRACE_CALLBACK_FUNCTION_LOAD:$key")
+            val restored = linkedSetOf<Int>()
+            for (at in loop + 4 until call - 24 step 4) {
+                val value = word(at); val target = value and 31
+                requireBtf(target in widths.indices && restored.add(target) &&
+                    if (target == 0) load(at, 0, opaque.offsetBytes)
+                    else value == move(target, saves.getValue(target), widths[target]), "TRACE_CALLBACK_ARGUMENT_RESTORE:$key")
+            }
+            val stride = trace.fields.getValue("tracepoint_func.__size").widthBytes
+            requireBtf(restored == widths.indices.toSet() && stride in 16..255 && stride % 8 == 0 &&
+                word(call + 4) == 0xf8400c00.toInt() or (stride shl 12) or (node shl 5) or fn &&
+                word(call + 8) and 0xff00001f.toInt() == 0xb5000000.toInt() or fn &&
+                branch(call + 8) == loop && branch(first + 8) == call + 12 && word(call + 12) == 0x2a1f03e0,
+                "TRACE_CALLBACK_LOOP:$key")
+            return sessionCallTypeid(call, fn) ?: throw Invalid("TRACE_CALLBACK_GUARD:$key")
+        }
+
+
         fun managementCallbackTypeids(symbols: UltraKernelKallsymsTable,
             callbacks: Map<String, String>, origins: Map<String, UltraKernelResidentAbi.CallbackOrigin>): Map<String, Set<Int>> {
             fun boundary(name: String) = symbols.memoryOffsetsOf(name).singleOrNull()
@@ -1019,6 +1138,7 @@ internal object UltraKernelBtf {
                     "tracepoint" -> {
                         val stub = "__probestub_$key"
                         for (entry in symbols.offsetsOf(stub)) ids += nativeTypeid(entry, expected, key)
+                        if (symbols.offsetsOf(stub).isEmpty()) ids += tracepointCallbackTypeid(symbols, key, expected)
                     }
                     "work" -> {
                         val layout = abi(setOf("work_struct.func", "work_struct.__size"), emptySet()).fields

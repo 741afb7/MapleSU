@@ -8,8 +8,10 @@ static unsigned long msu_page_start(msu_loader_u32 offset, unsigned long mask)
     return offset & ~mask;
 }
 
-/* Resident v2 only, after materialization validates the immutable section
- * table. Every resident entry is checked; failures return to bootstrap cleanup. */
+/* After materialization validates the immutable section table. Every resident
+ * entry is checked; failures return to bootstrap cleanup. Anchor v4 addresses a
+ * 56-byte deployment binding whose resident object is its first field, while
+ * v2/v3 address the resident binding directly. */
 int msu_manager_claim_permissions(const struct msu_manager_claim_anchor *a,
     const struct msu_loader_header *h, void *memory, int pages)
 {
@@ -24,7 +26,14 @@ int msu_manager_claim_permissions(const struct msu_manager_claim_anchor *a,
     int error;
     s = (const void *)(h + 1);
     {
-        const struct msu_resident_binding *resident = (const void *)(image + a->reserved[0]);
+        const struct msu_resident_binding *resident;
+        if (a->version == MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION) {
+            const struct msu_resident_deployment_binding *binding =
+                (const void *)(image + a->reserved[0]);
+            resident = &binding->resident;
+        } else {
+            resident = (const void *)(image + a->reserved[0]);
+        }
         const msu_loader_u32 entries[] = { resident->init_offset, resident->discard_offset, resident->dispatch_offset };
         for (j = 0; j < sizeof(entries) / sizeof(entries[0]); ++j) {
             int found = 0;
