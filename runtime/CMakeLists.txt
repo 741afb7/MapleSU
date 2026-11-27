@@ -73,6 +73,22 @@ set_target_properties(maplesu_ultra_sdk PROPERTIES
     IMPORTED_LOCATION "${MAPLESU_ULTRA_SDK_DIRECTORY}/lib/arm64-v8a/libkernel_module_kit_static.a"
     INTERFACE_INCLUDE_DIRECTORIES "${MAPLESU_ULTRA_SDK_DIRECTORY}/include")
 
+# The retained SDK archive predates two source-owned public entry points used by
+# the Manager probes. Build only those source translation units here and keep the
+# archive as the provider for their remaining implementation dependencies. This
+# is intentionally a Manager-runtime supplement, not a replacement SDK delivery.
+add_library(maplesu_sdk_source_exports STATIC
+    maplesu-sdk/sdk/src/maplesu/install/bootstrap_state.cpp
+    maplesu-sdk/sdk/src/maplesu/module/api.cpp)
+target_compile_features(maplesu_sdk_source_exports PRIVATE cxx_std_20)
+target_compile_options(maplesu_sdk_source_exports PRIVATE
+    -fexceptions -ffunction-sections -fdata-sections -fvisibility=hidden
+    -D_FORTIFY_SOURCE=2)
+target_include_directories(maplesu_sdk_source_exports PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/maplesu-sdk/sdk/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/maplesu-sdk/sdk/src"
+    "${MAPLESU_ULTRA_SDK_DIRECTORY}/include")
+
 # Candidate boot backend. Keep it outside packaging until the synchronous SDK
 # entry and real-device kernel-hook acceptance are complete.
 add_library(maplesu_policy_boot SHARED EXCLUDE_FROM_ALL
@@ -201,7 +217,7 @@ set(MAPLESU_PARASITE_SYMBOLS
 foreach(symbol IN LISTS MAPLESU_PARASITE_SYMBOLS)
     target_link_options(maplesu_ultra_bridge PRIVATE "-Wl,--undefined=${symbol}")
 endforeach()
-target_link_libraries(maplesu_ultra_bridge PRIVATE maplesu_ultra_sdk z log dl)
+target_link_libraries(maplesu_ultra_bridge PRIVATE maplesu_sdk_source_exports maplesu_ultra_sdk z log dl)
 
 # No root or installed Ultra environment required: exercises the production watchdog
 # against normal, hung and crashing cleanup fixtures without touching real modules.
@@ -229,7 +245,7 @@ target_compile_features(maplesu-ultra-version PRIVATE cxx_std_20)
 target_compile_options(maplesu-ultra-version PRIVATE -ffunction-sections -fdata-sections "$<$<CONFIG:Release>:-g0>")
 target_link_options(maplesu-ultra-version PRIVATE
     -Wl,--no-undefined -Wl,--gc-sections -Wl,-z,relro,-z,now)
-target_link_libraries(maplesu-ultra-version PRIVATE maplesu_ultra_sdk z log dl)
+target_link_libraries(maplesu-ultra-version PRIVATE maplesu_sdk_source_exports maplesu_ultra_sdk z log dl)
 
 # Read-only module archive probe: asks the real SDK to parse a module ZIP's descriptor.
 # Activates nothing and installs nothing; reports the SDK's exact error when it refuses.
@@ -238,7 +254,7 @@ target_compile_features(maplesu-ultra-module PRIVATE cxx_std_20)
 target_compile_options(maplesu-ultra-module PRIVATE -ffunction-sections -fdata-sections "$<$<CONFIG:Release>:-g0>")
 target_link_options(maplesu-ultra-module PRIVATE
     -Wl,--no-undefined -Wl,--gc-sections -Wl,-z,relro,-z,now)
-target_link_libraries(maplesu-ultra-module PRIVATE maplesu_ultra_sdk z log dl)
+target_link_libraries(maplesu-ultra-module PRIVATE maplesu_sdk_source_exports maplesu_ultra_sdk z log dl)
 
 # NDK r26 defaults to 4 KB; all packaged runtime entries also load on 16 KB pages.
 foreach(target maplesu-runtime maplesu-su maplesu_bootstrap maplesu_parasite maplesu_ultra_bridge)

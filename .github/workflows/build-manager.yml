@@ -163,6 +163,8 @@ jobs:
             manager/build/maplesuRuntime/CMakeCache.txt
             manager/build/maplesuRuntime/build.ninja
             manager/build/maplesuRuntime/.ninja_log
+            manager/build/maplesuRuntime/libmaplesu_sdk_source_exports.a
+            manager/build/maplesuRuntime/CMakeFiles/maplesu_sdk_source_exports.dir/**
             manager/build/maplesuPatch/CMakeFiles/CMakeOutput.log
             manager/build/maplesuPatch/CMakeFiles/CMakeError.log
             manager/build/maplesuPatch/CMakeCache.txt

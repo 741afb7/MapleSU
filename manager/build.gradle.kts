@@ -310,6 +310,15 @@ val configureMapleSuRuntime = tasks.register<Exec>("configureMapleSuRuntime") {
 }
 val buildMapleSuRuntime = tasks.register<Exec>("buildMapleSuRuntime") {
     dependsOn(configureMapleSuRuntime)
+    // The Manager runtime supplements the retained SDK archive with these
+    // source-owned exports. Keep the translation units and all SDK source
+    // include roots as explicit inputs so Gradle rebuilds when either changes.
+    inputs.files(
+        runtimeSource.file("maplesu-sdk/sdk/src/maplesu/install/bootstrap_state.cpp"),
+        runtimeSource.file("maplesu-sdk/sdk/src/maplesu/module/api.cpp"))
+    inputs.dir(runtimeSource.dir("maplesu-sdk/sdk/include"))
+    inputs.dir(runtimeSource.dir("maplesu-sdk/sdk/src"))
+    inputs.dir(ultraSdkDirectory.resolve("include"))
     inputs.files(fileTree(runtimeSource) {
         include("src/**", "upstream/**", "CMakeLists.txt")
         // Fixed prebuilt Ultra SDK import plus the production bridge that links it.
@@ -322,7 +331,8 @@ val buildMapleSuRuntime = tasks.register<Exec>("buildMapleSuRuntime") {
     outputs.files(runtimeBuild.map { it.file("maplesu-runtime") }, runtimeBuild.map { it.file("maplesu-su") },
         runtimeBuild.map { it.file("libmaplesu_bootstrap.so") },
         runtimeBuild.map { it.file("libmaplesu_parasite.so") },
-        runtimeBuild.map { it.file("libmaplesu_ultra_bridge.so") })
+        runtimeBuild.map { it.file("libmaplesu_ultra_bridge.so") },
+        runtimeBuild.map { it.file("libmaplesu_sdk_source_exports.a") })
     doFirst {
         commandLine(runtimeSdk.get().asFile.resolve("cmake/3.22.1/bin/cmake$runtimeToolSuffix"),
             "--build", runtimeBuild.get().asFile, "-j", "6")
