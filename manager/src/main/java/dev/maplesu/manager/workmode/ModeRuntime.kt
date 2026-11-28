@@ -145,7 +145,7 @@ object ModeRuntime {
 
     suspend fun awaitDetectionSettled(timeoutMillis: Long): Boolean =
         withTimeoutOrNull(timeoutMillis.coerceAtLeast(1)) {
-            detectionSettled.await()
+            detectionRevision.first { detectionComplete }
             true
         } ?: false
 

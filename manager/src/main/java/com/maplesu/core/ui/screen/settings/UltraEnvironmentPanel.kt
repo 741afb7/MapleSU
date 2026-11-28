@@ -94,6 +94,7 @@ class UltraEnvironmentUpdatePanel internal constructor(
         }
 
     private var reading: Job? = null
+    private var upgrading: Job? = null
     private var foreground = false
     private var readGeneration = 0L
     private var latestFacts: UltraEnvFacts? = null
@@ -123,11 +124,18 @@ class UltraEnvironmentUpdatePanel internal constructor(
         val request = readRequests.incrementAndGet()
         readUnknown = true
         reading = scope.launch {
+            // A recreated panel may inherit an operation owned by the old composition.
+            while (upgrading?.isActive == true || UltraEnvironmentUpgrade.inProgress) {
+                busy = true
+                delay(100L)
+            }
+            if (generation != readGeneration || request != readRequests.get() || !foreground) return@launch
+            busy = false
             // Cold startup may own the SDK channel before the first version read.
-            // Retry only a missing label, while this home page remains in the foreground.
-            for (retryDelay in longArrayOf(0L, 1_000L, 2_000L, 4_000L, 8_000L)) {
+            // A readable label does not finish an incomplete update check.
+            for (retryDelay in generateSequence(0L) { if (it == 0L) 1_000L else (it * 2).coerceAtMost(8_000L) }) {
                 if (retryDelay > 0) {
-                    if (version != null || !foreground || ModeRuntime.active != WorkMode.LITE) break
+                    if (version != null && !readUnknown || !foreground || ModeRuntime.active != WorkMode.LITE) break
                     delay(retryDelay)
                     if (!foreground || ModeRuntime.active != WorkMode.LITE) break
                 }
@@ -215,7 +223,7 @@ class UltraEnvironmentUpdatePanel internal constructor(
     fun startUpgrade() {
         // Available（同版本新构建）与 Unverified（身份读不到 → 重装写身份）都能点；
         // 真正写不写由 UltraEnvironmentUpgrade 再核一次事实，这里只是入口。
-        if (busy || !allowed || !UltraEnvironmentUpgrade.upgradeAllowed(decided)) return
+        if (busy || !allowed) return
         reading?.cancel()
         reading = null
         readGeneration++
@@ -225,26 +233,29 @@ class UltraEnvironmentUpdatePanel internal constructor(
         last = null
         readUnknown = true
         busy = true
-        scope.launch {
-            // 离开首页也要让结果落地：标记的撤回必须执行完。
-            val result = withContext(Dispatchers.IO + NonCancellable) {
-                runCatching { UltraEnvironmentUpgrade.upgrade(context) }
-                    .getOrDefault(UltraEnvironmentUpgrade.Result.FAILED)
-            }
-            busy = false
-            when (result) {
-                UltraEnvironmentUpgrade.Result.SUBMITTED -> Unit
-                UltraEnvironmentUpgrade.Result.FAILED -> {
-                    val reason = UltraEnvironmentUpgrade.persistedFailure(context)
-                    if (!reason.isNullOrBlank()) android.util.Log.w("MapleSUUltraEnvironment",
-                        dev.maplesu.manager.runtime.ultra.UltraSdkLogging.redact("upgrade failed: $reason"))
-                    toast(R.string.ultra_env_update_failed)
+        upgrading = scope.launch {
+            try {
+                // 离开首页也要让结果落地：标记的撤回必须执行完。
+                val result = withContext(Dispatchers.IO + NonCancellable) {
+                    runCatching { UltraEnvironmentUpgrade.installBundled(context) }
+                        .getOrDefault(UltraEnvironmentUpgrade.Result.FAILED)
                 }
-                UltraEnvironmentUpgrade.Result.REFUSED -> toast(R.string.ultra_env_update_refused)
+                when (result) {
+                    UltraEnvironmentUpgrade.Result.SUBMITTED -> Unit
+                    UltraEnvironmentUpgrade.Result.FAILED -> {
+                        val reason = UltraEnvironmentUpgrade.persistedFailure(context)
+                        if (!reason.isNullOrBlank()) android.util.Log.w("MapleSUUltraEnvironment",
+                            dev.maplesu.manager.runtime.ultra.UltraSdkLogging.redact("upgrade failed: $reason"))
+                        toast(R.string.ultra_env_update_failed)
+                    }
+                    UltraEnvironmentUpgrade.Result.REFUSED -> toast(R.string.ultra_env_update_refused)
+                }
+            } finally {
+                busy = false
+                reading?.cancel()
+                reading = null
+                refresh()
             }
-            reading?.cancel()
-            reading = null
-            refresh()
         }
     }
 

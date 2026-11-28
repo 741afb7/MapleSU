@@ -7,6 +7,10 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import dev.maplesu.manager.runtime.HookRootExecutor
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
+import dev.maplesu.manager.runtime.ultra.UltraIdentityRecovery
+import dev.maplesu.manager.modules.UltraRootKeyStore
+import dev.maplesu.manager.workmode.EnvironmentProbeRunner
+import dev.maplesu.manager.workmode.ModeRuntime
 import dev.maplesu.manager.workmode.detect.EnvDiag
 import dev.maplesu.manager.workmode.detect.EnvironmentCheckRunner
 import dev.maplesu.manager.workmode.detect.EnvironmentInvalidation
@@ -17,8 +21,8 @@ import dev.maplesu.manager.workmode.detect.EnvironmentSnapshotCodec
 import dev.maplesu.manager.workmode.detect.EnvironmentStatePersistence
 import dev.maplesu.manager.workmode.detect.EnvironmentStateStore
 import dev.maplesu.manager.workmode.detect.SuReadiness
+import dev.maplesu.manager.workmode.detect.UltraIdentityObservation
 import java.io.File
-import java.util.concurrent.CancellationException
 
 /**
  * T14 生产探针：先读当前 Ultra 通道，再执行未确认身份的恢复链。
@@ -39,7 +43,10 @@ import java.util.concurrent.CancellationException
  *    KSU 通道 → 拿不到 root → 判不出模式"互锁的唯一例外：**只读探针**，
  *    不放宽 `RootManagement` 的路由语义，也不注册任何 root 通道。
  */
-class EnvironmentProbesAdapter(private val context: Context) : EnvironmentProbes {
+class EnvironmentProbesAdapter(
+    private val context: Context,
+    private val freshIdentity: Boolean = false,
+) : EnvironmentProbes {
 
     private val readinessProbe = SuReadinessProbeAdapter(context)
 
@@ -56,7 +63,7 @@ class EnvironmentProbesAdapter(private val context: Context) : EnvironmentProbes
 
     /** 真子进程探针（默认 ≤1500ms；进程级缓存 2s，一次刷新只跑一轮）。 */
     override fun suReadiness(): SuReadiness {
-        val readiness = readinessProbe.probe().readiness
+        val readiness = (if (freshIdentity) readinessProbe.probeFresh() else readinessProbe.probe()).readiness
         EnvDiag.log("suReadiness=$readiness")
         return readiness
     }
@@ -69,58 +76,72 @@ class EnvironmentProbesAdapter(private val context: Context) : EnvironmentProbes
      */
     override fun suPresent(): Boolean = suReadiness() == SuReadiness.USABLE
 
-    override fun currentUltraFingerprint(): String? {
-        val result = runCatching { computeCurrentUltraFingerprint() }
+    override fun currentUltraFingerprint(): String? = currentUltraIdentity().fingerprint
+
+    override fun currentUltraIdentity(): UltraIdentityObservation {
+        val result = runCatching { computeCurrentUltraIdentity() }
         EnvDiag.log("currentUltra=${result.getOrNull()} err=${result.exceptionOrNull()?.message}")
         return result.getOrThrow()
     }
 
-    private fun computeCurrentUltraFingerprint(): String? {
+    private fun computeCurrentUltraIdentity(): UltraIdentityObservation {
+        if (freshIdentity) return freshUltraIdentity()
         // 与完整判定一致：当前认主的 Normal 内核优先于另一模式留下的缓存。
-        if (ksuNormal() == true) return null
+        if (ksuNormal() == true) return UltraIdentityObservation(null)
         // A live Hook supersedes cached SDK identity without starting competing IPC.
-        if (HookRootExecutor.production(context.applicationContext).available()) return "hook:ready"
-        // Otherwise revalidate the SDK TTL before inheriting a same-boot fingerprint.
-        UltraEnvironmentProbe.refresh(context.applicationContext, force = false)
-        val failures = mutableListOf<String>()
-        for ((name, judge) in ultraJudges()) {
-            val hit = try {
-                judge()
-            } catch (error: Throwable) {
-                if (error is CancellationException) throw error
-                if (error is InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw error
-                }
-                if (error is Error) throw error
-                failures += name
-                continue
-            }
-            if (hit) return name
-        }
-        // 有判据读失败 ⇒ 不能断言"没有 Ultra 环境"（UNKNOWN ≠ 没有）。
-        if (failures.isNotEmpty()) {
-            throw IllegalStateException("ULTRA_PROBE_PARTIAL:" + failures.joinToString(","))
-        }
-        return null
+        if (HookRootExecutor.production(context.applicationContext).available()) return UltraIdentityObservation("hook:ready")
+        val observed = UltraEnvironmentProbe.observeFreshIdentity(context.applicationContext)
+        return UltraIdentityObservation("ultra:owner".takeIf { observed.managerOwnerIdentity != null },
+            observed.managerOwnerIdentity)
     }
 
-    override fun ultraFingerprint(): String? {
-        val result = runCatching { computeUltraFingerprint() }
+    override fun ultraFingerprint(): String? = ultraIdentity().fingerprint
+
+    override fun ultraIdentity(): UltraIdentityObservation {
+        val result = runCatching { computeUltraIdentity() }
         EnvDiag.log("ultraFingerprint=${result.getOrNull()} err=${result.exceptionOrNull()?.message}")
         return result.getOrThrow()
     }
 
-    private fun computeUltraFingerprint(): String? {
-        if (ksuNormal() == true) return null
-        if (HookRootExecutor.production(context.applicationContext).available()) return "hook:ready"
+    private fun computeUltraIdentity(): UltraIdentityObservation {
+        if (freshIdentity) return freshUltraIdentity()
+        if (ksuNormal() == true) return UltraIdentityObservation(null)
+        if (HookRootExecutor.production(context.applicationContext).available()) return UltraIdentityObservation("hook:ready")
         // Reconcile the current signed installation before the resolver decides absence.
         // Recovery rechecks the live identity and state; preferences never authorize a mode.
         dev.maplesu.manager.runtime.ultra.UltraIdentityRecovery.recover(context.applicationContext)
-        UltraEnvironmentProbe.refresh(context.applicationContext, force = false)
-        val observed = UltraEnvironmentProbe.currentSnapshot(context)
-        return UltraEnvironmentProbe.recoveryFingerprint(observed.state, UltraEnvironmentProbe.isSafeMode(context),
-            observed.kernelRootVerified, observed.kernelChannelAbsent, observed.detail)
+        val observed = UltraEnvironmentProbe.observeFresh(context.applicationContext)
+        return UltraIdentityObservation(UltraEnvironmentProbe.recoveryFingerprint(observed.state,
+            observed.state == UltraEnvironmentProbe.State.Fault, observed.kernelRootVerified,
+            observed.kernelChannelAbsent, observed.detail, observed.managerOwnerIdentity != null), observed.managerOwnerIdentity)
+    }
+
+    private fun freshUltraIdentity(): UltraIdentityObservation {
+        if (ksuNormal() == true) return UltraIdentityObservation(null)
+        val app = context.applicationContext
+        val activation = ModeRuntime.activation
+        val boot = dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.currentBootId()
+            ?: throw IllegalStateException("ULTRA_PROBE_BOOT_UNAVAILABLE")
+        val ownerCurrent = UltraRootKeyStore.captureOwnerMarker(app)
+        fun current() = !UltraIdentityRecovery.blocked(app, freshIdentity = true) &&
+            ModeRuntime.activation === activation && ownerCurrent() &&
+            dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.currentBootId() == boot
+        check(current()) { "ULTRA_PROBE_SCOPE_CHANGED" }
+        val hook = HookRootExecutor.production(app, SuReadinessProbeAdapter.DEFAULT_TIMEOUT_MILLIS.toInt())
+        if (hook.available()) {
+            val result = hook.run("id -u")
+            check(current()) { "ULTRA_PROBE_SCOPE_CHANGED" }
+            check(result.ok && result.output.trim() == "0") {
+                "ULTRA_HOOK_PROBE_UNKNOWN:${result.code}:${result.detail}"
+            }
+            return UltraIdentityObservation("hook:ready")
+        }
+        check(current()) { "ULTRA_PROBE_SCOPE_CHANGED" }
+        val observed = UltraEnvironmentProbe.observeFreshIdentity(app)
+        check(current()) { "ULTRA_PROBE_SCOPE_CHANGED" }
+        return UltraIdentityObservation(UltraEnvironmentProbe.recoveryFingerprint(observed.state,
+            observed.state == UltraEnvironmentProbe.State.Fault, observed.kernelRootVerified,
+            observed.kernelChannelAbsent, observed.detail, observed.managerOwnerIdentity != null), observed.managerOwnerIdentity)
     }
 
     override fun ksuNormal(): Boolean? {
@@ -141,17 +162,10 @@ class EnvironmentProbesAdapter(private val context: Context) : EnvironmentProbes
      * "这台机器上有没有 KSU 内核"，走 APK 自带 ksud。二者都为 null 才允许落到 UNKNOWN。
      */
     override fun foreignKsuKernel(): Boolean? {
-        val answer = foreignKsuProbe.kernelResponds()
+        val answer = foreignKsuProbe.kernelResponds(fresh = freshIdentity)
         EnvDiag.log("foreignKsu=$answer")
         return answer
     }
-
-    private fun ultraJudges(): List<Pair<String, () -> Boolean>> = listOf(
-        "ultra:running" to { UltraEnvironmentProbe.currentSnapshot(context).state == UltraEnvironmentProbe.State.Running },
-        "ultra:fault" to { UltraEnvironmentProbe.isSafeMode(context) },
-        "ultra:kernel" to { UltraEnvironmentProbe.isKernelRootVerified(context) },
-        "hook:ready" to { HookRootExecutor.production(context.applicationContext).available() },
-    )
 
     companion object {
         /**
@@ -208,6 +222,11 @@ object EnvironmentCheckProduction {
     @Volatile
     private var sharedRunner: EnvironmentCheckRunner? = null
 
+    @Volatile
+    private var sharedFreshRunner: EnvironmentCheckRunner? = null
+
+    private var sharedProbeRunner = EnvironmentProbeRunner("maplesu-env-check")
+
     fun store(context: Context): EnvironmentStateStore =
         EnvironmentStateStore(EnvironmentStatePrefsPersistence(context))
 
@@ -221,7 +240,26 @@ object EnvironmentCheckProduction {
                     resolver = EnvironmentResolver(EnvironmentProbesAdapter(appContext), store),
                     store = store,
                     bootIdSource = BootIdSourceAdapter,
+                    probeRunner = sharedProbeRunner,
                 ).also { sharedRunner = it }
+            }
+        }
+    }
+
+    /** Independent followers share one worker gate with the ordinary checker, never its results. */
+    fun freshRunner(context: Context): EnvironmentCheckRunner {
+        sharedFreshRunner?.let { return it }
+        return synchronized(this) {
+            sharedFreshRunner ?: run {
+                val appContext = context.applicationContext
+                val store = store(appContext)
+                EnvironmentCheckRunner(
+                    resolver = EnvironmentResolver(EnvironmentProbesAdapter(appContext, freshIdentity = true),
+                        store, allowInheritance = false),
+                    store = store,
+                    bootIdSource = BootIdSourceAdapter,
+                    probeRunner = sharedProbeRunner,
+                ).also { sharedFreshRunner = it }
             }
         }
     }
@@ -239,6 +277,10 @@ object EnvironmentCheckProduction {
 
     /** 仅供测试替换（生产不调用）。 */
     internal fun resetForTest() {
-        synchronized(this) { sharedRunner = null }
+        synchronized(this) {
+            sharedRunner = null
+            sharedFreshRunner = null
+            sharedProbeRunner = EnvironmentProbeRunner("maplesu-env-check")
+        }
     }
 }

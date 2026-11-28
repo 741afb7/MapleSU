@@ -1,0 +1,39 @@
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\main\java\com\maplesu\core\ui\screen\settings\UltraEnvironmentSettings.kt:271:59: warning: unnecessary safe call on a non-null receiver of type 'UltraEnvironmentProbe.Snapshot'.
+                it.managerOwnerIdentity == diagnosticScope?.managerOwnerIdentity
+                                                          ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\main\java\com\maplesu\core\ui\viewmodel\HomeViewModel.kt:259:34: warning: unnecessary safe call on a non-null receiver of type 'Throwable'.
+                    checked.cause?.message ?: checked.cause?.javaClass?.simpleName ?: "failed")
+                                 ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\main\java\com\maplesu\core\ui\viewmodel\HomeViewModel.kt:259:60: warning: unnecessary safe call on a non-null receiver of type 'Throwable'.
+                    checked.cause?.message ?: checked.cause?.javaClass?.simpleName ?: "failed")
+                                                           ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\main\java\com\maplesu\core\ui\viewmodel\HomeViewModel.kt:449:69: warning: unnecessary safe call on a non-null receiver of type 'HomeViewModel.HomeStateRead'.
+                        if (!environmentExplicitRequest && candidate?.hasFreshIdentityEvidence() == true) {
+                                                                    ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\main\java\dev\maplesu\manager\workmode\detect\EnvironmentResolver.kt:217:53: warning: unnecessary safe call on a non-null receiver of type 'UltraIdentityObservation'.
+                ultraOwnerIdentity = currentIdentity?.managerOwnerIdentity,
+                                                    ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\test\java\dev\maplesu\manager\runtime\ultra\UltraPolicyBackendDeploymentTest.kt:98:36: warning: unnecessary non-null assertion (!!) on a non-null receiver of type 'JSONObject'.
+        assertEquals(11, diagnostic!!.getJSONObject("rootCommand").getInt("phase"))
+                                   ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\test\java\dev\maplesu\manager\runtime\ultra\UltraPolicyBackendDeploymentTest.kt:99:37: warning: unnecessary non-null assertion (!!) on a non-null receiver of type 'JSONObject'.
+        assertEquals(256, diagnostic!!.getJSONObject("rootCommand").getInt("childStatus"))
+                                    ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\test\java\dev\maplesu\manager\runtime\ultra\UltraPolicyBackendDeploymentTest.kt:100:31: warning: unnecessary non-null assertion (!!) on a non-null receiver of type 'JSONObject'.
+        assertFalse(diagnostic!!.getJSONObject("rootCommand").getBoolean("receiptComplete"))
+                              ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\test\java\dev\maplesu\manager\runtime\ultra\UltraPolicyBackendDeploymentTest.kt:101:50: warning: unnecessary non-null assertion (!!) on a non-null receiver of type 'JSONObject'.
+        assertEquals("child exited 1", diagnostic!!.getString("stderr"))
+                                                 ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\test\java\dev\maplesu\manager\runtime\ultra\UltraProbeAdmissionTest.kt:85:44: warning: unnecessary non-null assertion (!!) on a non-null receiver of type 'String'.
+        assertTrue(observed.rootProbeDetail!!.contains("256"))
+                                           ^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\test\java\dev\maplesu\manager\ultrakernel\UltraKernelRecoveryRecordTest.kt:217:25: warning: Java type mismatch: inferred type is 'String?', but 'String' was expected.
+        val root = File(System.getProperty("maplesu.repo", ".."))
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\test\java\dev\maplesu\manager\ultrakernel\UltraKernelRecoveryRecordTest.kt:239:48: warning: only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type 'File?'.
+            println("RECOVERY_FIXTURE sample=${file.parentFile.parentFile.name} records=${plan.records.size}" +
+                                               ^^^^^^^^^^^^^^^
+WORKSPACE/.tmp\successor-r21\unified-final\inputs\manager\src\test\java\dev\maplesu\manager\ultrakernel\UltraKernelRecoveryRecordTest.kt:239:48: warning: only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type 'File?'.
+            println("RECOVERY_FIXTURE sample=${file.parentFile.parentFile.name} records=${plan.records.size}" +
+                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^

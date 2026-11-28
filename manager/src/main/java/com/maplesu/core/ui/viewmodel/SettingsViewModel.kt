@@ -25,6 +25,8 @@ import com.maplesu.core.Natives
 import com.maplesu.core.ui.screen.settings.AppearancePrefsSnapshot
 import com.maplesu.core.ui.screen.settings.SettingsSnapshotCache
 import com.maplesu.core.ui.screen.settings.SettingsUiState
+import com.maplesu.core.ui.screen.settings.currentUltraComponentDiagnosticSnapshot
+import com.maplesu.core.ui.screen.settings.ultraComponentDiagnosticObservations
 import com.maplesu.core.ui.screen.settings.statusRes
 import com.maplesu.core.ui.screen.settings.NormalHiddenUi
 import com.maplesu.core.ui.screen.settings.NormalHiddenFailure
@@ -86,15 +88,22 @@ class SettingsViewModel(
                 com.maplesu.core.ui.security.HiddenFactsSignal.revision,
                 dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelRevision,
                 dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.pendingFlow,
-            ) { _, _, _ -> Unit }.collectLatest {
+                ultraComponentDiagnosticObservations,
+            ) { _, _, _, _ -> Unit }.collectLatest {
                 // 只读取内存/prefs 确认事实，不等慢 root 读取才收起模式信息。
                 // 不调用 refresh()：readState() 本身会发出该信号，否则会形成 root 读取循环。
-                val (masked, kernelUpdate) = withContext(Dispatchers.IO) {
-                    mustMaskModeUi() to canOfferInstalledKernelUpdate()
+                val activation = dev.maplesu.manager.workmode.ModeRuntime.activation
+                val hiddenRevision = com.maplesu.core.ui.security.HiddenFactsSignal.revision.value
+                val (masked, kernelUpdate, diagnostic) = withContext(Dispatchers.IO) {
+                    Triple(mustMaskModeUi(), canOfferInstalledKernelUpdate(),
+                        currentUltraComponentDiagnosticSnapshot(ksuApp))
                 }
                 if (masked) {
                     _uiState.update { state ->
-                        state.copy(hiddenMasked = true, installedKernelUpdateRequired = kernelUpdate,
+                        if (activation !== dev.maplesu.manager.workmode.ModeRuntime.activation ||
+                            hiddenRevision != com.maplesu.core.ui.security.HiddenFactsSignal.revision.value) state
+                        else state.copy(hiddenMasked = true, installedKernelUpdateRequired = kernelUpdate,
+                            ultraComponentDiagnostic = diagnostic,
                             workModeEntry = WorkModeEntryPolicy.NONE,
                             liteHiddenCard = LiteHiddenCardUi.HIDDEN, showWebUiSelfCheck = false)
                     }
@@ -117,6 +126,7 @@ class SettingsViewModel(
         }.copy(
             hiddenMasked = true,
             installedKernelUpdateRequired = false,
+            ultraComponentDiagnostic = null,
             workModeEntry = WorkModeEntryPolicy.NONE,
             showWebUiSelfCheck = false,
             liteHiddenCard = LiteHiddenCardUi.HIDDEN,
@@ -152,8 +162,10 @@ class SettingsViewModel(
     private fun publishKnownModeUi(managerValid: Boolean? = null) {
         val hiddenRevision = com.maplesu.core.ui.security.HiddenFactsSignal.revision.value
         val mode = dev.maplesu.manager.workmode.ModeRuntime.active
+        val activation = dev.maplesu.manager.workmode.ModeRuntime.activation
         val policy = SettingsModePolicy.forMode(mode)
         val masked = mustMaskModeUi()
+        val diagnostic = currentUltraComponentDiagnosticSnapshot(ksuApp)
         val entry = if (masked) WorkModeEntryPolicy.NONE else currentWorkModeEntryPolicy()
         val hiddenCard = if (!masked && policy.mayRead(SettingsDataSource.LITE_HIDDEN) &&
             com.maplesu.core.ui.security.LiteHiddenRuntime.hasRealObservation()) {
@@ -164,13 +176,15 @@ class SettingsViewModel(
         } else LiteHiddenCardUi.HIDDEN
         _uiState.update { current ->
             if (hiddenRevision != com.maplesu.core.ui.security.HiddenFactsSignal.revision.value ||
-                mode != dev.maplesu.manager.workmode.ModeRuntime.active) current
+                mode != dev.maplesu.manager.workmode.ModeRuntime.active ||
+                activation !== dev.maplesu.manager.workmode.ModeRuntime.activation) current
             else current.copy(
                 modePolicy = policy,
                 capabilities = dev.maplesu.manager.workmode.ModeRuntime.capabilities,
                 managerValid = managerValid ?: current.managerValid,
                 hiddenMasked = masked,
                 installedKernelUpdateRequired = canOfferInstalledKernelUpdate(),
+                ultraComponentDiagnostic = diagnostic,
                 workModeEntry = entry,
                 liteHiddenCard = hiddenCard,
                 showWebUiSelfCheck = policy.shows(SettingsSection.WEBUI_SELF_CHECK) && !masked &&
@@ -378,6 +392,7 @@ class SettingsViewModel(
 
             // 管理器可用性与工作模式入口（旧实现在组合期/主线程读 JNI）。
             val hiddenMasked = mustMaskModeUi()
+            val diagnostic = currentUltraComponentDiagnosticSnapshot(ksuApp)
             val workModeEntry = runCatching { currentWorkModeEntryPolicy() }
                 .getOrDefault(WorkModeEntryPolicy.NONE)
             val appearance = readAppearance(prev.appearance)
@@ -394,6 +409,7 @@ class SettingsViewModel(
                     managerValid = managerValid,
                     hiddenMasked = hiddenMasked,
                     installedKernelUpdateRequired = canOfferInstalledKernelUpdate(),
+                    ultraComponentDiagnostic = diagnostic,
                     workModeEntry = if (hiddenMasked) WorkModeEntryPolicy.NONE else workModeEntry,
                     appearance = if (acceptPreferences) appearance else it.appearance,
                     bFeatures = if (acceptPreferences) bFeatures else it.bFeatures,

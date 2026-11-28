@@ -634,17 +634,39 @@ internal object UltraKernelBtf {
             return false
         }
 
-        private fun sessionLoad(before: Int, start: Int, register: Int, offset: Int): Pair<Int, Int>? {
-            var at = before - 4
-            while (at >= start) {
-                val word = UltraKernelA64.le32Bits(data, at)
-                if (word and 0xffc00000.toInt() == 0xf9400000.toInt() && word and 31 == register) {
-                    return if ((word ushr 10 and 4095) * 8 == offset) at to (word ushr 5 and 31) else null
+        /** All live paths must reach the same member load, including out-of-line cold blocks. */
+        private fun sessionLoad(before: Int, start: Int, register: Int, offset: Int,
+            predecessors: Map<Int, List<Int>>): Pair<Int, Int>? {
+            if (register == 31 || before !in predecessors) return null
+            val pending = java.util.ArrayDeque<Pair<Int, Int>>()
+            val visited = hashSetOf<Pair<Int, Int>>()
+            val loads = linkedSetOf<Pair<Int, Int>>()
+            pending.add(before to register)
+            while (pending.isNotEmpty()) {
+                val state = pending.removeFirst()
+                if (!visited.add(state)) continue
+                if (visited.size > 65536 || state.first == start) return null
+                val incoming = predecessors[state.first] ?: return null
+                if (incoming.isEmpty()) return null
+                for (previous in incoming) {
+                    val word = UltraKernelA64.le32Bits(data, previous)
+                    val value = state.second
+                    if (word and 0xffc00000.toInt() == 0xf9400000.toInt() && word and 31 == value) {
+                        if ((word ushr 10 and 4095) * 8 != offset || word ushr 5 and 31 == 31) return null
+                        loads += previous to (word ushr 5 and 31)
+                        if (loads.size > 1) return null
+                    } else {
+                        val source = if (word and 0xffe0ffe0.toInt() == 0xaa0003e0.toInt() && word and 31 == value)
+                            word ushr 16 and 31 else {
+                            if (!sessionPointerPreserves(word, value)) return null
+                            value
+                        }
+                        if (source == 31) return null
+                        pending.add(previous to source)
+                    }
                 }
-                if (!sessionPreserves(word, register)) return null
-                at -= 4
             }
-            return null
+            return loads.singleOrNull()
         }
 
         private fun sessionArgument(from: Int, until: Int, source: Int, argument: Int, call: Int): Boolean {
@@ -688,6 +710,8 @@ internal object UltraKernelBtf {
                 word and 0xfffff09f.toInt() == 0xd503309f.toInt()) return register != 30
             if (word and 0xfff00000.toInt() == 0xd5300000.toInt()) return word and 31 != register
             if (word and 0xfff00000.toInt() == 0xd5100000.toInt()) return true
+            if (word and 0xbfff7c00.toInt() == 0x885f7c00.toInt()) // LDXR/LDAXR write their scalar destination.
+                return word and 31 != register
             if (word and 0x3fe07c00 == 0x08007c00) // STXR/STLXR write only their W-status register.
                 return word ushr 16 and 31 != register
             if (word and 0x3f000000 == 0x39000000)
@@ -708,10 +732,8 @@ internal object UltraKernelBtf {
             return false
         }
 
-        /** Every native predecessor must retain a typed caller argument; loops add no assumptions. */
-        private fun sessionPointerArgument(entry: Int, end: Int, before: Int, register: Int,
-            parameters: Set<Int>): Boolean {
-            if (register == 31 || parameters.isEmpty() || end - entry > 262144) return false
+        private fun sessionPredecessors(entry: Int, end: Int): Map<Int, List<Int>>? {
+            if (entry < 0 || end <= entry || end > data.size || end - entry > 262144) return null
             val predecessors = hashMapOf<Int, MutableList<Int>>()
             val successors = hashMapOf<Int, MutableList<Int>>()
             fun edge(from: Int, target: Int) {
@@ -751,7 +773,13 @@ internal object UltraKernelBtf {
                 if (!reachable.add(position)) continue
                 for (target in successors[position].orEmpty()) forward.add(target)
             }
-            if (before !in reachable) return false
+            return reachable.associateWith { position -> predecessors[position].orEmpty().filter { it in reachable } }
+        }
+
+        /** Every live predecessor must retain the same typed argument or the proven source value. */
+        private fun sessionPointerArgument(entry: Int, before: Int, register: Int,
+            parameters: Set<Int>, predecessors: Map<Int, List<Int>>, source: Pair<Int, Int>? = null): Boolean {
+            if (register == 31 || source == null && parameters.isEmpty() || before !in predecessors) return false
             val pending = java.util.ArrayDeque<Pair<Int, Int>>()
             val visited = hashSetOf<Pair<Int, Int>>()
             pending.add(before to register)
@@ -761,12 +789,17 @@ internal object UltraKernelBtf {
                 if (!visited.add(state)) continue
                 if (visited.size > 65536) return false
                 val (position, value) = state
-                if (position == entry) {
-                    if (value !in parameters) return false
+                if (source != null && position == source.first) {
+                    if (value != source.second) return false
                     reachedEntry = true
                     continue
                 }
-                val incoming = predecessors[position]?.filter { it in reachable } ?: return false
+                if (position == entry) {
+                    if (source != null || value !in parameters) return false
+                    reachedEntry = true
+                    continue
+                }
+                val incoming = predecessors[position] ?: return false
                 if (incoming.isEmpty()) return false
                 for (previous in incoming) {
                     val word = UltraKernelA64.le32Bits(data, previous)
@@ -856,7 +889,7 @@ internal object UltraKernelBtf {
                         "SESSION_CALLER_DECLARATION:$caller")
                     val pointerOwner = when (key) {
                         "work_struct.func" -> "worker"
-                        "file_operations.read", "file_operations.read_iter" -> "file"
+                        "file_operations.read", "file_operations.read_iter", "file_operations.flush" -> "file"
                         else -> null
                     }
                     val sourceParameters = if (pointerOwner != null) {
@@ -876,19 +909,23 @@ internal object UltraKernelBtf {
                             "SESSION_CALLER_ADDRESS:$caller")
                         val end = symbols.nextOffset(entry) ?: throw Invalid("SESSION_CALLER_EXTENT:$caller")
                         requireBtf(end > entry && end <= textEnd, "SESSION_CALLER_EXTENT:$caller")
+                        val predecessors = sessionPredecessors(entry, end)
+                            ?: throw Invalid("SESSION_CALLER_CFG:$caller")
                         var call = entry
                         while (call.toLong() + 4 <= end) {
                             val instruction = UltraKernelA64.le32Bits(data, call)
                             if (instruction and 0xfffffc1f.toInt() == 0xd63f0000.toInt()) {
                                 val register = instruction ushr 5 and 31
-                                val load = sessionLoad(call, entry, register, loaded.offset)
+                                val load = sessionLoad(call, entry, register, loaded.offset, predecessors)
                                 if (load != null) {
                                     val parent = if (fileOperations == null) null else
-                                        sessionLoad(load.first, entry, load.second, fileOperations.offset)
+                                        sessionLoad(load.first, entry, load.second, fileOperations.offset, predecessors)
                                     val origin = if (fileOperations != null) parent else load
                                     val argument = if (key == "file_operations.release") 1 else 0
                                     val typedSource = if (pointerOwner != null) origin != null &&
-                                        sessionPointerArgument(entry, end, origin.first, origin.second, sourceParameters)
+                                        sessionPointerArgument(entry, origin.first, origin.second, sourceParameters, predecessors) &&
+                                            (key != "file_operations.flush" || sessionPointerArgument(entry, call,
+                                                argument, emptySet(), predecessors, origin))
                                     else origin != null &&
                                         sessionArgument(origin.first, call - 24, origin.second, argument, call)
                                     if (typedSource) {

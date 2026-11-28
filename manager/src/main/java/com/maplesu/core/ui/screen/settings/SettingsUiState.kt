@@ -4,6 +4,20 @@ import androidx.compose.runtime.Immutable
 import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
 import com.maplesu.core.ui.UiMode
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+
+/** Explicit retries are consumed by the shared environment-check session. */
+internal object UltraComponentDiagnosticRequests {
+    private val requests = MutableSharedFlow<dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.Snapshot>(extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val retries = requests.asSharedFlow()
+
+    fun retry(observation: dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.Snapshot) {
+        requests.tryEmit(observation)
+    }
+}
 
 internal fun installedUltraUpgradeVisible(
     mode: dev.maplesu.manager.workmode.WorkMode?,
@@ -111,6 +125,9 @@ data class SettingsUiState(
 
     /** A current protected carrier observation requires an upgrade; this grants no runtime capability. */
     val installedKernelUpdateRequired: Boolean = false,
+
+    /** Current owner diagnostics grant no mode, backend or environment mutation capability. */
+    val ultraComponentDiagnostic: dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.Snapshot? = null,
 
     /** 工作模式行可见性（04-ui-contract §3.4/§3.5）：页面只消费结果。 */
     val workModeEntry: dev.maplesu.manager.workmode.ui.WorkModeEntryPolicy =

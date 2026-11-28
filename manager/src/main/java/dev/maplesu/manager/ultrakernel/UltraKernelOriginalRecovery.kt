@@ -291,7 +291,12 @@ internal class UltraKernelOriginalRecovery(private val assets: UltraKernelAssetS
             val retained = File(output, "original.img")
             if (original.canonicalFile != retained.canonicalFile) original.copyTo(retained, overwrite = true)
             if (UltraKernelSpec.sha256(retained) == originalReceipt.baseBootSha) {
-                return Recovered(retained, Source.LOCAL_PREIMAGE, originalReceipt.kernelRelease)
+                val current = decode(currentBoot, BootImageInspector.inspect(currentBoot))
+                val deployment = UltraKernelDeploymentNamespace.fromLegacyInitPaths(
+                    originalReceipt.spec.patches.asSequence().map {
+                        current.copyOfRange(it.offset.toInt(), it.offset.toInt() + it.replacement.size)
+                    })
+                return Recovered(retained, Source.LOCAL_PREIMAGE, originalReceipt.kernelRelease, deployment)
             }
             return null
         }
@@ -315,7 +320,12 @@ internal class UltraKernelOriginalRecovery(private val assets: UltraKernelAssetS
         return runCatching {
             val receipt = matchingReceipt(currentBoot, receiptsDirectory, generatedOnly = true)
                 ?: pinnedReceipt(currentBoot, receiptsDirectory) ?: return null
-            originalKernel(decode(currentBoot, BootImageInspector.inspect(currentBoot)), receipt)?.let(::RecoveredKernel)
+            val current = decode(currentBoot, BootImageInspector.inspect(currentBoot))
+            val pristine = originalKernel(current, receipt) ?: return null
+            val deployment = UltraKernelDeploymentNamespace.fromLegacyInitPaths(receipt.spec.patches.asSequence().map {
+                current.copyOfRange(it.offset.toInt(), it.offset.toInt() + it.replacement.size)
+            })
+            RecoveredKernel(pristine, deployment)
         }.getOrNull()
     }
 
@@ -475,8 +485,11 @@ internal class UltraKernelOriginalRecovery(private val assets: UltraKernelAssetS
         val container = receipt.unsignedContainer ?: currentBoot
         val report = runCatching { BootImageInspector.inspect(container) }.getOrNull() ?: return null
         if (report.headerVersion !in 0..4) return null
-        val pristine = runCatching { originalKernel(decode(currentBoot, report), receipt) }
-            .getOrNull() ?: return null
+        val current = runCatching { decode(currentBoot, report) }.getOrNull() ?: return null
+        val pristine = runCatching { originalKernel(current, receipt) }.getOrNull() ?: return null
+        val deployment = UltraKernelDeploymentNamespace.fromLegacyInitPaths(receipt.spec.patches.asSequence().map {
+            current.copyOfRange(it.offset.toInt(), it.offset.toInt() + it.replacement.size)
+        })
         if (!kernelPreimageOnly) exactEmbedded(container, output)?.let { exact ->
             var proven = false
             var failure: Throwable? = null
@@ -511,7 +524,7 @@ internal class UltraKernelOriginalRecovery(private val assets: UltraKernelAssetS
             }
             if (!proveOriginal(original, receipt, File(output, "reverse-proof"),
                     requireOriginalContainer = !kernelPreimageOnly)) return null
-            Recovered(original, source, receipt.kernelRelease)
+            Recovered(original, source, receipt.kernelRelease, deployment)
         }.getOrElse { error ->
             if (error is IOException && error !is BootImageRebuilder.ValidationException) throw error
             null

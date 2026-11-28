@@ -44,9 +44,8 @@ fun HomePager(
     var initialPageEntryHandled by rememberSaveable { mutableStateOf(false) }
     var showJailbreakSelection by rememberSaveable { mutableStateOf(false) }
 
-    // A（Lite 隐藏）生效（含读失败 UNKNOWN）→ 首页整体走与 KSU 隐身**同一条**
-    // 「未安装」伪装路径（见 HomeUiState.asLiteHiddenNotInstalled）；同时切换模式入口
-    // 由 HomeWorkModeSwitchState 的隐藏判据挡掉（不在这里各写一个 if）。
+    // A（Lite 隐藏）生效或真实事务期间走「未安装」伪装；普通未知仅保留历史显示。
+    // 管理入口由同一份隐藏事实决定，不从显示缓存获得能力。
     //
     // 组合期不读 JNI / prefs / 文件：事实全部来自 HomeViewModel.entryFacts。隐藏事实一变就由
     // HiddenFactsSignal 推过来，不等切页/回前台，否则隐藏刚生效那几帧仍会露出入口（真机实测）。
@@ -54,13 +53,13 @@ fun HomePager(
     val liteHiddenMasking = entryFacts.hidden.masking
     // 事务确认信号可能先于整页刷新到达；不能在这段间隙继续显示旧的“正在运行”。
     val hiddenConfirming = entryFacts.hidden.confirming
-    val displayState = remember(uiState, liteHiddenMasking, hiddenConfirming) {
+    val displayState = remember(uiState, entryFacts.hidden) {
         uiState.withHiddenFacts(entryFacts.hidden)
     }
 
     LaunchedEffect(isCurrentPage) {
         if (isCurrentPage) {
-            if (initialPageEntryHandled) viewModel.refresh()
+            if (initialPageEntryHandled) viewModel.refreshOnForeground()
             viewModel.refreshEntryFacts()
             initialPageEntryHandled = true
         }
@@ -68,7 +67,7 @@ fun HomePager(
 
     LifecycleResumeEffect(Unit) {
         if (initialResumeHandled.value && latestIsCurrentPage) {
-            viewModel.refresh()
+            viewModel.refreshOnForeground()
         }
         // 回前台：模式/隐藏可能已在后台变化。
         viewModel.refreshEntryFacts()
@@ -77,8 +76,7 @@ fun HomePager(
     }
 
     // 隐藏生效/隐藏确认窗口内：**任何**管理器专属入口都不许出现（不只是状态卡）。
-    val suppressEntries = entryFacts.hidden.suppressEntries ||
-        displayState.environmentChecking && displayState.litePending
+    val suppressEntries = entryFacts.hidden.suppressEntries
     val workModeEntry = if (suppressEntries) {
         dev.maplesu.manager.workmode.ui.WorkModeEntryPolicy.NONE
     } else {
@@ -92,21 +90,16 @@ fun HomePager(
 
     val installedKernelRevision by dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade
         .installedKernelRevision.collectAsStateWithLifecycle()
-    val ultraObservation by dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.observations
-        .collectAsStateWithLifecycle(initialValue =
-            dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.currentSnapshot(context))
-    val currentUltra = remember(ultraObservation, installedKernelRevision, uiState) {
-        dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.currentSnapshot(context)
-    }
     val installedKernelKnown = installedKernelRevision.let {
         dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelKnown(context)
     }
-    val verifiedUltraInstallation = dev.maplesu.manager.workmode.ModeRuntime.active ==
-        dev.maplesu.manager.workmode.WorkMode.LITE || installedKernelKnown || currentUltra.kernelRootVerified ||
-        currentUltra.state == dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.State.Running ||
-        currentUltra.state == dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe.State.Fault
-    val brandFacts = homeUltraBrandFacts(workModeSwitch, liteHiddenMasking, hiddenConfirming,
-        displayState.environmentMode, environmentInstalled = verifiedUltraInstallation)
+    val brandFacts = UltraBrandFacts(
+        active = displayState.displayEnvironmentMode,
+        installed = if (displayState.showInstalledStatus) HomeInstallSignal.INSTALLED else HomeInstallSignal.UNKNOWN,
+        liteHidden = HomeHiddenSignal.of(liteHiddenMasking),
+        ksuStealth = HomeHiddenSignal.of(workModeSwitch.blocked == HomeWorkModeSwitchBlock.STEALTH_MASKED),
+        hiddenConfirming = hiddenConfirming,
+    )
     val aboutShowsModes = !suppressEntries && !hidesModeInfo(brandFacts)
     val ultraVisible = shouldShowUltraBrand(brandFacts)
     // 主卡与顶部字样复用同一个结果；不修改原检测，也不把安装事实当成 root 能力。
@@ -115,13 +108,13 @@ fun HomePager(
     }
     // 环境版本与「发现 Ultra 环境更新」：同一份 §2.1 裁决，不可见时不读任何事实。
     val ultraEnvironment = rememberUltraEnvironmentPanel(
-        visible = ultraVisible,
+        visible = ultraVisible && displayState.environmentMode == dev.maplesu.manager.workmode.WorkMode.LITE,
         upgradeAllowed = workModeSwitch.blocked == HomeWorkModeSwitchBlock.NONE,
         foreground = isCurrentPage,
     )
     val switchPending by dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.pendingFlow.collectAsStateWithLifecycle()
     val showInstalledKernelUpdate = com.maplesu.core.ui.screen.settings.installedUltraUpgradeVisible(
-        dev.maplesu.manager.workmode.ModeRuntime.active, installedKernelKnown,
+        displayState.environmentMode, installedKernelKnown,
         dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelUpdateRequired(context),
         suppressEntries, switchPending,
     )
@@ -135,6 +128,10 @@ fun HomePager(
         onOpenUrl = uriHandler::openUri,
         onJailbreakClick = { showJailbreakSelection = true },
         onEnvironmentRetry = viewModel::checkEnvironmentManually,
+        onOpenEnvironmentSettings = {
+            if (Route.Settings in navigator.backStack) navigator.popUntil { it == Route.Settings }
+            else navigator.push(Route.Settings)
+        },
         onManageModules = { navigator.push(Route.Module) },
         onFeedbackClick = { openFeedbackInBrowser(context) },
     )

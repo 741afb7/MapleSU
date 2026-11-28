@@ -22,13 +22,19 @@ class UltraRecoveryFingerprintTest {
         }
         val absent = UltraEnvironmentProbe.Snapshot(kernelChannelAbsent = true,
             detail = "operation=query_manager_owner_identity;sdkError=ERR_MODULE_NO_BOOT;sdkErrorCode=-1")
-        assertNull(UltraEnvironmentProbe.recoveryFingerprint(absent.state, false,
-            absent.kernelRootVerified, absent.kernelChannelAbsent, absent.detail))
+        val absentFailure = assertThrows(IllegalStateException::class.java) {
+            UltraEnvironmentProbe.recoveryFingerprint(absent.state, false,
+                absent.kernelRootVerified, absent.kernelChannelAbsent, absent.detail)
+        }
+        assertEquals("ULTRA_RECOVERY_PROBE_UNKNOWN:${absent.detail}", absentFailure.message)
     }
 
-    @Test fun noBootIsDefinitiveAbsenceWhereasBusyAndTimeoutRemainUnknown() {
-        assertNull(UltraEnvironmentProbe.recoveryFingerprint(UltraEnvironmentProbe.State.Unknown, false,
-            kernelChannelAbsent = true))
+    @Test fun noBootBusyAndTimeoutDoNotEstablishAnAbsentInstallation() {
+        val noBoot = assertThrows(IllegalStateException::class.java) {
+            UltraEnvironmentProbe.recoveryFingerprint(UltraEnvironmentProbe.State.Unknown, false,
+                kernelChannelAbsent = true)
+        }
+        assertEquals("ULTRA_RECOVERY_PROBE_UNKNOWN:ERR_MODULE_NO_BOOT", noBoot.message)
         for (detail in listOf("MAPLESU_SDK_BUSY", "MAPLESU_SDK_INTERRUPTED", "TIMEOUT", "BAD_KEY")) {
             val unknown = UltraEnvironmentProbe.Snapshot(detail = detail)
             assertFalse(unknown.rootAvailable)

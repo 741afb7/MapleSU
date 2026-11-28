@@ -3,7 +3,7 @@
 # The root-loader files retain their canonical repository source identities.
 obj-m += maplesu_ultra_bridge.o
 maplesu_ultra_bridge-y := bridge.o boot_events.o preinit.o preinit_blob.o native_layout.o native_lookup.o native_legacy_cfi.o native_imports.o \
-    native_sdk_imports.o producer/module/maplesu_boot_sdk.o producer/module/boot_sdk_call.o \
+    native_sdk_imports.o native_root.o producer/module/maplesu_boot_sdk.o producer/module/boot_sdk_call.o \
     host/install_records.o host/protected_install_kernel.o host/manager_apk_identity.o \
     host/manager_claim_entry.o host/manager_owner.o host/manager_owner_watch.o \
     host/manager_resident_host.o host/manager_management.o host/manager_uid_gateway.o \
@@ -30,6 +30,7 @@ host_tus := protected_install_kernel manager_claim_entry manager_resident_host m
 include $(src)/selected-runtime.mk
 $(foreach tu,$(host_tus),$(eval CFLAGS_host/$(tu).o += -DMSU_INIT_BRIDGE_HOST_IMPORTS=1 -include $(src)/native_imports.h))
 CFLAGS_boot_events.o += -DMSU_INIT_BRIDGE_HOST_IMPORTS=1 -include $(src)/native_imports.h
+CFLAGS_native_root.o += -DMSU_INIT_BRIDGE_HOST_IMPORTS=1 -include $(src)/native_imports.h
 
 # stage.py retains exact task-state/credential-domain dependency identities.
 # Runtime source selection does not qualify target entrypoints or publication.

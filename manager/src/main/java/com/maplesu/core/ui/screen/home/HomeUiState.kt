@@ -3,6 +3,8 @@ package com.maplesu.core.ui.screen.home
 import androidx.compose.runtime.Immutable
 import com.maplesu.core.KernelVersion
 import com.maplesu.core.ui.util.module.LatestVersionInfo
+import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
+import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import dev.maplesu.manager.workmode.detect.ModeState
 import dev.maplesu.manager.workmode.detect.SuReadiness
 import dev.maplesu.manager.workmode.WorkMode
@@ -48,39 +50,31 @@ data class HomeUiState(
     val liteInstalled: Boolean = false,
     /** P0：Lite 已安装但后台 root 探测失败 → 状态卡图片上方显示固定一行提示。 */
     val liteRootFailure: Boolean = false,
-    /**
-     * P0（闪烁修复）：模式还在判定中、且没有任何"已安装"证据 → 界面画 loading 占位。
-     *
-     * **这不是"未安装"**。冷启动首帧（约 0-2.5s）里 `ModeRuntime.active` 还是 null、
-     * Ultra 探针也还没返回，旧实现按"未安装"渲染 → 用户看到"进 App 先闪一下未安装"。
-     * 现在：有持久化种子就直接已安装；没有种子就先 loading，等判定落定再决定
-     * （判定为真正未安装才显示未安装）。判据见 `LiteStartupStatusPolicy.isPending`。
-     *
-     * 只在"Lite 判定"这条线上成立：KSU 认主 / Ultra Running 这类**既有已安装通道**
-     * （[ksuVersion] 不为 null）永远不会进入 loading（否则 KSU 冷启动会退化）。
-     */
+    /** Backend detection is pending; automatic checks never block home content. */
     val litePending: Boolean = false,
-    /**
-     * 隐藏/寄生**状态尚未确认**（2026-10-31 用户实测：寄生完成后打开 App 先显示「正在运行」，
-     * 过一会才翻成「未安装」）。
-     *
-     * 语义：隐藏/寄生是"App 外观会翻转"的状态，在**确认完成前不能先报一个假状态**。
-     * 只要满足任一条件就进入确认态，首页画既有提示
-     * （[com.maplesu.core.R.string.home_status_checking] /
-     * [com.maplesu.core.R.string.home_status_checking_summary]「正在确认 MapleSU 运行环境，请稍候」）：
-     *  - 本次进程里隐藏/寄生事务进行中（pending 标记）；
-     *  - 冷启动时还没有拿到可信隐藏状态（`LiteHiddenRuntime.hasObservation()` == false）；
-     *  - 上次已知隐藏开着，但这次还没重新读回（防止先画"运行"再翻"未安装"）。
-     *
-     * 已确认 `hidden == ON` 时由 [asLiteHiddenNotInstalled] 清掉本字段 → 直接呈「未安装」。
-     */
+    /** Hidden facts remain gated independently of the display-only installation history. */
     val hiddenConfirming: Boolean = false,
     val environmentChecking: Boolean = false,
     val environmentFailure: HomeEnvironmentFailure? = null,
+    /** Explicit retry progress is independent of silent automatic observations. */
+    val manualEnvironmentChecking: Boolean = false,
+    val manualEnvironmentFailure: HomeEnvironmentFailure? = null,
+    val environmentConfirmedAbsent: Boolean = false,
     /** 仅供首页渲染：复用顶部 Ultra 字样的当前裁决，不代表 root 命令可用。 */
     val ultraBrandVisible: Boolean = false,
     /** 上次或本次确定的模式，仅用于展示；不激活后端、不授予 root。未安装不继承。 */
     val environmentMode: WorkMode? = null,
+    /** Last confirmed installation is display-only; it never activates a backend or grants Root. */
+    val previousEnvironmentMode: WorkMode? = null,
+    /** Existing SDK/JNI runtime observation, separate from installation records and SU readiness. */
+    val environmentRuntimeReady: Boolean = false,
+    /** Last confirmed card presentation only; never used as a Root or Manager observation. */
+    val cachedEnvironmentReady: Boolean = false,
+    /** A current Ultra component observation failure does not revoke its installation identity. */
+    val ultraObservationFailure: HomeEnvironmentFailure? = null,
+    val ultraObservationDetail: String? = null,
+    /** Root proof from this session's fresh SDK health read; ordinary SU stays independent. */
+    val sdkRootAvailable: Boolean = false,
 ) {
     // A temporarily unknown SDK state does not turn a known local mode into external root.
     val showMigrationEntry: Boolean
@@ -89,16 +83,40 @@ data class HomeUiState(
     val showSafeModeBanner: Boolean
         get() = isSafeMode && environmentMode == WorkMode.LITE && showInstalledStatus && !hiddenConfirming
 
-    val showInstalledStatus: Boolean
-        get() = !hiddenConfirming &&
-            (environmentMode != null || ultraBrandVisible || ksuVersion != null)
+    val displayEnvironmentMode: WorkMode?
+        get() = environmentMode ?: previousEnvironmentMode.takeIf { environmentChecking }
 
+    val environmentUnknown: Boolean
+        get() = displayEnvironmentMode == null && !environmentConfirmedAbsent
+
+    val environmentNeedsConfirmation: Boolean
+        get() = environmentUnknown && !environmentChecking && !litePending
+
+    val showInstalledStatus: Boolean
+        get() = environmentChecking && previousEnvironmentMode != null ||
+            !hiddenConfirming && environmentMode != null
+
+    val showEnvironmentReady: Boolean
+        get() = showInstalledStatus && !hiddenConfirming && !isSafeMode &&
+            ultraObservationFailure == null &&
+            (cachedEnvironmentReady && environmentChecking && rootReadiness != SuReadiness.NOT_USABLE ||
+                environmentRuntimeReady && environmentFailure == null &&
+                (environmentMode == WorkMode.LITE && sdkRootAvailable ||
+                    isRootAvailable && rootReadiness == SuReadiness.USABLE))
+
+    val showInstalledUnready: Boolean
+        get() = showInstalledStatus && !showEnvironmentReady
+
+    /** Only explicit retries have inline progress; no check replaces the primary card. */
     val showEnvironmentStatusCard: Boolean
-        get() = (!ultraBrandVisible || hiddenConfirming) &&
-            (showLiteChecking || environmentFailure != null)
+        get() = manualEnvironmentChecking
 
     val showEnvironmentRefreshWarning: Boolean
-        get() = ultraBrandVisible && environmentFailure != null && !showEnvironmentStatusCard
+        get() = !manualEnvironmentChecking && !environmentChecking && !environmentUnknown && manualEnvironmentFailure != null
+
+    val showUltraObservationFailure: Boolean
+        get() = ultraObservationFailure != null && displayEnvironmentMode == WorkMode.LITE &&
+            showInstalledStatus && !hiddenConfirming
 
     val isSELinuxPermissive: Boolean
         get() = systemInfo.selinuxStatus == "Permissive"
@@ -138,27 +156,9 @@ data class HomeUiState(
     val showLiteRootFailure: Boolean
         get() = !isSafeMode && liteInstalled && liteRootFailure && !hiddenConfirming && rootReadiness == SuReadiness.NOT_USABLE
 
-    /**
-     * P0（闪烁修复）：状态卡是否画 loading 占位（"正在检测环境"）。
-     *
-     * 三条同时成立才画：**判定中**（[litePending]）、**还没认定已安装**（[liteInstalled]）、
-     * **没有任何既有已安装通道**（[ksuVersion] 为 null —— KSU 认主 / Ultra Running 都走它）。
-     * 最后一条是安全阀：即使上游把 [litePending] 设错，KSU/Ultra 也不会从"已安装"退化成转圈。
-     */
-    /**
-     * 是否画"正在确认运行环境"的**进度**态。
-     *
-     * 2026-11-02 用户裁决：没有 su 且没有 Ultra 环境就是**未安装**，不能因为
-     * "隐藏态还没读到"（[hiddenConfirming]，无 root 时永远为真）就一直转圈/回退成
-     * "环境检查未完成"——那正是把用户锁在首页、连越狱入口都点不到的那个 bug。
-     *
-     * 因此进度态只由**本次真的在跑**（[environmentChecking]）或 Ultra 已确认为在装
-     * （[litePending] 且未 [liteInstalled]）触发；[hiddenConfirming] 不再单独拉出进度态。
-     */
+    /** Explicit retry progress only; automatic checks remain silent. */
     val showLiteChecking: Boolean
-        get() = environmentFailure == null &&
-            !showInstalledStatus &&
-            (environmentChecking || (litePending && !liteInstalled))
+        get() = manualEnvironmentChecking && !showInstalledStatus
 
     val showManagerPrBuildWarning: Boolean
         get() = isManager && isManagerPrBuild
@@ -176,6 +176,8 @@ internal fun HomeUiState.afterEnvironmentCheck(
     detectionComplete: Boolean,
     detectionFailure: String?,
     detectedState: ModeState?,
+    knownUltra: Boolean = false,
+    failureDetail: String? = null,
 ): HomeUiState {
     val failure = when {
         detectionFailure?.contains("TIMEOUT", ignoreCase = true) == true -> HomeEnvironmentFailure.TIMED_OUT
@@ -186,25 +188,99 @@ internal fun HomeUiState.afterEnvironmentCheck(
         !modeResolved && detectedState == null -> HomeEnvironmentFailure.UNCONFIRMED
         else -> null
     }
-    return copy(environmentChecking = false, environmentFailure = failure, litePending = false)
+    val confirmedAbsent = !knownUltra && environmentConfirmedAbsent
+    val identityConfirmed = knownUltra || modeResolved || detectedState in setOf(
+        ModeState.MODE_A_ACTIVE, ModeState.MODE_A_INSTALLED_UNBOUND,
+        ModeState.MODE_B_ACTIVE, ModeState.MODE_B_KERNEL_ONLY,
+    )
+    val identityPending = !identityConfirmed && !confirmedAbsent
+    val settled = copy(
+        environmentMode = if (knownUltra) WorkMode.LITE else environmentMode,
+        liteInstalled = liteInstalled || knownUltra,
+        environmentConfirmedAbsent = environmentConfirmedAbsent && !knownUltra,
+        environmentChecking = identityPending,
+        environmentFailure = failure.takeUnless { knownUltra },
+        litePending = identityPending,
+        sdkRootAvailable = sdkRootAvailable && knownUltra && failure == null,
+        environmentRuntimeReady = environmentRuntimeReady && !(knownUltra && failure != null),
+        ultraObservationFailure = if (knownUltra) failure else ultraObservationFailure,
+        ultraObservationDetail = if (knownUltra) (failureDetail ?: detectionFailure).takeIf { failure != null }
+            else ultraObservationDetail,
+    )
+    return if (confirmedAbsent) {
+        settled.copy(environmentMode = null, previousEnvironmentMode = null,
+            environmentRuntimeReady = false,
+            sdkRootAvailable = false,
+            cachedEnvironmentReady = false,
+            ultraBrandVisible = false, ksuVersion = null, liteInstalled = false,
+            ultraObservationFailure = null, ultraObservationDetail = null,
+            isManager = false, environmentConfirmedAbsent = true,
+            isRootAvailable = isRootAvailable && detectedState == ModeState.FOREIGN_SU,
+            rootReadiness = rootReadiness.takeIf { detectedState == ModeState.FOREIGN_SU })
+    } else settled
 }
 
 /** Keep current local installation/hiding facts when a full Root observation fails. */
 internal fun HomeUiState.afterEnvironmentProbeFailure(
     local: HomeUiState,
     failure: HomeEnvironmentFailure = HomeEnvironmentFailure.FAILED,
+    knownUltra: Boolean = false,
+    failureDetail: String? = null,
 ): HomeUiState {
+    val identityPending = !knownUltra && !local.environmentConfirmedAbsent
     return copy(
-        environmentMode = local.environmentMode,
-        liteInstalled = local.liteInstalled,
+        environmentMode = if (knownUltra) WorkMode.LITE else local.environmentMode,
+        previousEnvironmentMode = local.previousEnvironmentMode,
+        liteInstalled = local.liteInstalled || knownUltra,
         hiddenConfirming = local.hiddenConfirming,
+        isManager = local.isManager,
+        environmentRuntimeReady = false,
+        sdkRootAvailable = false,
         // Local mode evidence is not a successful Root command or a manager handshake.
         isRootAvailable = false,
         rootReadiness = null,
-        liteRootFailure = false,
-        environmentChecking = false,
-        environmentFailure = failure,
-        litePending = false,
+        liteRootFailure = local.liteRootFailure,
+        environmentConfirmedAbsent = local.environmentConfirmedAbsent && !knownUltra,
+        environmentChecking = identityPending,
+        environmentFailure = failure.takeUnless { knownUltra },
+        litePending = identityPending,
+        ultraObservationFailure = failure.takeIf { knownUltra },
+        ultraObservationDetail = failureDetail.takeIf { knownUltra },
+    )
+}
+
+/** The caller supplies one fresh health return after this session has confirmed Ultra identity. */
+internal fun HomeUiState.afterUltraEnvironmentHealth(
+    observation: UltraEnvironmentProbe.Snapshot,
+    expectedOwner: UltraRuntimeClient.ManagerOwnerIdentity?,
+    scopeCurrent: Boolean,
+): HomeUiState {
+    val sameIdentity = if (expectedOwner != null) observation.managerOwnerIdentity == expectedOwner else
+        observation.managerOwnerIdentity == null && observation.legacyCredentialFingerprint != null
+    val scopeChanged = !scopeCurrent || observation.managerOwnerIdentity != null && !sameIdentity
+    val detail = observation.rootProbeDetail?.takeIf { it.isNotBlank() }
+        ?: if (scopeChanged) "SDK_IDENTITY_SCOPE_CHANGED" else observation.detail
+    val sdkError = detail?.substringAfter("sdkError=", "")?.substringBefore(';')
+    val explicitFailure = detail != null && (observation.rootProbeDetail != null ||
+        !detail.contains("sdkError=") || sdkError !in setOf("", "NONE", "OK"))
+    val failure = when {
+        detail?.contains("TIMEOUT", ignoreCase = true) == true -> HomeEnvironmentFailure.TIMED_OUT
+        detail?.contains("BUSY", ignoreCase = true) == true -> HomeEnvironmentFailure.BUSY
+        explicitFailure || observation.state == UltraEnvironmentProbe.State.Fault -> HomeEnvironmentFailure.FAILED
+        !scopeCurrent || !sameIdentity || observation.state != UltraEnvironmentProbe.State.Running ||
+            !observation.rootAvailable -> HomeEnvironmentFailure.UNCONFIRMED
+        else -> null
+    }
+    val healthy = failure == null && !hiddenConfirming && !isSafeMode
+    return copy(
+        environmentMode = WorkMode.LITE, liteInstalled = true, environmentConfirmedAbsent = false,
+        environmentChecking = false, litePending = false, environmentFailure = null,
+        environmentRuntimeReady = healthy,
+        sdkRootAvailable = healthy && scopeCurrent && sameIdentity && observation.rootAvailable,
+        cachedEnvironmentReady = false,
+        isSafeMode = isSafeMode || observation.state == UltraEnvironmentProbe.State.Fault,
+        ultraObservationFailure = failure,
+        ultraObservationDetail = detail.takeIf { failure != null },
     )
 }
 
@@ -220,18 +296,43 @@ internal fun HomeUiState.afterEnvironmentProbeFailure(
  */
 fun HomeUiState.mergedOver(previous: HomeUiState): HomeUiState {
     val keepLatestVersion = checkUpdateEnabled && latestVersionInfo == LatestVersionInfo()
-    if (!keepLatestVersion) return this
+    val keepPresentation = environmentChecking && previous.showInstalledStatus && !environmentConfirmedAbsent && !isSafeMode &&
+        rootReadiness != SuReadiness.NOT_USABLE &&
+        (environmentMode == null || environmentMode == previous.displayEnvironmentMode)
+    val keepDisplay = environmentChecking && !environmentConfirmedAbsent && environmentMode == null &&
+        previousEnvironmentMode == null
+    val observationSettled = !environmentChecking && !litePending && environmentFailure == null
+    val keepUltraObservation = environmentChecking && ultraObservationFailure == null &&
+        !environmentConfirmedAbsent && environmentMode != WorkMode.KSU &&
+        previous.displayEnvironmentMode == WorkMode.LITE && previous.ultraObservationFailure != null
     return copy(
-        latestVersionInfo = previous.latestVersionInfo,
+        latestVersionInfo = if (keepLatestVersion) previous.latestVersionInfo else latestVersionInfo,
+        previousEnvironmentMode = when {
+            !environmentChecking -> null
+            keepPresentation || keepDisplay -> previous.displayEnvironmentMode
+            else -> previousEnvironmentMode
+        },
+        ksuVersion = if (keepPresentation) previous.ksuVersion else ksuVersion,
+        kernelUAPIVersion = if (keepPresentation) previous.kernelUAPIVersion else kernelUAPIVersion,
+        lkmMode = if (keepPresentation) previous.lkmMode else lkmMode,
+        isLkmBundled = if (keepPresentation) previous.isLkmBundled else isLkmBundled,
+        cachedEnvironmentReady = keepPresentation && previous.showEnvironmentReady &&
+            ultraObservationFailure == null && !keepUltraObservation,
+        ultraObservationFailure = if (keepUltraObservation) previous.ultraObservationFailure else ultraObservationFailure,
+        ultraObservationDetail = if (keepUltraObservation) previous.ultraObservationDetail else ultraObservationDetail,
+        manualEnvironmentChecking = previous.manualEnvironmentChecking,
+        manualEnvironmentFailure = previous.manualEnvironmentFailure.takeUnless { observationSettled },
     )
 }
 
 /** SDK safety may revoke capabilities; recovery still needs a fresh successful Root probe. */
 internal fun HomeUiState.withUltraSafety(safeMode: Boolean, mode: WorkMode?): HomeUiState =
-    if (mode == WorkMode.KSU) this else copy(
+    if (mode == WorkMode.KSU) copy(sdkRootAvailable = false) else copy(
         isSafeMode = safeMode,
         isRootAvailable = isRootAvailable && !safeMode,
+        sdkRootAvailable = sdkRootAvailable && !safeMode,
         rootReadiness = if (safeMode) null else rootReadiness,
+        cachedEnvironmentReady = cachedEnvironmentReady && !safeMode,
     )
 
 /**
@@ -266,6 +367,7 @@ fun HomeUiState.asStealthKernelNotReady(): HomeUiState = copy(
     requiresNewKernel = false,
     requiresNewManager = false,
     isRootAvailable = false,
+    sdkRootAvailable = false,
     rootReadiness = null,
     isSafeMode = false,
     isLateLoadMode = false,
@@ -284,8 +386,16 @@ fun HomeUiState.asStealthKernelNotReady(): HomeUiState = copy(
     hiddenConfirming = false,
     environmentChecking = false,
     environmentFailure = null,
+    environmentConfirmedAbsent = true,
+    manualEnvironmentChecking = false,
+    manualEnvironmentFailure = null,
     ultraBrandVisible = false,
     environmentMode = null,
+    previousEnvironmentMode = null,
+    environmentRuntimeReady = false,
+    cachedEnvironmentReady = false,
+    ultraObservationFailure = null,
+    ultraObservationDetail = null,
 )
 
 /**
@@ -301,11 +411,16 @@ fun HomeUiState.asStealthKernelNotReady(): HomeUiState = copy(
 fun HomeUiState.asLiteHiddenNotInstalled(): HomeUiState =
     asStealthKernelNotReady().copy(isManager = false)
 
-/** 确定隐藏优先；首次隐藏未知只保留真实检查进度，不展示模式或管理事实。 */
+/** 确定隐藏和真实事务优先；普通未知仅保留安装历史，不授予管理能力。 */
 internal fun HomeUiState.withHiddenFacts(hidden: HomeHiddenFacts): HomeUiState = when {
     hidden.masking -> asLiteHiddenNotInstalled()
+    hidden.transitionPending -> asLiteHiddenNotInstalled().copy(hiddenConfirming = true)
     hidden.confirming -> asLiteHiddenNotInstalled().copy(
         hiddenConfirming = true,
+        previousEnvironmentMode = displayEnvironmentMode,
+        environmentConfirmedAbsent = environmentConfirmedAbsent,
+        manualEnvironmentChecking = manualEnvironmentChecking && !hidden.transitionPending,
+        manualEnvironmentFailure = manualEnvironmentFailure.takeUnless { hidden.transitionPending },
         environmentChecking = environmentChecking || litePending,
         environmentFailure = environmentFailure,
     )
@@ -327,6 +442,7 @@ data class HomeActions(
     val onOpenUrl: (String) -> Unit,
     val onJailbreakClick: () -> Unit = {},
     val onEnvironmentRetry: () -> Unit = {},
+    val onOpenEnvironmentSettings: () -> Unit = {},
     val onManageModules: () -> Unit = {},
     val onFeedbackClick: () -> Unit = {},
 )

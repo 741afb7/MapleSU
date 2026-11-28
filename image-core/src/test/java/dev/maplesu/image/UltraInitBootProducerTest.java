@@ -105,7 +105,7 @@ public final class UltraInitBootProducerTest {
     private static byte[] parameterModule(int call) {
         String names = "\0.shstrtab\0.text\0.symtab\0.gnu.linkonce.this_module\0.modinfo\0.strtab\0";
         String symbols = "\0msu_sdk_call_prefix\0msu_sdk_call_blr\0msu_sdk_call_template\0";
-        byte[] info = ascii("vermagic=6.6.1-fixture SMP\0parmtype=credential:string\0");
+        byte[] info = ascii("vermagic=6.6.1-fixture SMP\0parmtype=deployment_namespace:string\0");
         byte[] bytes = new byte[1024 + call + 4];
         ByteBuffer h = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         h.put(new byte[]{127, 'E', 'L', 'F', 2, 1, 1}); h.putShort(16, (short) 1).putShort(18, (short) 183)
@@ -132,12 +132,22 @@ public final class UltraInitBootProducerTest {
         return bytes;
     }
 
+
+    private static byte[] legacyParameterModule(int call) {
+        byte[] bridge = parameterModule(call);
+        byte[] info = ascii("vermagic=6.6.1-fixture SMP\0parmtype=credential:string\0");
+        Arrays.fill(bridge, 832, 1024, (byte) 0);
+        System.arraycopy(info, 0, bridge, 832, info.length);
+        ByteBuffer.wrap(bridge).order(ByteOrder.LITTLE_ENDIAN).putLong(64 + 5 * 64 + 32, info.length);
+        return bridge;
+    }
+
     private static void manifest(Path work, UltraInitBootProducer.Artifact artifact) throws Exception {
-        Files.write(work.resolve("handoff.bin"), artifact.handoff); Files.write(work.resolve("bridge.ko"), module());
+        Files.write(work.resolve("handoff.bin"), artifact.handoff); Files.write(work.resolve("bridge.ko"), artifact.bridge);
         String json = "{\"schemaVersion\":1,\"targetBoot\":\"target.img\",\"targetBootSha256\":\"" + artifact.targetBootSha256 +
                 "\",\"kernelRelease\":\"" + artifact.kernelRelease + "\",\"kernelSha256\":\"" + artifact.kernelSha256 +
-                "\",\"credentialSha256\":\"" + artifact.credentialSha256 + "\",\"handoff\":\"handoff.bin\",\"handoffSha256\":\"" +
-                artifact.handoffSha256 + "\",\"bridge\":\"bridge.ko\",\"bridgeSha256\":\"" + KernelIdentity.sha256(module()) + "\"}";
+                "\",\"credentialMode\":\"keyless\",\"metadataDisplacement\":" + artifact.metadataDisplacement + ",\"handoff\":\"handoff.bin\",\"handoffSha256\":\"" +
+                artifact.handoffSha256 + "\",\"bridge\":\"bridge.ko\",\"bridgeSha256\":\"" + artifact.bridgeSha256 + "\"}";
         Path manifest = work.resolve("artifact.json"); Files.writeString(manifest, json);
         var parsed = UltraInitBootProducer.readArtifact(manifest.toFile());
         check(parsed.kernelSha256.equals(artifact.kernelSha256), "public manifest parser binds real input bytes");
@@ -159,98 +169,125 @@ public final class UltraInitBootProducerTest {
         Path target = work.resolve("target.img"), source = work.resolve("input.img"), output = work.resolve("candidate.img"),
                 repeated = work.resolve("repeat.img"), restored = work.resolve("restored.img"), manifest = work.resolve("artifact.json");
         byte[] raw = kernel(), targetBytes = image(raw, new byte[0]); Files.write(target, targetBytes);
-        // A synthetic signature-shaped tail proves byte preservation, not cryptographic validity or loading.
-        byte[] bridge = join(parameterModule(32), ascii("~Module signature appended~\n")), handoff = handoff();
-        byte[] config = ascii("CONFIG_MODULES=y\nCONFIG_ARM64=y\nCONFIG_ARM64_4K_PAGES=y\n");
-        Files.write(work.resolve("bridge.ko"), bridge); Files.write(work.resolve("handoff.bin"), handoff);
-        Files.write(work.resolve("target.config"), config);
-        String json = "{\"schemaVersion\":1,\"targetBoot\":\"target.img\",\"targetBootSha256\":\"" + KernelIdentity.sha256(targetBytes) +
-                "\",\"kernelRelease\":\"6.6.1-fixture\",\"kernelSha256\":\"" + KernelIdentity.sha256(raw) +
-                "\",\"handoff\":\"handoff.bin\",\"handoffSha256\":\"" + KernelIdentity.sha256(handoff) +
-                "\",\"bridge\":\"bridge.ko\",\"bridgeSha256\":\"" + KernelIdentity.sha256(bridge) +
-                "\",\"config\":\"target.config\",\"configSha256\":\"" + KernelIdentity.sha256(config) +
-                "\",\"credentialMode\":\"module-parameter\",\"metadataDisplacement\":4064}";
-        Files.writeString(manifest, json);
-        var generic = UltraInitBootProducer.readArtifact(manifest.toFile());
-        check(generic.credentialSha256 == null && generic.credentialMode.equals("module-parameter") &&
-                generic.metadataDisplacement == 4064, "generic module package has no fabricated credential hash");
+        byte[] credential = ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"), expectedCredential = credential.clone();
+        byte[] legacyBridge = join(legacyParameterModule(32), ascii("~Module signature appended~\n"));
+        String legacyJson = metadataManifest(work, raw, legacyBridge, 4064, null)
+                .replace("\"keyless\"", "\"module-parameter\"");
+        Files.writeString(manifest, legacyJson);
+        fails("ULTRA_INIT_ARTIFACT_BRIDGE_LEGACY_CREDENTIAL_PARAMETER", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
+        var legacy = new UltraInitBootProducer.Artifact(target.toFile(), KernelIdentity.sha256(targetBytes),
+                "6.6.1-fixture", KernelIdentity.sha256(raw), null, handoff(), legacyBridge, null,
+                java.util.Map.of(), 4096, "module-parameter", 4064);
+        var decoded = legacy.withCredential(credential); Arrays.fill(credential, (byte) 0);
+        check(decoded != legacy && legacy.credentialSha256 == null &&
+                decoded.credentialSha256.equals(KernelIdentity.sha256(expectedCredential)), "historic decoder clones actual bytes");
+        check(decoded.targetBootSha256.equals(legacy.targetBootSha256) && decoded.kernelSha256.equals(legacy.kernelSha256) &&
+                decoded.handoffSha256.equals(legacy.handoffSha256) && decoded.bridgeSha256.equals(legacy.bridgeSha256) &&
+                decoded.targetInputSha256.equals(legacy.targetInputSha256), "historic decoder preserves package and target byte contracts");
+        check(Files.readString(manifest).equals(legacyJson), "historic decoder never writes raw credential or manifest");
+        for (byte[] invalid : new byte[][]{null, new byte[47], new byte[49], ascii("A".repeat(47) + "\n"),
+                ascii("A".repeat(47) + "="), new byte[48]})
+            fails("ULTRA_INIT_BOOT_CREDENTIAL_INVALID", () -> legacy.withCredential(invalid));
         byte[] cpio = stock(true, true), encoded = KernelCompression.encode(cpio, "GZIP");
         encoded[4] = 0x29; encoded = Arrays.copyOf(encoded, encoded.length + 9);
         byte[] baseline = image(new byte[0], encoded); Files.write(source, baseline);
-        fails("ULTRA_INIT_BOOT_CREDENTIAL_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), generic));
-        check(!Files.exists(output), "unbound package exposes no candidate");
-        byte[] actual = ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"), expected = actual.clone();
-        var bound = generic.withCredential(actual); Arrays.fill(actual, (byte) 0);
-        check(bound != generic && generic.credentialSha256 == null && bound.credentialSha256.equals(KernelIdentity.sha256(expected)),
-                "binding clones actual bytes without mutating generic artifact");
-        check(bound.targetBootSha256.equals(generic.targetBootSha256) && bound.kernelSha256.equals(generic.kernelSha256) &&
-                bound.handoffSha256.equals(generic.handoffSha256) && bound.bridgeSha256.equals(generic.bridgeSha256) &&
-                bound.targetInputSha256.equals(generic.targetInputSha256), "binding preserves all package and target contracts");
-        check(Files.readString(manifest).equals(json), "binding never persists raw secret or rewrites manifest");
-        for (byte[] invalid : new byte[][]{null, new byte[47], new byte[49], ascii("A".repeat(47) + "\n"),
-                ascii("A".repeat(47) + "="), new byte[48]})
-            fails("ULTRA_INIT_BOOT_CREDENTIAL_INVALID", () -> generic.withCredential(invalid));
+        fails("ULTRA_INIT_BOOT_KEYLESS_COMPONENT_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), legacy));
+        fails("ULTRA_INIT_BOOT_KEYLESS_COMPONENT_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), decoded));
+        check(!Files.exists(output), "historic artifacts expose no production candidate");
+        byte[] bridge = join(parameterModule(32), ascii("~Module signature appended~\n")), handoff = handoff();
+        String json = metadataManifest(work, raw, bridge, 4064,
+                "CONFIG_MODULES=y\nCONFIG_ARM64=y\nCONFIG_ARM64_4K_PAGES=y\n");
+        var generic = UltraInitBootProducer.readArtifact(manifest.toFile());
+        check(generic.credentialSha256 == null && generic.credentialMode.equals("keyless") &&
+                generic.metadataDisplacement == 4064, "current package has no fabricated credential hash");
+        fails("ULTRA_INIT_BOOT_CREDENTIAL_MODE", () -> generic.withCredential(expectedCredential));
+        fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), generic));
+        check(!Files.exists(output), "unbound keyless package exposes no candidate");
+        byte[] actual = namespaceRecord("0123456789abcdef"), expected = actual.clone();
+        var bound = generic.withDeploymentNamespace(actual); Arrays.fill(actual, (byte) 0);
+        check(bound != generic && bound.credentialSha256 == null && bound.targetInputSha256.equals(generic.targetInputSha256),
+                "namespace binding preserves package identity and carries no credential");
+        check(Files.readString(manifest).equals(json), "namespace binding never rewrites source manifest");
         UltraInitBootProducer.produce(source.toFile(), output.toFile(), bound);
-        check(UltraInitBootProducer.recognizes(output.toFile()), "runtime credential keeps original recovery-envelope ownership");
+        check(UltraInitBootProducer.recognizes(output.toFile()), "keyless producer retains verified original recovery ownership");
+        check(Arrays.equals(expected, UltraInitBootProducer.readDeploymentNamespace(output.toFile())), "current carrier keeps explicit namespace bytes");
         var layout = BootImageInspector.inspect(output.toFile());
         byte[] produced = KernelCompression.decode(UltraInitBootProducer.component(output.toFile(), layout), "GZIP", 1024 * 1024);
         var entries = RamdiskInspector.inspectRamdisk(produced);
-        var secret = entries.entry(UltraInitRamdisk.CREDENTIAL);
-        check(secret != null && secret.mode == 0100600 && secret.uid == 0 && secret.gid == 0 && secret.links == 1 && secret.size == 48,
-                "credential is exactly one root-owned regular 0600 entry of length 48");
-        check(Arrays.equals(expected, Arrays.copyOfRange(produced, (int) secret.offset, (int) (secret.offset + secret.size))),
-                "CPIO has exact bound ASCII without newline or NUL");
+        check(entries.entry(UltraInitRamdisk.CREDENTIAL) == null, "current production contains no credential CPIO entry");
+        var deployment = entries.entry(UltraInitRamdisk.DEPLOYMENT);
+        check(deployment != null && deployment.mode == 0100600 && deployment.uid == 0 && deployment.gid == 0 &&
+                deployment.links == 1 && deployment.size == 24, "namespace is exactly one root-owned regular 0600 entry of length 24");
+        check(Arrays.equals(expected, Arrays.copyOfRange(produced, (int) deployment.offset, (int) (deployment.offset + deployment.size))),
+                "CPIO contains the exact canonical namespace record");
         var ko = entries.entry(UltraInitRamdisk.BRIDGE);
         check(Arrays.equals(bridge, Arrays.copyOfRange(produced, (int) ko.offset, (int) (ko.offset + ko.size))),
                 "entire module including signature-shaped tail remains byte-identical");
         check(entries.entry(UltraInitRamdisk.ORIGINAL).mode == 0120777 &&
                 entries.entry(UltraInitRamdisk.ORIGINAL).sha256.equals(RamdiskInspector.inspectRamdisk(cpio).entry("init").sha256),
-                "runtime credential preserves original init type and handoff");
+                "keyless production preserves original init type and bytes");
         UltraInitBootProducer.produce(output.toFile(), repeated.toFile(), bound);
-        check(Arrays.equals(Files.readAllBytes(output), Files.readAllBytes(repeated)), "bound repatch retains existing envelope idempotence");
+        check(Arrays.equals(Files.readAllBytes(output), Files.readAllBytes(repeated)), "bound keyless repatch is byte-idempotent");
         Files.delete(repeated);
-        byte[] next = expected.clone(); next[0] = 'Z';
-        UltraInitBootProducer.produce(output.toFile(), repeated.toFile(), generic.withCredential(next));
-        byte[] changed = KernelCompression.decode(UltraInitBootProducer.component(repeated.toFile(),
+        byte[] historicalCpio = UltraInitRamdisk.install(cpio, handoff, legacyBridge, null, expectedCredential);
+        var historicalEntries = RamdiskInspector.inspectRamdisk(historicalCpio);
+        var oldSecret = historicalEntries.entry(UltraInitRamdisk.CREDENTIAL);
+        check(oldSecret != null && oldSecret.mode == 0100600 && oldSecret.uid == 0 && oldSecret.gid == 0 &&
+                oldSecret.links == 1 && oldSecret.size == 48, "historic byte fixture retains exact root-owned credential layout");
+        check(Arrays.equals(expectedCredential, Arrays.copyOfRange(historicalCpio, (int) oldSecret.offset, (int) (oldSecret.offset + oldSecret.size))),
+                "historic decoder fixture contains exact ASCII credential without terminator");
+        Path oldOwned = ownedNamespaceFixture(work, source, output, historicalCpio);
+        check(Arrays.equals(expected, UltraInitBootProducer.readDeploymentNamespace(oldOwned.toFile())), "verified historic carrier exposes its existing public namespace");
+        UltraInitBootProducer.produce(oldOwned.toFile(), repeated.toFile(), bound);
+        byte[] upgraded = KernelCompression.decode(UltraInitBootProducer.component(repeated.toFile(),
                 BootImageInspector.inspect(repeated.toFile())), "GZIP", 1024 * 1024);
-        var changedSecret = RamdiskInspector.inspectRamdisk(changed).entry(UltraInitRamdisk.CREDENTIAL);
-        check(Arrays.equals(next, Arrays.copyOfRange(changed, (int) changedSecret.offset, (int) (changedSecret.offset + changedSecret.size))),
-                "credential rotation replaces owned deployment, not the original recovery input");
+        check(RamdiskInspector.inspectRamdisk(upgraded).entry(UltraInitRamdisk.CREDENTIAL) == null &&
+                Arrays.equals(expected, UltraInitBootProducer.readDeploymentNamespace(repeated.toFile())), "historic upgrade removes credential and preserves public namespace");
         UltraInitBootProducer.restore(repeated.toFile(), restored.toFile());
-        check(Arrays.equals(baseline, Files.readAllBytes(restored)), "rotation restores exact first encoded stream, header and padding");
+        check(Arrays.equals(baseline, Files.readAllBytes(restored)), "historic upgrade restores exact first encoded stream, header and padding");
+        byte[] next = expectedCredential.clone(); next[0] = 'Z';
+        var rotated = legacy.withCredential(next);
+        fails("ULTRA_INIT_BOOT_KEYLESS_COMPONENT_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.resolveSibling("rotated.img").toFile(), rotated));
+        check(!Files.exists(output.resolveSibling("rotated.img")), "historic credential rotation is excluded from production");
         check(Arrays.equals(targetBytes, Files.readAllBytes(target)) && Arrays.equals(baseline, Files.readAllBytes(source)) &&
-                Arrays.equals(bridge, Files.readAllBytes(work.resolve("bridge.ko"))), "paired boot, input image and real package module stay read-only");
+                Arrays.equals(bridge, Files.readAllBytes(work.resolve("bridge.ko"))), "paired boot, source and package module stay read-only");
         fails("ULTRA_INIT_CPIO_PATH_CONFLICT", () -> UltraInitRamdisk.install(
-                join(entry("./.maplesu_ultra/credential", 0100600, expected, true), cpio), handoff, bridge, null, expected));
+                join(entry("./.maplesu_ultra/credential", 0100600, expectedCredential, true), cpio), handoff, bridge, null, expectedCredential));
         Files.delete(output);
         IOException first = fails("RUNTIME_CREDENTIAL_FIRST", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), bound,
                 directory -> { throw new IOException("RUNTIME_CREDENTIAL_FIRST"); }));
-        check(first.getClass() == IOException.class && !Files.exists(output), "runtime credential failure compensates output without error normalization");
-        rejectedManifest(manifest, json.replace("\"module-parameter\"", "\"Module-Parameter\""), "CREDENTIAL_MODE");
-        rejectedManifest(manifest, json.replace(",\"credentialMode\":\"module-parameter\"", ""), "FIELDS");
-        rejectedManifest(manifest, json.replace(",\"metadataDisplacement\":4064", ""), "METADATA_DISPLACEMENT");
+        check(first.getClass() == IOException.class && !Files.exists(output), "keyless publication keeps first error and compensates output");
+        rejectedManifest(manifest, json.replace("\"keyless\"", "\"Keyless\""), "CREDENTIAL_MODE");
+        rejectedManifest(manifest, json.replace(",\"credentialMode\":\"keyless\"", ""), "FIELDS");
+        rejectedManifest(manifest, json.replace(",\"metadataDisplacement\":4064", ""), "BRIDGE_METADATA_DISPLACEMENT");
         for (String value : new String[]{"0", "-0", "2", "0132", "134217732", "-134217732", "2147483648", "999999999999999999999", "\"4096\"", "{}", "[]", "null"})
             rejectedManifest(manifest, json.replace("\"metadataDisplacement\":4064", "\"metadataDisplacement\":" + value), "METADATA_DISPLACEMENT");
         for (String value : new String[]{"4096.0", "4e3"})
             rejectedManifest(manifest, json.replace("\"metadataDisplacement\":4064", "\"metadataDisplacement\":" + value), "JSON");
         rejectedManifest(manifest, json.replace("\"metadataDisplacement\":4064", "\"metadataDisplacement\":4064,\"metadataDisplacement\":4064"), "FIELDS");
-        rejectedManifest(manifest, json.replace("\"credentialMode\":\"module-parameter\"", "\"credentialMode\":\"module-parameter\",\"credentialMode\":\"module-parameter\""), "FIELDS");
-        rejectedManifest(manifest, json.replace("\"credentialMode\":\"module-parameter\"", "\"credentialMode\":{}"), "JSON");
+        rejectedManifest(manifest, json.replace("\"credentialMode\":\"keyless\"", "\"credentialMode\":\"keyless\",\"credentialMode\":\"keyless\""), "FIELDS");
+        rejectedManifest(manifest, json.replace("\"credentialMode\":\"keyless\"", "\"credentialMode\":{}"), "JSON");
         rejectedManifest(manifest, json.replace("\"metadataDisplacement\":4064", "\"metadataDisplacement\":-134217728"), "BRIDGE_METADATA_DISPLACEMENT");
-        String pinned = json.replace("\"credentialMode\"", "\"credentialSha256\":\"" + KernelIdentity.sha256(expected) + "\",\"credentialMode\"");
+        String pinned = json.replace("\"credentialMode\"", "\"credentialSha256\":\"" + KernelIdentity.sha256(expectedCredential) + "\",\"credentialMode\"");
         Files.writeString(manifest, pinned);
         var pinnedArtifact = UltraInitBootProducer.readArtifact(manifest.toFile());
-        check(pinnedArtifact.withCredential(expected).credentialSha256.equals(KernelIdentity.sha256(expected)), "optional supplied credential hash matches actual binding");
-        fails("ULTRA_INIT_BOOT_CREDENTIAL_HASH", () -> pinnedArtifact.withCredential(next));
-        Files.writeString(manifest, pinned.replace(",\"credentialMode\":\"module-parameter\",\"metadataDisplacement\":4064", ""));
+        check(pinnedArtifact.credentialSha256.equals(KernelIdentity.sha256(expectedCredential)), "optional historical credential hash remains byte-bound metadata");
+        fails("ULTRA_INIT_BOOT_CREDENTIAL_MODE", () -> pinnedArtifact.withCredential(expectedCredential));
+        var pinnedLegacy = new UltraInitBootProducer.Artifact(target.toFile(), KernelIdentity.sha256(targetBytes),
+                "6.6.1-fixture", KernelIdentity.sha256(raw), KernelIdentity.sha256(expectedCredential), handoff, legacyBridge, null,
+                java.util.Map.of(), 4096, "module-parameter", 4064);
+        check(pinnedLegacy.withCredential(expectedCredential).credentialSha256.equals(KernelIdentity.sha256(expectedCredential)), "historic decoder checks declared credential hash");
+        fails("ULTRA_INIT_BOOT_CREDENTIAL_HASH", () -> pinnedLegacy.withCredential(next));
+        Files.writeString(manifest, pinned.replace(",\"credentialMode\":\"keyless\",\"metadataDisplacement\":4064", ""));
         var embedded = UltraInitBootProducer.readArtifact(manifest.toFile());
         check(embedded.credentialMode.equals("embedded") && embedded.metadataDisplacement == 0 &&
-                embedded.credentialSha256.equals(KernelIdentity.sha256(expected)), "legacy embedded manifest keeps exact original hash contract");
-        fails("ULTRA_INIT_BOOT_CREDENTIAL_MODE", () -> embedded.withCredential(expected));
-        rejectedManifest(manifest, pinned.replace(KernelIdentity.sha256(expected), "not-a-hash"), "HASH:credential");
+                embedded.credentialSha256.equals(KernelIdentity.sha256(expectedCredential)), "historic embedded manifest retains exact original hash contract");
+        fails("ULTRA_INIT_BOOT_CREDENTIAL_MODE", () -> embedded.withCredential(expectedCredential));
+        fails("ULTRA_INIT_BOOT_KEYLESS_COMPONENT_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), embedded));
+        rejectedManifest(manifest, pinned.replace(KernelIdentity.sha256(expectedCredential), "not-a-hash"), "HASH:credential");
         check(RamdiskInspector.inspectRamdisk(UltraInitRamdisk.install(cpio, embedded.handoff, embedded.bridge)).entry(UltraInitRamdisk.CREDENTIAL) == null,
                 "embedded ramdisk has no runtime credential entry");
-        Arrays.fill(expected, (byte) 0); Arrays.fill(next, (byte) 0);
+        Arrays.fill(expectedCredential, (byte) 0); Arrays.fill(next, (byte) 0);
     }
 
     private static String metadataManifest(Path work, byte[] raw, byte[] bridge, int displacement, String config) throws Exception {
@@ -266,7 +303,7 @@ public final class UltraInitBootProducerTest {
                 "\",\"kernelRelease\":\"6.6.1-fixture\",\"kernelSha256\":\"" + KernelIdentity.sha256(raw) +
                 "\",\"handoff\":\"handoff.bin\",\"handoffSha256\":\"" + KernelIdentity.sha256(shim) +
                 "\",\"bridge\":\"bridge.ko\",\"bridgeSha256\":\"" + KernelIdentity.sha256(bridge) +
-                "\",\"credentialMode\":\"module-parameter\",\"metadataDisplacement\":" + displacement + extra + "}";
+                "\",\"credentialMode\":\"keyless\",\"metadataDisplacement\":" + displacement + extra + "}";
         Files.writeString(work.resolve("artifact.json"), json);
         return json;
     }
@@ -285,10 +322,10 @@ public final class UltraInitBootProducerTest {
         check(artifact.targetInputSha256.size() == 1 &&
                 KernelIdentity.sha256(proof).equals(artifact.targetInputSha256.get("taskProfileAbi")),
                 "known taskProfileAbi pair binds exact bytes without asserting semantic ABI qualification");
-        check(artifact.withCredential(ascii("A".repeat(48))).targetInputSha256.equals(artifact.targetInputSha256),
-                "runtime credential binding preserves task-profile generation identity");
+        check(artifact.withDeploymentNamespace(namespaceRecord("0123456789abcdef")).targetInputSha256.equals(artifact.targetInputSha256),
+                "deployment namespace binding preserves task-profile generation identity");
         check(Arrays.equals(proof, Files.readAllBytes(sidecar)) && Files.readString(manifest).equals(json),
-                "parser and credential binding never rewrite proof or manifest");
+                "parser and namespace binding never rewrite proof or manifest");
         rejectedManifest(manifest, json.replace(",\"taskProfileAbiSha256\":\"" + KernelIdentity.sha256(proof) + "\"", ""), "FIELDS");
         rejectedManifest(manifest, json.replace("\"taskProfileAbi\":\"task-profile-abi.json\",", ""), "FIELDS");
         rejectedManifest(manifest, json.replace(KernelIdentity.sha256(proof), "0".repeat(64)), "HASH:taskProfileAbi");
@@ -320,8 +357,8 @@ public final class UltraInitBootProducerTest {
             var retained = UltraInitBootProducer.readArtifact(manifest.toFile());
             check(KernelIdentity.sha256(proof).equals(retained.targetInputSha256.get(name)),
                     name + " binds the selected bytes");
-            check(retained.withCredential(ascii("A".repeat(48))).targetInputSha256.equals(retained.targetInputSha256),
-                    name + " survives credential binding");
+            check(retained.withDeploymentNamespace(namespaceRecord("0123456789abcdef")).targetInputSha256.equals(retained.targetInputSha256),
+                    name + " survives namespace binding");
             if (name.equals("abiEvidence")) {
                 rejectedManifest(manifest, selected.replace(",\"abiEvidenceSha256\":\"" + KernelIdentity.sha256(proof) + "\"", ""), "FIELDS");
                 rejectedManifest(manifest, selected.replace("\"abiEvidence\":\"task-profile-abi.json\",", ""), "FIELDS");
@@ -350,7 +387,7 @@ public final class UltraInitBootProducerTest {
     private static byte[] kmiModule(String magic, boolean versions) {
         byte[] bytes = Arrays.copyOf(parameterModule(32), 2048);
         String names = "\0.shstrtab\0.text\0.symtab\0.gnu.linkonce.this_module\0.modinfo\0.strtab\0__versions\0";
-        byte[] info = ascii("vermagic=" + magic + "\0parmtype=credential:string\0");
+        byte[] info = ascii("vermagic=" + magic + "\0parmtype=deployment_namespace:string\0");
         ByteBuffer elf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         elf.putLong(64 + 64 + 24, 1120).putLong(64 + 64 + 32, names.length());
         elf.putLong(64 + 5 * 64 + 32, info.length);
@@ -445,11 +482,17 @@ public final class UltraInitBootProducerTest {
         fails("ULTRA_INIT_ARTIFACT_TARGET_PAGE_SIZE_SOURCE_REQUIRED", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
         metadataManifest(work, kernel(), bridge, 4064, "CONFIG_ARM64=y\nCONFIG_MODULES=y\nCONFIG_ARM64_16K_PAGES=y\n");
         fails("ULTRA_INIT_ARTIFACT_TARGET_PAGE_SIZE", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
-        for (String tags : new String[]{"", "parmtype=credential:charp\0", "parmtype=credential:string\0parmtype=credential:string\0"}) {
+        for (String tags : new String[]{"", "parmtype=deployment_namespace:charp\0", "parmtype=deployment_namespace:string\0parmtype=deployment_namespace:string\0"}) {
             byte[] changed = parameterModule(32), info = ascii("vermagic=6.6.1-fixture SMP\0" + tags);
             Arrays.fill(changed, 832, 1024, (byte) 0); System.arraycopy(info, 0, changed, 832, info.length);
             ByteBuffer.wrap(changed).order(ByteOrder.LITTLE_ENDIAN).putLong(64 + 5 * 64 + 32, info.length);
-            rejectedMetadata(work, changed, "BRIDGE_CREDENTIAL_PARAMETER_TYPE");
+            rejectedMetadata(work, changed, "BRIDGE_DEPLOYMENT_NAMESPACE_PARAMETER_TYPE");
+        }
+        metadataManifest(work, kernel(), legacyParameterModule(32), 4064, null);
+        fails("ULTRA_INIT_ARTIFACT_BRIDGE_LEGACY_CREDENTIAL_PARAMETER", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
+        for (String tags : new String[]{"parmtype=credential:charp\0", "parmtype=credential:string\0parmtype=credential:string\0"}) {
+            metadataManifest(work, kernel(), namespaceModule("parmtype=deployment_namespace:string\0" + tags), 4064, null);
+            fails("ULTRA_INIT_ARTIFACT_BRIDGE_CREDENTIAL_PARAMETER_TYPE", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
         }
         byte[] changed = parameterModule(32);
         ByteBuffer.wrap(changed).order(ByteOrder.LITTLE_ENDIAN).putInt(752, 1);
@@ -498,7 +541,7 @@ public final class UltraInitBootProducerTest {
         changed = parameterModule(32); ByteBuffer.wrap(changed).order(ByteOrder.LITTLE_ENDIAN).putInt(64 + 4 * 64, 51);
         rejectedMetadata(work, changed, "BRIDGE_SECTIONS");
         String legacy = metadataManifest(work, kernel(), module(), 4064, null)
-                .replace("\"credentialMode\":\"module-parameter\",\"metadataDisplacement\":4064", "\"credentialSha256\":\"" + "a".repeat(64) + "\"");
+                .replace("\"credentialMode\":\"keyless\",\"metadataDisplacement\":4064", "\"credentialSha256\":\"" + "a".repeat(64) + "\"");
         Files.writeString(manifest, legacy);
         check(UltraInitBootProducer.readArtifact(manifest.toFile()).credentialMode.equals("embedded"),
                 "embedded compatibility does not require runtime symbols or credential parmtype");
@@ -513,7 +556,7 @@ public final class UltraInitBootProducerTest {
     }
 
     private static byte[] namespaceModule(String tags) {
-        byte[] bridge = parameterModule(32), info = ascii("vermagic=6.6.1-fixture SMP\0parmtype=credential:string\0" + tags);
+        byte[] bridge = parameterModule(32), info = ascii("vermagic=6.6.1-fixture SMP\0" + tags);
         Arrays.fill(bridge, 832, 1024, (byte) 0); System.arraycopy(info, 0, bridge, 832, info.length);
         ByteBuffer.wrap(bridge).order(ByteOrder.LITTLE_ENDIAN).putLong(64 + 5 * 64 + 32, info.length);
         return bridge;
@@ -543,7 +586,7 @@ public final class UltraInitBootProducerTest {
         String json = metadataManifest(work, raw, bridge, 4064, null);
         var generic = UltraInitBootProducer.readArtifact(manifest.toFile());
         check(generic.supportsDeploymentNamespace, "namespace support derives from actual unique module parmtype");
-        var credentialOnly = generic.withCredential(credential);
+        var unbound = generic;
         byte[] cpio = join(entry("public-record-not-owned", 0100644, expected, true), stock(true, true));
         byte[] encoded = KernelCompression.encode(cpio, "GZIP"); encoded[4] = 0x67; encoded = Arrays.copyOf(encoded, encoded.length + 7);
         byte[] baseline = image(new byte[0], encoded); Files.write(source, baseline);
@@ -551,7 +594,7 @@ public final class UltraInitBootProducerTest {
                 "unowned image never scans canonical bytes or derives namespace from credential");
         check(UltraInitBootProducer.readDeploymentNamespace(work.resolve("target.img").toFile()) == null,
                 "paired kernel boot has no init_boot namespace");
-        fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), credentialOnly));
+        fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), unbound));
         check(!Files.exists(output), "missing required namespace exposes no candidate");
         for (byte[] invalid : new byte[][]{null, new byte[23], new byte[25], new byte[24]})
             fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_INVALID", () -> generic.withDeploymentNamespace(invalid));
@@ -559,8 +602,8 @@ public final class UltraInitBootProducerTest {
             byte[] invalid = expected.clone(); invalid[offset] = (byte) (offset >= 8 ? '_' : invalid[offset] ^ 0x40);
             fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_INVALID", () -> generic.withDeploymentNamespace(invalid));
         }
-        var bound = generic.withDeploymentNamespace(record).withCredential(credential); Arrays.fill(record, (byte) 0);
-        fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), credentialOnly));
+        var bound = generic.withDeploymentNamespace(record); Arrays.fill(record, (byte) 0);
+        fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), unbound));
         UltraInitBootProducer.produce(source.toFile(), output.toFile(), bound);
         byte[] actual = UltraInitBootProducer.readDeploymentNamespace(output.toFile());
         check(Arrays.equals(expected, actual), "record is defensively bound and read from verified owned CPIO");
@@ -577,34 +620,39 @@ public final class UltraInitBootProducerTest {
         check(Arrays.equals(bridge, Arrays.copyOfRange(produced, (int) entries.entry(UltraInitRamdisk.BRIDGE).offset,
                 (int) (entries.entry(UltraInitRamdisk.BRIDGE).offset + entries.entry(UltraInitRamdisk.BRIDGE).size))),
                 "namespace production does not change module or signature bytes");
-        UltraInitBootProducer.produce(output.toFile(), repeated.toFile(), generic.withCredential(credential).withDeploymentNamespace(expected));
-        check(Arrays.equals(Files.readAllBytes(output), Files.readAllBytes(repeated)), "both binding orders preserve deterministic same-version namespace");
+        UltraInitBootProducer.produce(output.toFile(), repeated.toFile(), generic.withDeploymentNamespace(expected));
+        check(Arrays.equals(Files.readAllBytes(output), Files.readAllBytes(repeated)), "namespace rebinding preserves deterministic same-version image");
         Files.delete(repeated);
         byte[] different = namespaceRecord("OtherSpace0123ab");
         fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_CONFLICT", () -> UltraInitBootProducer.produce(output.toFile(), repeated.toFile(),
-                generic.withCredential(credential).withDeploymentNamespace(different)));
+                generic.withDeploymentNamespace(different)));
         check(!Files.exists(repeated), "upgrade cannot silently rotate retained public namespace");
-        byte[] nextCredential = credential.clone(); nextCredential[0] = 'Z';
-        UltraInitBootProducer.produce(output.toFile(), upgraded.toFile(), generic.withCredential(nextCredential)
+        UltraInitBootProducer.produce(output.toFile(), upgraded.toFile(), generic
                 .withDeploymentNamespace(UltraInitBootProducer.readDeploymentNamespace(output.toFile())));
-        check(Arrays.equals(expected, UltraInitBootProducer.readDeploymentNamespace(upgraded.toFile())), "upgrade preserves namespace independently of credential");
+        check(Arrays.equals(expected, UltraInitBootProducer.readDeploymentNamespace(upgraded.toFile())), "keyless update preserves existing public namespace");
         UltraInitBootProducer.restore(upgraded.toFile(), restored.toFile());
         check(Arrays.equals(baseline, Files.readAllBytes(restored)), "namespace upgrade restores exact first encoded input"); Files.delete(restored);
-        metadataManifest(work, raw, parameterModule(32), 4064, null);
-        var legacy = UltraInitBootProducer.readArtifact(manifest.toFile());
-        check(!legacy.supportsDeploymentNamespace, "old module without parmtype stays supported on old production path");
+        metadataManifest(work, raw, legacyParameterModule(32), 4064, null);
+        fails("ULTRA_INIT_ARTIFACT_BRIDGE_LEGACY_CREDENTIAL_PARAMETER", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
+        var legacy = new UltraInitBootProducer.Artifact(work.resolve("target.img").toFile(),
+                KernelIdentity.sha256(Files.readAllBytes(work.resolve("target.img"))), "6.6.1-fixture", KernelIdentity.sha256(raw),
+                null, handoff(), legacyParameterModule(32), null, java.util.Map.of(), 4096, "module-parameter", 4064);
         fails("ULTRA_INIT_BOOT_DEPLOYMENT_NAMESPACE_UNSUPPORTED", () -> legacy.withDeploymentNamespace(expected));
-        UltraInitBootProducer.produce(source.toFile(), repeated.toFile(), legacy.withCredential(credential));
-        check(UltraInitBootProducer.readDeploymentNamespace(repeated.toFile()) == null, "old owned image without entry returns null");
-        UltraInitBootProducer.produce(repeated.toFile(), upgraded.resolveSibling("first-namespace.img").toFile(), bound);
-        check(Arrays.equals(expected, UltraInitBootProducer.readDeploymentNamespace(upgraded.resolveSibling("first-namespace.img").toFile())),
-                "upgrade from old owned image binds explicit canonical namespace without changing original recovery");
-        Files.delete(repeated);
-        UltraInitBootProducer.produce(output.toFile(), repeated.toFile(), legacy.withCredential(credential));
-        check(Arrays.equals(expected, UltraInitBootProducer.readDeploymentNamespace(repeated.toFile())),
-                "old-package downgrade preserves actual namespace as inert public data, not parameter support");
-        UltraInitBootProducer.restore(repeated.toFile(), restored.toFile());
-        check(Arrays.equals(baseline, Files.readAllBytes(restored)), "old-package path retains original encoded restoration"); Files.delete(restored); Files.delete(repeated);
+        fails("ULTRA_INIT_BOOT_KEYLESS_COMPONENT_REQUIRED", () -> UltraInitBootProducer.produce(source.toFile(), repeated.toFile(), legacy.withCredential(credential)));
+        check(!Files.exists(repeated), "historic module production is explicitly rejected");
+        byte[] oldCpio = UltraInitRamdisk.install(cpio, handoff(), legacyParameterModule(32), null, credential);
+        Path oldOwned = ownedNamespaceFixture(work, source, output, oldCpio);
+        byte[] legacyNamespace = namespaceRecord("0123456789abcdef");
+        check(Arrays.equals(legacyNamespace, UltraInitBootProducer.readDeploymentNamespace(oldOwned.toFile())), "verified historic carrier exposes its retained public directory");
+        Path firstNamespace = upgraded.resolveSibling("first-namespace.img");
+        UltraInitBootProducer.produce(oldOwned.toFile(), firstNamespace.toFile(), generic.withDeploymentNamespace(legacyNamespace));
+        check(Arrays.equals(legacyNamespace, UltraInitBootProducer.readDeploymentNamespace(firstNamespace.toFile())),
+                "historic upgrade binds its retained namespace without changing original recovery");
+        UltraInitBootProducer.restore(firstNamespace.toFile(), restored.toFile());
+        check(Arrays.equals(baseline, Files.readAllBytes(restored)), "historic upgrade retains exact original encoded restoration"); Files.delete(restored);
+        fails("ULTRA_INIT_BOOT_KEYLESS_COMPONENT_REQUIRED", () -> UltraInitBootProducer.produce(output.toFile(), repeated.toFile(), legacy.withCredential(credential)));
+        check(!Files.exists(repeated) && Arrays.equals(expected, UltraInitBootProducer.readDeploymentNamespace(output.toFile())),
+                "retired-package downgrade exposes no candidate and preserves existing namespace");
         Path corrupt = work.resolve("corrupt.img"); byte[] damaged = Files.readAllBytes(output);
         damaged[(int) layout.ramdiskOffset + 4] ^= 1; Files.write(corrupt, damaged);
         fails("ULTRA_INIT_BOOT_RECOVERY_CHECKSUM", () -> UltraInitBootProducer.readDeploymentNamespace(corrupt.toFile()));
@@ -650,16 +698,15 @@ public final class UltraInitBootProducerTest {
             metadataManifest(work, raw, namespaceModule(tags), 4064, null);
             fails("ULTRA_INIT_ARTIFACT_BRIDGE_DEPLOYMENT_NAMESPACE_PARAMETER_TYPE", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
         }
-        metadataManifest(work, raw, join(parameterModule(32), ascii("parmtype=deployment_namespace:string\0")), 4064, null);
-        check(!UltraInitBootProducer.readArtifact(manifest.toFile()).supportsDeploymentNamespace,
-                "parmtype-shaped bytes outside actual modinfo do not advertise namespace support");
+        metadataManifest(work, raw, join(namespaceModule(""), ascii("parmtype=deployment_namespace:string\0")), 4064, null);
+        fails("ULTRA_INIT_ARTIFACT_BRIDGE_DEPLOYMENT_NAMESPACE_PARAMETER_TYPE", () -> UltraInitBootProducer.readArtifact(manifest.toFile()));
         rejectedManifest(manifest, json.replace("\"schemaVersion\":1", "\"schemaVersion\":1,\"supportsDeploymentNamespace\":\"true\""), "FIELDS");
         check(Arrays.equals(baseline, Files.readAllBytes(source)), "namespace scenarios leave source input unchanged");
-        Arrays.fill(credential, (byte) 0); Arrays.fill(nextCredential, (byte) 0);
+        Arrays.fill(credential, (byte) 0);
     }
 
     private static UltraInitBootProducer.Artifact repatchArtifact(Path work, int generation,
-                                                                  byte[] credential, byte[] namespace) throws Exception {
+                                                                  byte[] namespace) throws Exception {
         byte[] bridge = namespaceModule("parmtype=deployment_namespace:string\0");
         // Distinct AArch64 SDK-call and handoff bytes, parsed and copied but never executed.
         ByteBuffer.wrap(bridge).order(ByteOrder.LITTLE_ENDIAN).putInt(1028, 0xd2800000 | generation << 5);
@@ -669,26 +716,26 @@ public final class UltraInitBootProducerTest {
         Files.write(work.resolve("handoff.bin"), nextHandoff);
         Files.writeString(work.resolve("artifact.json"), json.replace(KernelIdentity.sha256(handoff()), KernelIdentity.sha256(nextHandoff)));
         return UltraInitBootProducer.readArtifact(work.resolve("artifact.json").toFile())
-                .withCredential(credential).withDeploymentNamespace(namespace);
+                .withDeploymentNamespace(namespace);
     }
 
     private static void repatchPayload(Path image, UltraInitBootProducer.Artifact artifact,
-                                       String originalInitHash, byte[] credential, byte[] namespace) throws Exception {
+                                       String originalInitHash, byte[] namespace) throws Exception {
         var layout = BootImageInspector.inspect(image.toFile());
         byte[] cpio = KernelCompression.decode(UltraInitBootProducer.component(image.toFile(), layout), "GZIP", 1024 * 1024);
         var entries = RamdiskInspector.inspectRamdisk(cpio);
         check(entries.entry("init").sha256.equals(artifact.handoffSha256), "repatch installs selected handoff bytes");
         check(entries.entry(UltraInitRamdisk.BRIDGE).sha256.equals(artifact.bridgeSha256), "repatch installs selected bridge including changed SDK-call bytes");
         check(entries.entry(UltraInitRamdisk.ORIGINAL).sha256.equals(originalInitHash), "repatch saves original Android or third-party init, not the previous handoff");
-        check(entries.entry(UltraInitRamdisk.CREDENTIAL).sha256.equals(KernelIdentity.sha256(credential)), "cross-artifact update preserves supplied credential identity");
+        check(entries.entry(UltraInitRamdisk.CREDENTIAL) == null, "cross-artifact keyless update never introduces a credential entry");
         check(Arrays.equals(namespace, UltraInitBootProducer.readDeploymentNamespace(image.toFile())), "cross-artifact update preserves deployment namespace");
     }
 
     private static void crossArtifactRepatch(Path work) throws Exception {
-        byte[] credential = ascii("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL"), namespace = namespaceRecord("RepatchSpace12ab");
+        byte[] namespace = namespaceRecord("RepatchSpace12ab");
         var artifacts = new UltraInitBootProducer.Artifact[3];
         for (int index = 0; index < artifacts.length; index++) {
-            artifacts[index] = repatchArtifact(Files.createDirectory(work.resolve("artifact-" + index)), index + 1, credential, namespace);
+            artifacts[index] = repatchArtifact(Files.createDirectory(work.resolve("artifact-" + index)), index + 1, namespace);
             if (index > 0) {
                 check(!artifacts[index - 1].handoffSha256.equals(artifacts[index].handoffSha256) &&
                         !artifacts[index - 1].bridgeSha256.equals(artifacts[index].bridgeSha256), "new artifact has different handoff and bridge content identities");
@@ -715,7 +762,7 @@ public final class UltraInitBootProducerTest {
                 var report = UltraInitBootProducer.produce(input.toFile(), outputs[index].toFile(), artifacts[index]);
                 check(report.sourceSha256.equals(KernelIdentity.sha256(index == 0 ? baseline : installed[index - 1])), "report identifies the exact current input of each update");
                 check(UltraInitBootProducer.recognizes(outputs[index].toFile()), "every generation has a verified owned recovery record");
-                repatchPayload(outputs[index], artifacts[index], originalInitHash, credential, namespace);
+                repatchPayload(outputs[index], artifacts[index], originalInitHash, namespace);
                 installed[index] = Files.readAllBytes(outputs[index]);
                 check(index == 0 || !Arrays.equals(installed[index - 1], installed[index]), "changed artifact produces changed image bytes");
                 UltraInitBootProducer.restore(outputs[index].toFile(), restored.toFile());
@@ -757,7 +804,6 @@ public final class UltraInitBootProducerTest {
                     KernelIdentity.sha256(Files.readAllBytes(directory.resolve("handoff.bin"))).equals(artifact.handoffSha256) &&
                     KernelIdentity.sha256(Files.readAllBytes(directory.resolve("bridge.ko"))).equals(artifact.bridgeSha256), "all artifact generations and paired boot inputs remain byte-identical");
         }
-        Arrays.fill(credential, (byte) 0);
     }
 
     private static java.util.Map<String, byte[]> kmiBundle() throws Exception {
@@ -969,7 +1015,7 @@ public final class UltraInitBootProducerTest {
             }
             if (args.length == 1 && args[0].equals("runtime-credential")) {
                 runtimeCredential(work);
-                System.out.println("PASS " + checks + " runtime credential container checks; no boot/bridge/SDK execution");
+                System.out.println("PASS " + checks + " historic decoder and keyless upgrade checks; no boot/bridge/SDK execution");
                 return;
             }
             kmiComponent(Files.createDirectory(work.resolve("kmi-component")));
@@ -981,11 +1027,9 @@ public final class UltraInitBootProducerTest {
             Path target = work.resolve("target.img"), source = work.resolve("input.img"),
                     output = work.resolve("candidate.img"), repeated = work.resolve("repeat.img"), restored = work.resolve("restored.img");
             byte[] raw = kernel(), targetBytes = image(raw, new byte[0]); Files.write(target, targetBytes);
-            // Package-private constructor deliberately supplies synthetic opaque module bytes;
-            // readArtifact has independent module checks and production callers use that method.
-            UltraInitBootProducer.Artifact artifact = new UltraInitBootProducer.Artifact(target.toFile(),
-                    KernelIdentity.sha256(targetBytes), KernelIdentity.releaseOf(raw), KernelIdentity.sha256(raw),
-                    KernelIdentity.sha256(ascii("fixture-credential")), handoff(), ascii("opaque module fixture"));
+            metadataManifest(work, raw, parameterModule(32), 4064, null);
+            UltraInitBootProducer.Artifact artifact = UltraInitBootProducer.readArtifact(work.resolve("artifact.json").toFile())
+                    .withDeploymentNamespace(namespaceRecord("0123456789abcdef"));
             for (byte[] emptyKernel : new byte[][]{new byte[0], raw}) {
                 byte[] emptyRamdiskImage = image(emptyKernel, new byte[0]); Files.write(source, emptyRamdiskImage);
                 fails("ULTRA_INIT_BOOT_CONTAINER", () -> UltraInitBootProducer.produce(source.toFile(), output.toFile(), artifact));
@@ -1059,7 +1103,9 @@ public final class UltraInitBootProducerTest {
             fails("ULTRA_INIT_CPIO_INIT_SYMLINK_LOOP", () -> UltraInitRamdisk.install(looped, handoff(), artifact.bridge));
             var ksuArtifact = new UltraInitBootProducer.Artifact(artifact.targetBoot, artifact.targetBootSha256,
                     artifact.kernelRelease, artifact.kernelSha256, artifact.credentialSha256,
-                    artifact.handoff, artifact.bridge, KernelIdentity.sha256(oldShim));
+                    artifact.handoff, artifact.bridge, KernelIdentity.sha256(oldShim), artifact.targetInputSha256,
+                    artifact.configPageSize, "keyless", artifact.metadataDisplacement, true)
+                    .withDeploymentNamespace(namespaceRecord("0123456789abcdef"));
             byte[] ksuInput = image(new byte[0], KernelCompression.encode(compatible, "GZIP")); Files.write(source, ksuInput);
             UltraInitBootProducer.produce(source.toFile(), output.toFile(), ksuArtifact);
             UltraInitBootProducer.restore(output.toFile(), restored.toFile());

@@ -6,6 +6,7 @@ import dev.maplesu.manager.modules.ModuleToolDeployment
 import dev.maplesu.manager.runtime.UltraRootCommandReceipt
 import java.io.File
 import java.util.concurrent.CancellationException
+import org.json.JSONObject
 
 internal object UltraPolicyBackendDeployment {
     // Executed only before submitting a new helper. Page reads and startup
@@ -23,7 +24,9 @@ internal object UltraPolicyBackendDeployment {
         // Keep the scoped SDK identity used by installation preparation. The full
         // asset script exceeds su's 4096-byte -c contract even when id -u succeeds.
         // Select this transport before publication; never replay uncertain writes.
-        val toolsFailure = prepareTools(toolsScript, client::runRootCommand, client::decodeText)
+        val toolsFailure = prepareTools(toolsScript, client::runRootCommand, client::decodeText) { receipt ->
+            UltraEnvironmentUpgrade.recordPreparationReceipt(context, preparationDiagnostic(receipt, client::decodeText))
+        }
         if (toolsFailure != null) return toolsFailure
         val expected = BuildConfig.ULTRA_POLICY_BACKEND_SHA256
         val size = BuildConfig.ULTRA_POLICY_BACKEND_BYTES
@@ -42,7 +45,7 @@ internal object UltraPolicyBackendDeployment {
     }
 
     internal fun prepareTools(script: String, run: (String) -> NativeReceipt,
-                              decode: (String?) -> String?): String? {
+                              decode: (String?) -> String?, onFailure: (NativeReceipt) -> Unit = {}): String? {
         try {
             val command = UltraRootCommandReceipt(script)
             var tools = run(command.command)
@@ -54,6 +57,8 @@ internal object UltraPolicyBackendDeployment {
                 tools = run(command.command)
             }
             if (!tools.succeeded) {
+                // Export through the existing app-owned upgrade diagnostic, without another SDK call.
+                runCatching { onFailure(tools) }
                 // Preserve scalar transport facts without logging commands, paths or output.
                 // A shell marker never repairs failed transport/session cleanup.
                 val failure = command.decodeSdk(tools, decode)
@@ -88,5 +93,30 @@ internal object UltraPolicyBackendDeployment {
             return "MODULE_TOOLS_PUBLICATION_FAILED"
         }
         return null
+    }
+
+    /** Keep the actual SDK fields and output; never include the submitted command or credential. */
+    internal fun preparationDiagnostic(receipt: NativeReceipt, decode: (String?) -> String?): String {
+        fun text(value: String?): String = UltraSdkLogging.redact(value)
+            .replace(Regex("/data/[A-Za-z0-9]{16,17}(?=/|$)"), "/data/<private>")
+        val diagnostic = JSONObject().put("operation", receipt.operation).put("ok", receipt.ok)
+            .put("sdkError", receipt.sdkError).put("sdkErrorCode", receipt.sdkErrorCode)
+            .put("reason", text(receipt.reason)).put("operationCompleted", receipt.operationCompleted)
+        val root = receipt.obj("rootCommand")
+        if (root != null) {
+            val facts = JSONObject()
+            for (key in root.keys()) {
+                root.opt(key)?.takeIf { it is Number || it is Boolean }?.let { facts.put(key, it) }
+            }
+            diagnostic.put("rootCommand", facts)
+        }
+        for (key in listOf("exitCode", "timedOut", "resultBytes")) {
+            receipt.data?.opt(key)?.takeIf { it is Number || it is Boolean }?.let { diagnostic.put(key, it) }
+        }
+        receipt.string("result")?.let { diagnostic.put("output", text(decode(it))) }
+        for (key in listOf("stdout", "stderr")) {
+            receipt.string(key)?.let { diagnostic.put(key, text(it)) }
+        }
+        return diagnostic.toString()
     }
 }

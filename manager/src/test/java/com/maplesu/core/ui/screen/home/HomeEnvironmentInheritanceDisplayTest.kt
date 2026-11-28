@@ -5,6 +5,7 @@ import com.maplesu.core.ui.util.module.LatestVersionInfo
 import com.maplesu.core.ui.component.maple.homeUltraBrandFacts
 import com.maplesu.core.ui.component.maple.shouldShowUltraBrand
 import dev.maplesu.manager.workmode.WorkMode
+import dev.maplesu.manager.workmode.detect.ModeState
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -67,11 +68,61 @@ class HomeEnvironmentInheritanceDisplayTest {
         }
     }
 
-    @Test fun missingSuWithoutACachedModeStillStartsChecking() {
+    @Test fun failedRefreshKeepsTheConfirmedModeVisibleWithoutGrantingRoot() {
+        for (mode in WorkMode.entries) {
+            for (failure in listOf(null, "MODE_PREPARE_TIMEOUT", "MODE_PROBE_FAILED", "MODE_PROBE_BUSY")) {
+                val refreshed = state(mode).withHiddenFacts(HomeHiddenFacts(false, false))
+                    .afterEnvironmentCheck(false, true, failure, ModeState.INDETERMINATE, knownUltra = false, failureDetail = null)
+                assertEquals(mode, refreshed.environmentMode)
+                assertTrue(refreshed.showInstalledStatus)
+                assertFalse("$mode / $failure must not replace the cached card", refreshed.showEnvironmentStatusCard)
+                assertFalse(refreshed.showEnvironmentRefreshWarning)
+                assertTrue(refreshed.environmentChecking)
+                assertFalse(refreshed.isRootAvailable)
+                assertFalse(refreshed.isManager)
+                assertNull(refreshed.ksuVersion)
+            }
+        }
+    }
+
+    @Test fun aRefreshWarningNeverExposesAHiddenMode() {
+        val failed = state(WorkMode.LITE).afterEnvironmentCheck(false, true, null, ModeState.INDETERMINATE, knownUltra = false, failureDetail = null)
+        for (hidden in listOf(HomeHiddenFacts(true, false), HomeHiddenFacts(false, true, transitionPending = true))) {
+            val projected = failed.withHiddenFacts(hidden)
+            assertFalse(projected.showEnvironmentRefreshWarning)
+            assertFalse(projected.showInstalledStatus)
+            assertNull(projected.environmentMode)
+        }
+    }
+
+    @Test fun previousBootHistoryIsDisplayOnlyWithoutClaimingCurrentAuthorization() {
+        for (mode in WorkMode.entries) {
+            val previous = state().copy(previousEnvironmentMode = mode)
+                .withHiddenFacts(HomeHiddenFacts(false, false))
+                .afterEnvironmentCheck(false, true, null, ModeState.INDETERMINATE, knownUltra = false, failureDetail = null)
+            assertEquals(mode, previous.previousEnvironmentMode)
+            assertNull(previous.environmentMode)
+            assertTrue(previous.showInstalledStatus)
+            assertFalse(previous.showEnvironmentRefreshWarning)
+            assertFalse(previous.showEnvironmentStatusCard)
+            assertFalse(previous.isManager)
+            assertFalse(previous.isRootAvailable)
+        }
+    }
+
+    @Test fun hidingAlsoClearsPreviousBootDisplayHistory() {
+        for (hidden in listOf(HomeHiddenFacts(true, false), HomeHiddenFacts(false, true, transitionPending = true))) {
+            val masked = state().copy(previousEnvironmentMode = WorkMode.LITE).withHiddenFacts(hidden)
+            assertNull(masked.previousEnvironmentMode)
+            assertFalse(masked.showInstalledStatus)
+        }
+    }
+
+    @Test fun missingSuWithoutACachedModeKeepsThePageAvailable() {
         val checking = state().checkingAfterSuMissing()
         assertNull(checking.environmentMode)
         assertFalse(checking.showInstalledStatus)
-        assertTrue(checking.showEnvironmentStatusCard)
+        assertFalse(checking.showEnvironmentStatusCard)
     }
 
     @Test fun knownHiddenAlwaysBeatsConfirmationAndSlowVisibleResults() {
@@ -84,20 +135,29 @@ class HomeEnvironmentInheritanceDisplayTest {
         }
     }
 
-    @Test fun firstUnknownHiddenStateDoesNotExposeTheModeOrManager() {
+    @Test fun unknownHiddenStateKeepsDisplayHistoryButDoesNotExposeManagerCapabilities() {
         val checking = state(WorkMode.LITE).copy(isManager = true, ksuVersion = 123)
             .withHiddenFacts(HomeHiddenFacts(false, true))
-        assertFalse(checking.showInstalledStatus)
+        assertTrue(checking.showInstalledStatus)
         assertFalse(checking.isManager)
+        assertFalse(checking.isRootAvailable)
         assertNull(checking.environmentMode)
-        assertTrue(checking.showEnvironmentStatusCard)
+        assertFalse(checking.showEnvironmentStatusCard)
     }
 
     @Test fun completedFailedHiddenReadKeepsEntriesClosedWithoutAnEndlessSpinner() {
         val settled = state(WorkMode.LITE).copy(environmentChecking = false)
             .withHiddenFacts(HomeHiddenFacts(false, true))
         assertFalse(settled.showInstalledStatus)
+        assertNull(settled.environmentMode)
+        assertNull(settled.displayEnvironmentMode)
+        assertFalse(settled.isManager)
+        assertFalse(settled.isRootAvailable)
+        assertFalse(settled.environmentChecking)
+        assertFalse(settled.litePending)
+        assertFalse(settled.showLiteChecking)
         assertFalse(settled.showEnvironmentStatusCard)
+        assertTrue(settled.environmentNeedsConfirmation)
         assertTrue(settled.hiddenConfirming)
     }
 
@@ -109,12 +169,14 @@ class HomeEnvironmentInheritanceDisplayTest {
         assertFalse(ready.showEnvironmentStatusCard)
     }
 
-    @Test fun completedUnresolvedProbeNeverRetainsStartupPending() {
+    @Test fun anUnresolvedProbeRetainsIdentityPending() {
         val settled = state().copy(litePending = true).afterEnvironmentCheck(
             modeResolved = false, detectionComplete = false, detectionFailure = null, detectedState = null,
+            knownUltra = false, failureDetail = null,
         )
-        assertFalse(settled.litePending)
-        assertTrue(settled.showEnvironmentStatusCard)
+        assertTrue(settled.litePending)
+        assertTrue(settled.environmentChecking)
+        assertFalse(settled.showEnvironmentStatusCard)
         assertEquals(HomeEnvironmentFailure.UNCONFIRMED, settled.environmentFailure)
     }
 
@@ -123,6 +185,7 @@ class HomeEnvironmentInheritanceDisplayTest {
             environmentFailure = HomeEnvironmentFailure.UNCONFIRMED).afterEnvironmentCheck(
             modeResolved = false, detectionComplete = true, detectionFailure = null,
             detectedState = dev.maplesu.manager.workmode.detect.ModeState.MODE_A_INSTALLED_UNBOUND,
+            knownUltra = false, failureDetail = null,
         )
         assertNull(installed.environmentFailure)
         assertFalse(installed.showEnvironmentStatusCard)

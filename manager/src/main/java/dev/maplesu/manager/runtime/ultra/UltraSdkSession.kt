@@ -29,7 +29,7 @@ internal object UltraSdkSession {
             !Thread.currentThread().isInterrupted && hook.available() &&
             UltraEnvironmentAutoSetup.blockedReason(context, bootSession = true) == null
         if (!isCurrent()) return UltraBootSdkGateway.Result(false, false, "SDK_IDENTITY_SCOPE_CHANGED")
-        val result = UltraBootSdkGateway.connect(preferences.getString(BOOTSTRAP_SUBMITTED, null) == bootId,
+        val result = UltraBootSdkGateway.connect(preferences.all[BOOTSTRAP_SUBMITTED] == bootId,
             object : UltraBootSdkGateway.Port {
                 override fun current() = allowed()
                 override fun query() = gateway(context, bootId, isCurrent)
@@ -65,7 +65,7 @@ internal object UltraSdkSession {
 
     fun current(context: Context): UltraBootSdkSession? {
         val saved = UltraBootSdkSession.parse(context.ultraPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(RECORD, null)) ?: return null
+            .all[RECORD] as? String) ?: return null
         return saved.takeIf { it.current(UltraEnvironmentAutoSetup.currentBootId()) }
     }
 

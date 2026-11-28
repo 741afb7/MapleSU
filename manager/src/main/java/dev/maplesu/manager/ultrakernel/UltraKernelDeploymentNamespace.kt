@@ -24,6 +24,22 @@ internal class UltraKernelDeploymentNamespace private constructor(private val na
             return UltraKernelDeploymentNamespace(ByteArray(16) { ALPHABET[random.nextInt(ALPHABET.length)].code.toByte() })
         }
 
+        /** Retain an existing public directory name, without retaining its former credential. */
+        fun fromDirectoryName(name: String): UltraKernelDeploymentNamespace {
+            require(name.matches(Regex("[A-Za-z0-9]{16}"))) { "ULTRA_KERNEL_DEPLOYMENT_NAMESPACE" }
+            return UltraKernelDeploymentNamespace(name.toByteArray(Charsets.US_ASCII))
+        }
+
+        /** Input ranges have already been verified against the installed image. */
+        fun fromLegacyInitPaths(ranges: Sequence<ByteArray>): UltraKernelDeploymentNamespace? {
+            val path = Regex("/data/([A-Za-z0-9]{16})/init\\x00")
+            val names = ranges.flatMap { bytes ->
+                path.findAll(String(bytes, Charsets.ISO_8859_1)).map { it.groupValues[1] }
+            }.toSet()
+            require(names.size <= 1) { "ULTRA_KERNEL_RECOVERY_DEPLOYMENT_CONFLICT" }
+            return names.singleOrNull()?.let(::fromDirectoryName)
+        }
+
         fun decode(record: ByteArray): UltraKernelDeploymentNamespace {
             require(record.size == RECORD_BYTES) { "ULTRA_KERNEL_DEPLOYMENT_RECORD_BYTES" }
             val input = ByteBuffer.wrap(record).order(ByteOrder.LITTLE_ENDIAN)

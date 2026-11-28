@@ -103,11 +103,18 @@ fun SettingPagerMaterial(
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topBarState)
     val snackBarHost = remember { SnackbarHostState() }
     // 2026-10-31 模式独立性：设置页只按 uiState.modePolicy 渲染；
-    // 工作环境面板只在 Ultra 专属 section 可见时才构造（Normal/未判定零 Ultra SDK 探测），
+    // 完整环境面板由 Ultra section 许可；受限诊断只消费已确认 owner 的当前观察，
     // 隐藏/隐身生效时不构造：这张卡带模式字样（不变量 §2.1）。
     val modePolicy = uiState.modePolicy
-    val ultraPanel = rememberUltraEnvironmentPanel(
+    val fullUltraPanel = rememberUltraEnvironmentPanel(
         enabled = !appearanceOnly && modePolicy.shows(SettingsSection.ULTRA_ULTRA_ENV) && !uiState.hiddenMasked,
+    )
+    val diagnosticPanel = rememberUltraComponentDiagnosticsPanel(
+        if (appearanceOnly || fullUltraPanel != null) null else uiState.ultraComponentDiagnostic,
+    )
+    val ultraPanel = fullUltraPanel ?: diagnosticPanel
+    val savedInstallFailure = rememberSavedUltraInstallFailureDiagnostic(
+        enabled = !appearanceOnly && ultraPanel == null && modePolicy.mode == null && !uiState.hiddenMasked,
     )
     var showBottomSheet by rememberSaveable { mutableStateOf(false) }
     var showUninstall by rememberSaveable { mutableStateOf(false) }
@@ -176,7 +183,7 @@ fun SettingPagerMaterial(
 
                 // Ultra 专属：MapleSU_Ultra工作环境（panel 为 null 时说明未获许可，连组合都不发生）。
                 AnimatedVisibility(
-                    visible = ultraPanel != null || uiState.installedKernelUpdateRequired,
+                    visible = ultraPanel != null || savedInstallFailure != null || uiState.installedKernelUpdateRequired,
                     enter = expandVertically(tween(160), expandFrom = Alignment.Top) + fadeIn(tween(120)),
                     exit = ExitTransition.None,
                 ) {
@@ -186,6 +193,7 @@ fun SettingPagerMaterial(
                             ultraPanel?.let { panel ->
                                 add { UltraEnvironmentRowMaterial(panel) }
                             }
+                            savedInstallFailure?.let { detail -> add { SavedUltraInstallFailureDiagnosticMaterial(detail) } }
                             if (uiState.installedKernelUpdateRequired) add { InstalledUltraUpgradeRowMaterial() }
                         },
                     )
@@ -392,7 +400,7 @@ fun SettingPagerMaterial(
                 SegmentedColumn(
                     modifier = GroupPadding,
                     content = buildList {
-                        ultraPanel?.let { panel -> add { UltraUninstallRowMaterial(panel) } }
+                        fullUltraPanel?.let { panel -> add { UltraUninstallRowMaterial(panel) } }
                         if (showNormalUninstall) {
                             add {
                                 ArrowRowMaterial(

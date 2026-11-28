@@ -33,7 +33,7 @@ internal class UltraLegacyCredential private constructor(val value: String, val 
         fun read(context: Context): UltraLegacyCredential? =
             read(context.ultraPreferences("maplesu-ultra", Context.MODE_PRIVATE))
 
-        internal fun read(prefs: SharedPreferences): UltraLegacyCredential? {
+        internal fun read(prefs: SharedPreferences): UltraLegacyCredential? = try {
             if (prefs.getString("environmentRemoval", null) != null ||
                 !prefs.getString("rootKeySuspended", null).isNullOrBlank() ||
                 !prefs.getBoolean("keyVerified", false)) return null
@@ -41,7 +41,9 @@ internal class UltraLegacyCredential private constructor(val value: String, val 
             if (key.length !in 16..1023 || key.any { it.code !in 0x21..0x7e }) return null
             val fingerprint = fingerprint(key)
             if (prefs.getString("keyVerifiedFor", null) != fingerprint) return null
-            return UltraLegacyCredential(key, fingerprint)
+            UltraLegacyCredential(key, fingerprint)
+        } catch (_: ClassCastException) {
+            null
         }
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.rounded.CheckCircleOutline
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.ui.text.style.TextOverflow
 import com.maplesu.core.ui.util.AppearancePreferences
 import com.maplesu.core.ui.util.AppearancePrefsPolicy
@@ -76,6 +77,33 @@ internal fun homeStatusContentColor(): Color =
     if (LocalThemeWallpaperStyle.current?.darkNeutral ?: isInDarkTheme()) Color(0xFFB8E8C5) else Color(0xFF164A29)
 
 @Composable
+internal fun homeInstalledStatusTitle(state: HomeUiState): String {
+    val mode = when (state.displayEnvironmentMode) {
+        dev.maplesu.manager.workmode.WorkMode.LITE -> stringResource(R.string.work_mode_lite)
+        dev.maplesu.manager.workmode.WorkMode.KSU -> stringResource(R.string.work_mode_ksu)
+        null -> STATUS_CARD_TEXT
+    }
+    return if (state.isLateLoadMode && state.environmentMode != null) {
+        "$mode [${stringResource(R.string.jailbreak_mode)}]"
+    } else mode
+}
+
+@Composable
+internal fun homeInstalledStatusSummary(state: HomeUiState, ultraVersionLabel: String? = null): String {
+    if (state.showInstalledUnready) {
+        return stringResource(R.string.home_environment_installed_unready_summary)
+    }
+    val versionLabel = if (state.ultraBrandVisible) {
+        val ultraName = stringResource(R.string.work_mode_lite)
+        ultraVersionLabel?.trim()?.takeIf { it.isNotEmpty() && it != ultraName }
+    } else {
+        state.kernelUAPIVersion?.let { stringResource(R.string.maplesu_backend_version, it) }
+    }
+    return if (versionLabel != null) stringResource(R.string.home_working_version, versionLabel)
+        else stringResource(R.string.home_environment_cached_title)
+}
+
+@Composable
 internal fun rememberThemeHomeLayout(): ThemeHomeLayout {
     val context = LocalContext.current
     val revision = WallpaperPrefs.observe()
@@ -97,12 +125,13 @@ internal fun ThemeHomeStatus(state: HomeUiState, actions: HomeActions, modifier:
     val decoration = com.maplesu.core.ui.util.rememberPreparedStatusDecoration(targetWidth)
     CompositionLocalProvider(LocalPreparedStatusThemeArt provides art,
         com.maplesu.core.ui.util.LocalPreparedStatusDecoration provides decoration) {
-        if (layout != ThemeHomeLayout.Three || !state.showInstalledStatus || state.showEnvironmentStatusCard) {
+        if (layout != ThemeHomeLayout.Three || !state.showInstalledStatus) {
             Box(modifier.testTag("home-original-status")) { status() }
         } else {
             // Match the reference grid: a square hero and two equal tiles sharing its height.
             BoxWithConstraints(modifier.fillMaxWidth().testTag("home-three")) {
-                Row(Modifier.fillMaxWidth().height((maxWidth-12.dp)/2),
+                Column {
+                Row(Modifier.fillMaxWidth().height((this@BoxWithConstraints.maxWidth-12.dp)/2),
                     horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                     ThemeThreeStatus(state,actions,Modifier.weight(1f).fillMaxHeight())
                     val counts = LocalThemeHomeCounts.current
@@ -112,6 +141,31 @@ internal fun ThemeHomeStatus(state: HomeUiState, actions: HomeActions, modifier:
                         ThemeCountTile(stringResource(R.string.module),counts.modules,
                             Icons.Outlined.Extension,Modifier.fillMaxWidth().weight(1f).testTag("home-counter-module"))
                     }
+                }
+                EnvironmentRefreshAction(state.environmentChecking || state.manualEnvironmentChecking, actions.onEnvironmentRetry)
+                }
+            }
+        }
+    }
+}
+
+/** Confirmation belongs to the status card's flow, below its artwork. */
+@Composable
+internal fun EnvironmentRefreshAction(checking: Boolean, onRetry: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+        .testTag("home-environment-footer"), horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically) {
+        val label = stringResource(if (checking) R.string.home_status_checking else R.string.home_environment_check_retry)
+        when (LocalUiMode.current) {
+            UiMode.Miuix -> {
+                if (checking) top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator(
+                    color = top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme.onBackground, size = 18.dp)
+                top.yukonga.miuix.kmp.basic.TextButton(text = label, onClick = onRetry, enabled = !checking)
+            }
+            UiMode.Material -> {
+                if (checking) androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                androidx.compose.material3.TextButton(onClick = onRetry, enabled = !checking) {
+                    androidx.compose.material3.Text(label)
                 }
             }
         }
@@ -150,11 +204,7 @@ private fun ThemeThreeStatus(state: HomeUiState, actions: HomeActions, modifier:
     val targetWidth = with(androidx.compose.ui.platform.LocalDensity.current) { width.dp.roundToPx() }
     val decoration = com.maplesu.core.ui.util.rememberStatusDecoration(targetWidth).takeIf { art.photo == null }
     val protectedText = state.showSafeModeBanner || state.isSafeMode || state.isLateLoadMode
-    val title = when {
-        state.isSafeMode -> stringResource(R.string.home_safe_mode_title)
-        state.isLateLoadMode -> stringResource(R.string.jailbreak_mode)
-        else -> STATUS_CARD_TEXT
-    }
+    val title = homeInstalledStatusTitle(state)
     val mode = when (state.lkmMode) { true -> "LKM"; false -> "GKI"; null -> "" }
     val content: @Composable () -> Unit = {
         Box(Modifier.fillMaxSize().heightIn(min=160.dp).testTag("home-three-status")) {
@@ -169,17 +219,22 @@ private fun ThemeThreeStatus(state: HomeUiState, actions: HomeActions, modifier:
                     alpha=maxOf(decorationPrefs.statusDecorationDim,if (decorationPrefs.statusDecorationHideText) 0f else .56f))))
             }
             CompositionLocalProvider(LocalThemePhotoContent provides
-                if (decoration != null) Color.White else art.photo?.let { art.foreground } ?: homeStatusContentColor()) {
+                if (decoration != null) Color.White else art.photo?.let { art.foreground }
+                    ?: if (state.showEnvironmentReady) homeStatusContentColor() else when (LocalUiMode.current) {
+                        UiMode.Miuix -> top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme.onSurface
+                        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSecondaryContainer
+                    }) {
                 if (!art.hideIcon && art.photo == null && decoration == null) Box(
                     Modifier.matchParentSize().offset(27.dp,31.dp).testTag("home-status-default-check"),contentAlignment=Alignment.BottomEnd) {
-                    HomeThemeIcon(Icons.Rounded.CheckCircleOutline,
+                    HomeThemeIcon(if (state.showEnvironmentReady) Icons.Rounded.CheckCircleOutline else Icons.Rounded.Info,
                         Modifier.size(110.dp).testTag("home-three-status-check"),
-                        Color(0xFF36D167))
+                        if (state.showEnvironmentReady) Color(0xFF36D167) else LocalThemePhotoContent.current)
                 }
                 if (decoration == null || !decorationPrefs.statusDecorationHideText || protectedText) {
                 Column(Modifier.align(Alignment.BottomStart).padding(16.dp),
                     verticalArrangement=Arrangement.spacedBy(8.dp)) {
                     if (!art.hideText || protectedText) HomeTileText(title,title=true)
+                    if (state.showInstalledUnready) HomeTileText(homeInstalledStatusSummary(state))
                     if (mode.isNotEmpty() && !art.hideMode) HomeTileText(mode)
                     if (state.showCustomLkmBadge) HomeTileText(stringResource(R.string.home_lkm_custom))
                 }
@@ -195,12 +250,16 @@ private fun ThemeThreeStatus(state: HomeUiState, actions: HomeActions, modifier:
         UiMode.Miuix -> top.yukonga.miuix.kmp.basic.Card(
             modifier=modifier, onClick=click, showIndication=!state.isLateLoadMode,
             colors=top.yukonga.miuix.kmp.basic.CardDefaults.defaultColors(
-                color=if (art.photo != null || decoration != null) Color.Transparent else homeStatusContainerColor()),
+                color=if (art.photo != null || decoration != null) Color.Transparent
+                    else if (state.showEnvironmentReady) homeStatusContainerColor()
+                    else top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme.surface),
         ) { content() }
         UiMode.Material -> androidx.compose.material3.Surface(
             modifier=modifier.clickable(enabled=!state.isLateLoadMode,onClick=click),
             shape=androidx.compose.material3.MaterialTheme.shapes.large,
-            color=if (art.photo != null || decoration != null) Color.Transparent else homeStatusContainerColor(),
+            color=if (art.photo != null || decoration != null) Color.Transparent
+                else if (state.showEnvironmentReady) homeStatusContainerColor()
+                else androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer,
         ) { content() }
     }
 }

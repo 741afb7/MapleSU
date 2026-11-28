@@ -49,7 +49,6 @@ import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -144,6 +143,7 @@ fun HomePagerMaterial(
         Column(
             modifier = Modifier
                 .padding(innerPadding)
+                .padding(bottom = bottomInnerPadding)
                 .nestedScroll(scrollBehavior.nestedScrollConnection)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
@@ -204,8 +204,20 @@ fun HomePagerMaterial(
             if (state.showLiteRootFailure) {
                 WarningCard(message = stringResource(R.string.home_lite_root_failure))
             }
+            if (state.showUltraObservationFailure) {
+                val summary = stringResource(when (state.ultraObservationFailure) {
+                    HomeEnvironmentFailure.TIMED_OUT -> R.string.home_ultra_observation_timeout_summary
+                    HomeEnvironmentFailure.BUSY -> R.string.home_ultra_observation_busy_summary
+                    HomeEnvironmentFailure.UNCONFIRMED -> R.string.home_ultra_observation_unconfirmed_summary
+                    else -> R.string.home_ultra_observation_failed_summary
+                })
+                WarningCard(
+                    message = summary,
+                    onClick = actions.onOpenEnvironmentSettings,
+                )
+            }
             if (state.showEnvironmentRefreshWarning) {
-                val summary = stringResource(when (state.environmentFailure) {
+                val summary = stringResource(when (state.manualEnvironmentFailure) {
                     HomeEnvironmentFailure.TIMED_OUT -> R.string.home_environment_check_timeout_summary
                     HomeEnvironmentFailure.UNCONFIRMED -> R.string.home_environment_check_unconfirmed_summary
                     HomeEnvironmentFailure.BUSY -> R.string.home_environment_check_busy_summary
@@ -241,14 +253,11 @@ fun HomePagerMaterial(
             )
             // 「安装 / 激活系统环境」：2026-10-29 按用户要求从设置页移到首页。
             UltraEnvironmentInstallCardMaterial(
-                rememberUltraEnvironmentInstallPanel(state.environmentMode),
-                onInstallImage = actions.onInstallClick,
+                rememberUltraEnvironmentInstallPanel(state.environmentMode, state.environmentConfirmedAbsent),
+                onOpenDiagnostics = actions.onOpenEnvironmentSettings,
             )
             InfoCard(systemInfo = state.systemInfo)
             About7kCard(showModes = aboutShowsModes)
-            // 底栏恒在，bottomInnerPadding 已含导航条高度；不再按 root 就绪与否加减，
-            // 否则模式判定落定时列表底部会跳一下，组合期也不用再碰 Natives。
-            Spacer(Modifier.height(bottomInnerPadding))
         }
     }
 }
@@ -310,12 +319,7 @@ internal fun MaterialStatusCard(
     // Ultra 下的版本行（例如 `MapleSU_Ultra 5.0.5`）；为 null 时沿用原来的版本行。
     ultraVersionLabel: String? = null,
 ) {
-    // P0（冷启动闪烁修复）：模式还在判定中、且没有种子/证据 → 画 loading 占位。
-    // 这里**绝不**回落到下面的「未安装」分支 —— 那正是用户看到的"进 App 先闪一下未安装"。
-    if (state.showEnvironmentStatusCard) {
-        CheckingStatusCard(state.environmentFailure, actions.onEnvironmentRetry)
-        return
-    }
+    // Keep normal content available while automatic observations finish.
     val themeArt = statusThemeArt()
     val decorationRevision = WallpaperPrefs.observe()
     val decorationPrefs = remember(decorationRevision) { SettingsRepositoryImpl() }
@@ -331,12 +335,16 @@ internal fun MaterialStatusCard(
         // 没认主/没 root 时一律回落到原版「未安装 / 点击安装」——点了直接进安装页，
         // 否则没 root 的用户连修补 init_boot 的入口都摸不到。
 
-        val containerColor = if (ksuActive) {
+        val containerColor = if (state.environmentUnknown || state.showInstalledUnready) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else if (ksuActive) {
             homeStatusContainerColor()
         } else {
             MaterialTheme.colorScheme.errorContainer
         }
-        val contentColor = if (ksuActive && themeArt.file != null) {
+        val contentColor = if (state.environmentUnknown || state.showInstalledUnready) {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        } else if (ksuActive && themeArt.file != null) {
             themeArt.foreground
         } else if (artwork != null) {
             Color.White
@@ -347,14 +355,17 @@ internal fun MaterialStatusCard(
         }
 
         val statusIcon = when {
-            ksuActive -> Icons.Rounded.CheckCircle
+            state.environmentUnknown -> Icons.Rounded.Info
+            state.showEnvironmentReady -> Icons.Rounded.CheckCircle
+            ksuActive -> Icons.Rounded.Info
             notInstalled -> Icons.Rounded.Warning
             else -> Icons.Rounded.Block
         }
         // 状态卡文字固定,不再提供自定义
-        val customStatusTitle = if (state.showSafeModeBanner) stringResource(R.string.home_safe_mode_title) else STATUS_CARD_TEXT
         val statusTitle = when {
-            ksuActive -> customStatusTitle
+            state.environmentNeedsConfirmation -> stringResource(R.string.home_environment_confirmation_title)
+            state.environmentUnknown -> stringResource(R.string.home_environment_unknown_title)
+            ksuActive -> homeInstalledStatusTitle(state)
             // 有 root 但还没认主 → 这是「从别的管理器转过来」的人,该去安装
             notInstalled && state.managerNotRecognized && state.isRootAvailable ->
                 stringResource(R.string.home_can_install)
@@ -362,9 +373,9 @@ internal fun MaterialStatusCard(
             else -> stringResource(R.string.home_unsupported)
         }
         val statusSummary = when {
-            ksuActive -> stringResource(R.string.home_working_version,
-                if (state.ultraBrandVisible) ultraVersionLabel ?: ultraEnvironmentLabel(null)
-                    else stringResource(R.string.maplesu_backend_version, state.kernelUAPIVersion ?: 1))
+            state.environmentNeedsConfirmation -> stringResource(R.string.home_environment_confirmation_summary)
+            state.environmentUnknown -> stringResource(R.string.home_environment_unknown_summary)
+            ksuActive -> homeInstalledStatusSummary(state, ultraVersionLabel)
             // 有 root 但没有认主 → 直达安装
             notInstalled && state.managerNotRecognized && state.isRootAvailable ->
                 stringResource(R.string.home_can_install_summary)
@@ -389,7 +400,7 @@ internal fun MaterialStatusCard(
                     backgroundColor = MaterialTheme.colorScheme.primary
                 )
             }
-        } else if (notInstalled && !state.isLateLoadMode) {
+        } else if (notInstalled && !state.environmentUnknown && !state.isLateLoadMode) {
             {
                 Button(
                     onClick = actions.onJailbreakClick,
@@ -424,6 +435,7 @@ internal fun MaterialStatusCard(
                     //    唯一保留的隐身差异:右边的「越狱」按钮不画(见上面的 statusTrailing)。
                     onClick = {
                         when {
+                            state.environmentUnknown -> actions.onEnvironmentRetry()
                             state.isSafeMode -> actions.onManageModules()
                             state.isLateLoadMode -> Unit
                             else -> actions.onInstallClick()
@@ -434,6 +446,7 @@ internal fun MaterialStatusCard(
             contentColor = contentColor,
             shape = MaterialTheme.shapes.large,
         ) {
+            Column {
             Box(Modifier.defaultMinSize(minHeight = if (artwork != null) 112.dp else 0.dp)) {
             if (ksuActive) StatusThemeBackdrop(themeArt)
             if (artwork != null) {
@@ -504,14 +517,6 @@ internal fun MaterialStatusCard(
                                 backgroundColor = MaterialTheme.colorScheme.errorContainer
                             )
                         }
-                        if (ksuActive && state.isLateLoadMode) {
-                            Spacer(Modifier.width(8.dp))
-                            StatusTag(
-                                label = stringResource(id = R.string.jailbreak_mode),
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                                backgroundColor = MaterialTheme.colorScheme.errorContainer
-                            )
-                        }
                     }
                 },
             )
@@ -519,56 +524,7 @@ internal fun MaterialStatusCard(
                 Spacer(Modifier.fillMaxWidth().height(112.dp))
             }
             }
-        }
-    }
-}
-
-/**
- * P0（冷启动闪烁修复）：模式判定中的状态卡占位（Material 皮肤）。
- *
- * 与 Miuix 皮肤同一条判据（[HomeUiState.showLiteChecking]）、同一套文案；
- * 只是画法不同。判定落定后由状态驱动换成绿卡 / 未安装卡，两个方向都会纠正。
- */
-@Composable
-private fun CheckingStatusCard(failure: HomeEnvironmentFailure? = null, onRetry: () -> Unit = {}) {
-    val containerColor = MaterialTheme.colorScheme.secondaryContainer
-    val contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-    Surface(
-        modifier = Modifier.fillMaxWidth().then(
-            if (failure != null) Modifier.clickable(onClick = onRetry) else Modifier),
-        color = containerColor,
-        contentColor = contentColor,
-        shape = MaterialTheme.shapes.large,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (failure == null) CircularProgressIndicator(
-                modifier = Modifier.size(22.dp),
-                strokeWidth = 2.dp,
-                color = contentColor,
-            )
-            else Icon(Icons.Rounded.Warning, contentDescription = null, tint = contentColor)
-            Column(modifier = Modifier.padding(start = 14.dp)) {
-                Text(
-                    text = stringResource(if (failure == null) R.string.home_status_checking
-                        else R.string.home_environment_check_failed),
-                    style = MaterialTheme.typography.titleMediumEmphasized,
-                )
-                Text(
-                    text = stringResource(when (failure) {
-                        HomeEnvironmentFailure.TIMED_OUT -> R.string.home_environment_check_timeout_summary
-                        HomeEnvironmentFailure.FAILED -> R.string.home_environment_check_failed_summary
-                        HomeEnvironmentFailure.UNCONFIRMED -> R.string.home_environment_check_unconfirmed_summary
-                        HomeEnvironmentFailure.BUSY -> R.string.home_environment_check_busy_summary
-                        null -> R.string.home_status_checking_summary
-                    }),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = contentColor,
-                )
+            EnvironmentRefreshAction(state.environmentChecking || state.manualEnvironmentChecking, actions.onEnvironmentRetry)
             }
         }
     }

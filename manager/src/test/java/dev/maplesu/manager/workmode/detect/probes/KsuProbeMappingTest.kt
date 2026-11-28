@@ -18,6 +18,15 @@ class KsuProbeMappingTest {
     }
 
     @Test
+    fun ultraCompatibilityVersionDoesNotEstablishNormalOwnership() {
+        // manager_ksu_compat.c GET_INFO exposes 10940 with flags=0 and uapi=0.
+        val compatible = KsuNativeSnapshot(true, 10940, 0, false, false)
+        assertTrue(KsuProbeMapping.from(compatible).responded)
+        assertFalse(KsuProbeMapping.from(compatible).isManager)
+        assertEquals(false, KsuProbeMapping.normalStatus(compatible))
+    }
+
+    @Test
     fun unavailableSnapshotIsUnknown() {
         val facts = KsuProbeMapping.from(KsuNativeSnapshot.UNAVAILABLE)
         assertEquals(KsuFacts(), facts)

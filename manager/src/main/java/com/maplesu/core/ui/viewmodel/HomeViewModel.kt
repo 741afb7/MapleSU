@@ -1,13 +1,13 @@
 package com.maplesu.core.ui.viewmodel
 
 import android.os.Build
+import android.os.SystemClock
 import android.system.Os
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import com.maplesu.core.BuildConfig
@@ -43,34 +44,30 @@ import com.maplesu.core.ui.screen.home.homeEntryFacts
 import com.maplesu.core.ui.screen.home.mergedOver
 import com.maplesu.core.ui.screen.home.withUltraSafety
 import com.maplesu.core.ui.screen.home.afterEnvironmentCheck
-import com.maplesu.core.ui.screen.home.afterEnvironmentProbeFailure
-import com.maplesu.core.ui.screen.home.checkingAfterSuMissing
+import com.maplesu.core.ui.screen.home.afterUltraEnvironmentHealth
 import com.maplesu.core.ui.screen.home.asLiteHiddenNotInstalled
 import com.maplesu.core.ui.security.HiddenFactsSignal
 import com.maplesu.core.ui.security.HiddenStartupConfirm
-import com.maplesu.core.ui.security.LiteHiddenRuntime
 import com.maplesu.core.ui.util.checkNewVersion
 import com.maplesu.core.ui.util.getSELinuxStatusRaw
 import com.maplesu.core.ui.util.module.LatestVersionInfo
 import com.maplesu.core.ui.util.resolveDeviceName
-import dev.maplesu.manager.litehidden.HomeLiteHintUpdate
-import dev.maplesu.manager.litehidden.HomeLiteInstalledHintStore
 import dev.maplesu.manager.litehidden.LiteStartupFacts
 import dev.maplesu.manager.litehidden.LiteStartupStatusPolicy
 import dev.maplesu.manager.workmode.ModeRuntime
+import dev.maplesu.manager.workmode.ModeActivation
 import dev.maplesu.manager.workmode.WorkMode
 import dev.maplesu.manager.workmode.EnvironmentProbeResult
 import dev.maplesu.manager.workmode.EnvironmentProbeRunner
 import dev.maplesu.manager.workmode.boot.ModeBootstrap
-import dev.maplesu.manager.workmode.detect.EnvironmentHomeProjection
-import dev.maplesu.manager.workmode.detect.ProcBootIdSource
+import dev.maplesu.manager.workmode.detect.EnvironmentCheckOutcome
+import dev.maplesu.manager.workmode.detect.EnvironmentVerdict
+import dev.maplesu.manager.workmode.detect.probes.BootIdSourceAdapter
 import dev.maplesu.manager.workmode.detect.SuReadiness
 import dev.maplesu.manager.workmode.detect.probes.EnvironmentCheckProduction
-import dev.maplesu.manager.workmode.detect.probes.EnvironmentProbesAdapter
 import com.maplesu.core.ui.screen.home.HomeEnvironmentFailure
-import dev.maplesu.manager.workmode.storage.SettingsPrefsPolicy
-import com.maplesu.core.ui.util.KsuCli
-import dev.maplesu.manager.runtime.MapleSuRuntime
+import com.maplesu.core.ui.screen.settings.UltraComponentDiagnosticRequests
+import com.maplesu.core.ui.screen.settings.currentUltraComponentDiagnosticSnapshot
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
 
 /*
@@ -86,6 +83,7 @@ private const val LITE_ROOT_RETRY_STEP_MS = 3_000L
 /** 等模式激活后重算一次入口事实的上限；超时后由回前台/切页继续兜底。 */
 private const val ENTRY_FACTS_MODE_WAIT_MS = 15_000L
 private const val HOME_ENVIRONMENT_PROBE_TIMEOUT_MS = 8_000L
+private const val HOME_ENVIRONMENT_SESSION_TIMEOUT_MS = 10_000L
 private val homeEnvironmentProbeRunner = EnvironmentProbeRunner("maplesu-home-environment")
 private val homeDeviceNameProbeRunner = EnvironmentProbeRunner("maplesu-home-device-name")
 private val homeSELinuxProbeRunner = EnvironmentProbeRunner("maplesu-home-selinux")
@@ -103,11 +101,8 @@ class HomeViewModel(
     //    界面结构、字段、默认值展示方式都不变,只是「有没有 root / SELinux 状态」
     //    这两个字段先显示默认值(false / Unknown),后台算完自动刷新。
     //
-    // ⚠️ 2026-10-30 修(进 App 先闪「未安装」):
-    //    首帧把 `modeSettled` 传进去(= `ModeRuntime.active != null`)。模式没判定时
-    //    `buildState` 会先读**持久化 last-known 种子**(`home_lite_installed_hint`,中性 prefs,
-    //    一次很小的读):命中 → 首帧直接「已安装」;没命中 → `litePending` = loading 占位,
-    //    **不再**先渲染「未安装」。判定落定(activate / 8s 超时)后由后台那次重算纠正。
+    // 首帧只读取当前运行事实；历史安装记录不参与身份和未安装判断。
+    // 整个观察会话结束前不发布各轮候选，避免主卡随探针的中间结果变化。
     private val _uiState = MutableStateFlow(
         buildState(probeRoot = false, modeSettled = ModeRuntime.active != null)
             .state
@@ -123,16 +118,15 @@ class HomeViewModel(
     val entryFacts: StateFlow<HomeEntryFacts> = _entryFacts.asStateFlow()
     private val entryFactsTick = MutableStateFlow(0L)
 
-    /**
-     * 环境探测按轮次排队；普通信息读取不占用这条队列。
-     *
-     * init 的两段探测和 [refresh] 以前并行跑、后写者赢：模式判定前开始的慢探测可能晚于判定后的
-     * 结果落地，把正确状态盖回旧状态（界面一会对一会不对）。现在一次只跑一轮，且每轮在持锁后才
-     * 读 `ModeRuntime.active`。publishMutex 只登记轮次和发布完成的结果。
-     */
+    /** One flight owns the complete observation session; ordinary information stays independent. */
     private val environmentMutex = Mutex()
     private val publishMutex = Mutex()
     private val refreshFlight = HomeRefreshSingleFlight()
+    // A completed Job also records that this Home has used its automatic session.
+    private var environmentSessionJob: Job? = null
+    private var environmentExplicitRequest = false
+    private var installedKernelInspectionRequested = false
+    private var restoredSdkRefreshRequested = false
     private var publishedDetectionRevision = -1L
     private var environmentOwner = 0L
     private var informationOwner = 0L
@@ -142,7 +136,13 @@ class HomeViewModel(
     private var selinuxInformationBootId: String? = null
     private var informationContext: HomeInformationOwner? = null
 
-    private data class HomeStateRead(val state: HomeUiState)
+    private data class HomeStateRead(
+        val state: HomeUiState,
+        val owner: HomeInformationOwner? = null,
+        val evidence: EnvironmentCheckOutcome? = null,
+        val evidenceActivation: ModeActivation? = null,
+        val healthObservation: UltraEnvironmentProbe.Snapshot? = null,
+    )
     private data class HomeInformationOwner(
         val id: Long,
         val revision: Long,
@@ -157,24 +157,10 @@ class HomeViewModel(
     init {
         viewModelScope.launch {
             var previous = UltraEnvironmentProbe.current()
-            var recovery: Job? = null
             UltraEnvironmentProbe.states.collect { state ->
                 _uiState.update { it.withCurrentUltraSafety() }
-                if (state == UltraEnvironmentProbe.State.Fault || state == UltraEnvironmentProbe.State.NoKey ||
-                    state == UltraEnvironmentProbe.State.NotInstalled) recovery?.cancel()
                 if (state == UltraEnvironmentProbe.State.Running && previous != state &&
-                    ModeRuntime.active != WorkMode.KSU && recovery?.isActive != true) {
-                    recovery = viewModelScope.launch {
-                        if (ModeRuntime.active == null) {
-                            ModeBootstrap.retryEnvironmentDetection()
-                            ModeRuntime.awaitDetectionSettled(LITE_MODE_SETTLE_TIMEOUT_MS)
-                        }
-                        // A recovered SDK observation releases safety, but real root
-                        // and page capabilities still need a fresh successful read.
-                        probeAndPublish(rootProbeSettled = ModeRuntime.detectionComplete,
-                            modeSettled = ModeRuntime.detectionComplete)
-                    }
-                }
+                    ModeRuntime.active != WorkMode.KSU) startEnvironmentSession()
                 previous = state
             }
         }
@@ -191,108 +177,95 @@ class HomeViewModel(
         }
         viewModelScope.launch {
             ModeRuntime.detectionRevision.drop(1).collect {
-                probeAndPublish(rootProbeSettled = true, modeSettled = ModeRuntime.detectionComplete,
-                    reuseCompletedDetection = true)
+                startEnvironmentSession()
+            }
+        }
+        viewModelScope.launch {
+            UltraComponentDiagnosticRequests.retries.collect { request ->
+                val current = withContext(Dispatchers.IO) { currentUltraComponentDiagnosticSnapshot(ksuApp) }
+                    ?: return@collect
+                if (current.modeActivation !== request.modeActivation ||
+                    current.managerOwnerIdentity != request.managerOwnerIdentity) return@collect
+                startEnvironmentSession(explicit = true)
             }
         }
         // Ordinary system facts do not wait for backend activation.
         viewModelScope.launch {
             refreshInformation(forceSELinuxRead = true)
         }
-        // 后台补上 root / SELinux / Ultra 探测(IO 线程,不再堵主线程)。
-        // 算不出来就保持首帧的默认值,绝不让异常冒出去。
-        viewModelScope.launch {
-            // Render the local checking state immediately; probe once after the backend is known.
-            if (ModeRuntime.active == null) ModeRuntime.awaitDetectionSettled(LITE_MODE_SETTLE_TIMEOUT_MS)
-            var state = probeAndPublish(rootProbeSettled = true, modeSettled = ModeRuntime.detectionComplete,
-                reuseCompletedDetection = true)
-            refreshUpdate(state.checkUpdateEnabled)
-
-            // P0：非 Lite（KSU / 判定落定后仍无任何 Lite 证据）→ 完全沿用原行为，不做追加探测。
-            if (!state.liteInstalled) return@launch
-
-            // P0：确实失败 → 有限重试；成功的那一次会把 liteRootFailure 清掉（提示行消失）。
-            var attemptsDone = 0
-            while (
-                attemptsDone < LiteStartupStatusPolicy.ROOT_RETRY_ATTEMPTS &&
-                (LiteStartupStatusPolicy.shouldRetryRoot(
-                    liteInstalled = state.liteInstalled,
-                    liteRootFailure = state.liteRootFailure,
-                    attemptsDone = attemptsDone,
-                ) || (ModeRuntime.active == WorkMode.LITE && LiteHiddenRuntime.needsRealRead()))
-            ) {
-                attemptsDone++
-                delay(LITE_ROOT_RETRY_STEP_MS * attemptsDone)
-                state = probeAndPublish(rootProbeSettled = true, modeSettled = ModeRuntime.detectionComplete)
-            }
-        }
+        startEnvironmentSession()
     }
 
-    /** Every probe ends in a visible result; failed reads must not preserve the first-frame spinner. */
-    private suspend fun probeAndPublish(
+    /** A round collects a candidate; only the owning session publishes an identity. */
+    private suspend fun collectEnvironment(
         rootProbeSettled: Boolean,
         modeSettled: Boolean = ModeRuntime.active != null,
-        showChecking: Boolean = false,
-        reuseCompletedDetection: Boolean = false,
-    ): HomeUiState = coroutineScope {
-        refreshInformation()
-        environmentMutex.withLock {
-        val revision = ModeRuntime.detectionRevision.value
-        if (reuseCompletedDetection && publishedDetectionRevision == revision &&
-            ModeRuntime.detectionComplete) return@withLock _uiState.value
-        val bootId = runCatching { ProcBootIdSource.read() }.getOrDefault("")
-        val owner = publishMutex.withLock {
-            HomeInformationOwner(++environmentOwner, revision, ModeRuntime.active, bootId).also {
-                _uiState.update { previous -> previous.copy(
-                    environmentChecking = showChecking || previous.environmentChecking,
-                    environmentFailure = if (showChecking) null else previous.environmentFailure,
-                ) }
-            }
-        }
-        val checked = homeEnvironmentProbeRunner.run(HOME_ENVIRONMENT_PROBE_TIMEOUT_MS) {
+        evidence: EnvironmentCheckOutcome? = null,
+        evidenceActivation: ModeActivation? = null,
+        owner: HomeInformationOwner,
+        deadline: Long,
+    ): HomeStateRead {
+        return environmentMutex.withLock {
+        val revision = owner.revision
+        val budget = remainingEnvironmentTime(deadline)
+        if (budget == 0L) return@withLock HomeStateRead(
+            resolvedFailure(HomeEnvironmentFailure.TIMED_OUT, "home_health_session_deadline"),
+            owner, evidence, evidenceActivation,
+        )
+        val checked = homeEnvironmentProbeRunner.run(minOf(HOME_ENVIRONMENT_PROBE_TIMEOUT_MS, budget)) {
             // 确认窗口：上次已知隐藏 ON 且本进程还没真实读过 → 先读一次（root 通道）。
             // 读完再构建状态，避免"先画正在运行、过一会翻未安装"的自曝窗口。
             runCatching { HiddenStartupConfirm.ensureConfirmedOnce(ksuApp) }
-            buildState(
+            val knownUltra = evidence?.verdict == EnvironmentVerdict.ULTRA
+            val observation = if (knownUltra) UltraEnvironmentProbe.observeFresh(ksuApp) else null
+            val observed = buildState(
                 probeRoot = true,
                 rootProbeSettled = rootProbeSettled,
                 modeSettled = modeSettled,
+                evidence = evidence,
+                healthObservation = observation,
+            ).state
+            val projected = observed.afterEnvironmentCheck(
+                modeResolved = ModeRuntime.active != null,
+                detectionComplete = knownUltra || ModeRuntime.detectionComplete,
+                detectionFailure = ModeRuntime.detectionFailure.takeUnless { knownUltra },
+                detectedState = ModeRuntime.latestDetection?.state.takeUnless { knownUltra },
+                knownUltra = knownUltra,
+                failureDetail = ModeRuntime.detectionFailure.takeUnless { knownUltra },
             )
+            val state = if (observation != null) projected.afterUltraEnvironmentHealth(
+                observation = observation,
+                expectedOwner = evidence?.ultraOwnerIdentity,
+                scopeCurrent = evidenceActivation === ModeRuntime.activation &&
+                    observation.modeActivation === evidenceActivation && ModeRuntime.active != WorkMode.KSU,
+            ) else projected
+            HomeStateRead(state, owner, evidence, evidenceActivation, observation)
         }
         currentCoroutineContext().ensureActive()
         // Activation can complete while the worker builds its old snapshot.
         // Use current local facts until the queued detection refresh observes Root again.
         val detectionChanged = revision != ModeRuntime.detectionRevision.value
-        val state = if (detectionChanged) {
-            resolvedFailure(HomeEnvironmentFailure.BUSY, "detection_revision_changed")
-        } else when (checked) {
-            is EnvironmentProbeResult.Completed -> {
-                checked.value.state.afterEnvironmentCheck(
-                    modeResolved = ModeRuntime.active != null,
-                    detectionComplete = ModeRuntime.detectionComplete,
-                    detectionFailure = ModeRuntime.detectionFailure,
-                    detectedState = ModeRuntime.latestDetection?.state,
-                )
-            }
-            EnvironmentProbeResult.TimedOut -> resolvedFailure(
-                HomeEnvironmentFailure.TIMED_OUT, "timeout")
-            EnvironmentProbeResult.Busy -> resolvedFailure(
-                HomeEnvironmentFailure.BUSY, "busy")
+        if (detectionChanged) return@withLock HomeStateRead(
+            resolvedFailure(HomeEnvironmentFailure.BUSY, "detection_revision_changed"),
+            owner, evidence, evidenceActivation,
+        )
+        val failure = when (checked) {
+            is EnvironmentProbeResult.Completed -> return@withLock checked.value
+            EnvironmentProbeResult.TimedOut -> resolvedFailure(HomeEnvironmentFailure.TIMED_OUT, "timeout")
+            EnvironmentProbeResult.Busy -> resolvedFailure(HomeEnvironmentFailure.BUSY, "busy")
             is EnvironmentProbeResult.Failed -> {
                 Log.w(TAG, "Home environment check failed", checked.cause)
-                resolvedFailure(HomeEnvironmentFailure.FAILED, checked.cause?.javaClass?.simpleName ?: "failed")
+                resolvedFailure(HomeEnvironmentFailure.FAILED,
+                    checked.cause?.message ?: checked.cause?.javaClass?.simpleName ?: "failed")
             }
         }
-        publishState(state, owner)
-        if (checked is EnvironmentProbeResult.Completed && ModeRuntime.detectionComplete &&
-            owner.isCurrent(environmentOwner)) publishedDetectionRevision = revision
-        _uiState.value
+        HomeStateRead(failure, owner, evidence, evidenceActivation)
     } }
 
     private suspend fun refreshInformation(forceSELinuxRead: Boolean = false) {
         val revision = ModeRuntime.detectionRevision.value
         val activation = ModeRuntime.active
-        val bootId = runCatching { ProcBootIdSource.read() }.getOrDefault("")
+        val bootId = runCatching { BootIdSourceAdapter.read() }.getOrDefault("")
         publishMutex.withLock {
             refreshSELinuxInformation(bootId, forceSELinuxRead)
             val currentOwner = informationContext
@@ -337,7 +310,7 @@ class HomeViewModel(
 
     private suspend fun publishSELinuxInformation(bootId: String, owner: Long, status: String) {
         currentCoroutineContext().ensureActive()
-        val sameBoot = runCatching { ProcBootIdSource.read() == bootId }.getOrDefault(false)
+        val sameBoot = runCatching { BootIdSourceAdapter.read() == bootId }.getOrDefault(false)
         publishMutex.withLock {
             if (sameBoot && owner == selinuxInformationOwner && bootId == selinuxInformationBootId) {
                 _uiState.update { it.copy(systemInfo = it.systemInfo.copy(selinuxStatus = status)) }
@@ -350,7 +323,7 @@ class HomeViewModel(
         update: (SystemInfo) -> SystemInfo,
     ) {
         currentCoroutineContext().ensureActive()
-        val sameBoot = runCatching { ProcBootIdSource.read() == owner.bootId }.getOrDefault(false)
+        val sameBoot = runCatching { BootIdSourceAdapter.read() == owner.bootId }.getOrDefault(false)
         publishMutex.withLock {
             if (sameBoot && owner.isCurrent(informationOwner)) {
                 _uiState.update { it.copy(systemInfo = update(it.systemInfo)) }
@@ -362,23 +335,22 @@ class HomeViewModel(
     private fun resolvedFailure(failure: HomeEnvironmentFailure, reason: String): HomeUiState {
         val mode = ModeRuntime.active
         Log.i(TAG, "home environment probe ${failure.name.lowercase()}/$reason: mode=${mode ?: "unresolved"}")
-        // A slow Root read can fail after activation. Re-read only local facts so
-        // an old not-installed card cannot survive a newly verified mode.
-        val local = buildState(probeRoot = false, rootProbeSettled = false,
-            modeSettled = ModeRuntime.detectionComplete).state
-        return _uiState.value.afterEnvironmentProbeFailure(local, failure).withCurrentUltraSafety()
+        return _uiState.value.copy(environmentFailure = failure, isLateLoadMode = false,
+            environmentRuntimeReady = false, sdkRootAvailable = false, isRootAvailable = false, rootReadiness = null,
+            cachedEnvironmentReady = false, ultraObservationFailure = failure, ultraObservationDetail = reason)
     }
 
     private suspend fun publishState(state: HomeUiState, owner: HomeInformationOwner) {
-        val hidden = readHiddenFacts()
         publishMutex.withLock {
             if (!owner.isCurrent(environmentOwner)) return@withLock
-            if (hidden.suppressEntries) _entryFacts.value = HomeEntryFacts.beforeFirstRead(hidden)
             _uiState.update { previous ->
                 state.copy(systemInfo = state.systemInfo.copy(
                     deviceModel = previous.systemInfo.deviceModel,
                     selinuxStatus = previous.systemInfo.selinuxStatus,
-                )).mergedOver(previous).withCurrentUltraSafety()
+                )).mergedOver(previous).copy(
+                    manualEnvironmentChecking = state.manualEnvironmentChecking,
+                    manualEnvironmentFailure = state.manualEnvironmentFailure,
+                ).withUltraSafety(previous.isSafeMode, state.environmentMode)
             }
         }
         refreshEntryFacts()
@@ -397,6 +369,7 @@ class HomeViewModel(
     private fun readHiddenFacts(): HomeHiddenFacts = HomeHiddenFacts(
         masking = runCatching { HiddenStartupConfirm.masking(ksuApp) }.getOrDefault(true),
         confirming = runCatching { HiddenStartupConfirm.current(ksuApp) }.getOrDefault(true),
+        transitionPending = runCatching { HiddenStartupConfirm.isPending(ksuApp) }.getOrDefault(true),
     )
 
     /**
@@ -424,103 +397,210 @@ class HomeViewModel(
         }
     }
 
-    /** A verified restore must queue behind an older probe, never reuse or skip its masked result. */
+    /** Explicit restore joins the active session or starts a new bounded observation. */
     fun refreshAfterManagerRestore() {
-        viewModelScope.launch {
-            if (ModeRuntime.active == WorkMode.KSU) return@launch
-            // Restored credentials can answer before a cached not-installed snapshot expires.
-            // Refresh the SDK observation before consulting that snapshot's projection.
-            withContext(Dispatchers.IO) {
-                runCatching { UltraEnvironmentProbe.refresh(ksuApp, force = true) }
-                    .onFailure { Log.w(TAG, "Restore environment probe failed; retaining observed state", it) }
-            }
-            checkEnvironmentPresence()
-            if (ModeRuntime.active == null) {
-                ModeBootstrap.retryEnvironmentDetection()
-                ModeRuntime.awaitDetectionSettled(LITE_MODE_SETTLE_TIMEOUT_MS)
-            }
-            probeAndPublish(
-                rootProbeSettled = ModeRuntime.detectionComplete,
-                modeSettled = ModeRuntime.detectionComplete,
-                showChecking = true,
-            )
-        }
+        ModeBootstrap.retryEnvironmentDetection()
+        startEnvironmentSession(explicit = true, refreshRestoredSdk = true)
     }
 
     /** Dialog completion does not resume the Activity; queue its refresh even during an older read. */
     fun refreshAfterJailbreak() {
-        viewModelScope.launch {
-            if (ModeRuntime.active == null) {
-                ModeBootstrap.retryEnvironmentDetection()
-                // A scheduled retry has not replaced the old settled Deferred yet.
-                ModeRuntime.awaitActivated(LITE_MODE_SETTLE_TIMEOUT_MS)
-            }
-            ksuApp.requestUltraRecovery()
-            checkEnvironmentPresence()
-            var state = probeAndPublish(
-                rootProbeSettled = ModeRuntime.detectionComplete,
-                modeSettled = ModeRuntime.detectionComplete,
-                showChecking = true,
-            )
-            var attemptsDone = 0
-            while (ModeRuntime.active == WorkMode.LITE &&
-                attemptsDone < LiteStartupStatusPolicy.ROOT_RETRY_ATTEMPTS &&
-                (state.liteRootFailure || LiteHiddenRuntime.needsRealRead())) {
-                attemptsDone++
-                delay(LITE_ROOT_RETRY_STEP_MS * attemptsDone)
-                state = probeAndPublish(rootProbeSettled = true,
-                    modeSettled = ModeRuntime.detectionComplete)
-            }
-        }
+        ModeBootstrap.retryEnvironmentDetection()
+        ksuApp.requestUltraRecovery()
+        startEnvironmentSession(explicit = true)
     }
 
-    private var installedKernelCheck: Job? = null
-
-    /** Protected carrier inspection is reserved for the user's explicit retry. */
+    /** Repeated explicit actions merge into the complete session already in flight. */
     fun checkEnvironmentManually() {
-        if (installedKernelCheck?.isActive == true) return
-        installedKernelCheck = viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.checkInstalledKernel(ksuApp)
-                }
-            } catch (error: kotlinx.coroutines.CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                Log.w(TAG, "Manual carrier inspection failed", error)
-            }
-            refresh()
-        }
+        startEnvironmentSession(explicit = true, inspectInstalledKernel = true)
+    }
+
+    /** Foreground callbacks never restart an automatic session that already ended. */
+    fun refreshOnForeground() {
+        refreshEntryFacts()
+        startEnvironmentSession()
     }
 
     fun refresh() {
-        refreshFlight.launch(viewModelScope) {
-            refreshInformation(forceSELinuxRead = true)
-            ksuApp.requestUltraRecovery()
-            // P0：刷新也要守"模式未判定"这条时序 —— 未判定窗口内 root 探测被启动门控挡住，
-            // 那一次失败不是 Lite 启动失败（否则健康设备每次冷启动都会先闪一行失败提示）。
-            // `modeSettled` 同步传：未判定窗口内没有种子命中时界面保持 loading，不回落成未安装。
-            checkEnvironmentPresence()
-            if (ModeRuntime.active == null) {
-                ModeBootstrap.retryEnvironmentDetection()
-                ModeRuntime.awaitDetectionSettled(LITE_MODE_SETTLE_TIMEOUT_MS)
+        startEnvironmentSession(explicit = true)
+    }
+
+    private fun startEnvironmentSession(
+        explicit: Boolean = false,
+        inspectInstalledKernel: Boolean = false,
+        refreshRestoredSdk: Boolean = false,
+    ) {
+        if (explicit) {
+            environmentExplicitRequest = true
+            installedKernelInspectionRequested = installedKernelInspectionRequested || inspectInstalledKernel
+            restoredSdkRefreshRequested = restoredSdkRefreshRequested || refreshRestoredSdk
+        }
+        if (environmentSessionJob?.isActive == true || !explicit && environmentSessionJob != null) return
+        environmentSessionJob = refreshFlight.launch(viewModelScope) {
+            _uiState.update { it.copy(environmentChecking = true, environmentFailure = null,
+                manualEnvironmentChecking = explicit, manualEnvironmentFailure = null) }
+            var candidate: HomeStateRead? = null
+            val deadline = SystemClock.elapsedRealtime() + HOME_ENVIRONMENT_SESSION_TIMEOUT_MS
+            val completed = withTimeoutOrNull(HOME_ENVIRONMENT_SESSION_TIMEOUT_MS) {
+                while (remainingEnvironmentTime(deadline) > 0L) {
+                    try {
+                        prepareEnvironmentObservation(deadline)
+                        candidate = observeEnvironment(deadline) { candidate = it }
+                        if (!environmentExplicitRequest && candidate?.hasFreshIdentityEvidence() == true) {
+                            return@withTimeoutOrNull true
+                        }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        currentCoroutineContext().ensureActive()
+                        Log.w(TAG, "Environment observation cancelled", cancelled)
+                    } catch (error: Exception) {
+                        Log.w(TAG, "Environment observation failed", error)
+                    }
+                    delay(minOf(LITE_ROOT_RETRY_STEP_MS, remainingEnvironmentTime(deadline)))
+                }
+                false
             }
-            val baseState = probeAndPublish(
-                rootProbeSettled = ModeRuntime.detectionComplete,
-                modeSettled = ModeRuntime.detectionComplete,
-                showChecking = true,
-            )
-            refreshUpdate(baseState.checkUpdateEnabled)
+            currentCoroutineContext().ensureActive()
+            finishEnvironmentSession(candidate, deadlineExceeded = completed != true)
         }
     }
 
-    /** 已安装期间不打断展示；明确缺少 SU 后才显示检查进度，随后复用共享单飞检查器。 */
-    private suspend fun checkEnvironmentPresence() = withContext(Dispatchers.IO) {
-        val suPresent = runCatching { EnvironmentProbesAdapter(ksuApp).suPresent() }.getOrNull()
-        if (suPresent == false) _uiState.update { it.checkingAfterSuMissing() }
-        runCatching { EnvironmentCheckProduction.runner(ksuApp).check() }
-            .onFailure { Log.w(TAG, "Silent environment check failed; retaining confirmed state", it) }
-        Unit
+    private fun remainingEnvironmentTime(deadline: Long): Long =
+        (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+
+    private suspend fun prepareEnvironmentObservation(deadline: Long) {
+        if (!environmentExplicitRequest) return
+        environmentExplicitRequest = false
+        val inspectInstalledKernel = installedKernelInspectionRequested
+        val refreshRestoredSdk = restoredSdkRefreshRequested
+        installedKernelInspectionRequested = false
+        restoredSdkRefreshRequested = false
+        val budget = remainingEnvironmentTime(deadline)
+        if (budget > 0L && (inspectInstalledKernel || refreshRestoredSdk)) {
+            homeEnvironmentProbeRunner.run(minOf(HOME_ENVIRONMENT_PROBE_TIMEOUT_MS, budget)) {
+                if (inspectInstalledKernel) {
+                    dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.checkInstalledKernel(ksuApp)
+                }
+                if (refreshRestoredSdk) UltraEnvironmentProbe.refresh(ksuApp, force = true)
+            }
+        }
+    }
+
+    private suspend fun observeEnvironment(
+        deadline: Long,
+        onIdentity: (HomeStateRead) -> Unit,
+    ): HomeStateRead {
+        val activation = ModeRuntime.activation
+        val evidence = checkEnvironmentPresence(deadline)
+        val owner = publishMutex.withLock {
+            HomeInformationOwner(++environmentOwner, ModeRuntime.detectionRevision.value, ModeRuntime.active,
+                evidence?.bootId.orEmpty())
+        }
+        val identity = HomeStateRead(_uiState.value.copy(isLateLoadMode = false,
+            environmentRuntimeReady = false, sdkRootAvailable = false, isRootAvailable = false, rootReadiness = null,
+            cachedEnvironmentReady = false,
+            ultraObservationFailure = HomeEnvironmentFailure.UNCONFIRMED.takeIf { evidence?.verdict == EnvironmentVerdict.ULTRA },
+            ultraObservationDetail = "home_health_pending".takeIf { evidence?.verdict == EnvironmentVerdict.ULTRA }),
+            owner, evidence, activation)
+        if (identity.hasFreshIdentityEvidence()) onIdentity(identity)
+        else if (ModeRuntime.active == null && remainingEnvironmentTime(deadline) > 0L) {
+            withTimeoutOrNull(minOf(LITE_MODE_SETTLE_TIMEOUT_MS, remainingEnvironmentTime(deadline))) {
+                ModeBootstrap.pendingEnvironmentDetection()?.await()
+            }
+        }
+        return collectEnvironment(
+            rootProbeSettled = ModeRuntime.detectionComplete,
+            modeSettled = ModeRuntime.detectionComplete,
+            evidence = evidence,
+            evidenceActivation = activation,
+            owner = owner,
+            deadline = deadline,
+        )
+    }
+
+    private fun HomeStateRead.hasFreshIdentityEvidence(): Boolean {
+        val currentOwner = owner ?: return false
+        val currentEvidence = evidence ?: return false
+        val expectedUltraOwner = currentEvidence.ultraOwnerIdentity
+        val observedUltraOwner = healthObservation?.managerOwnerIdentity
+        if (expectedUltraOwner != null && observedUltraOwner != null && expectedUltraOwner != observedUltraOwner) return false
+        return currentOwner.isCurrent(environmentOwner) && evidenceActivation === ModeRuntime.activation &&
+            currentOwner.bootId.isNotBlank() && currentEvidence.bootId == currentOwner.bootId &&
+            currentEvidence.verdict in setOf(
+                EnvironmentVerdict.ULTRA, EnvironmentVerdict.KSU_NORMAL, EnvironmentVerdict.NOT_INSTALLED,
+            )
+    }
+
+    /** Retained observations can revoke this fresh proof, but never supply a positive proof. */
+    private fun HomeStateRead.hasCurrentSdkHealthScope(): Boolean {
+        val health = healthObservation ?: return false
+        if (evidenceActivation !== ModeRuntime.activation || health.modeActivation !== evidenceActivation ||
+            ModeRuntime.active == WorkMode.KSU) return false
+        val current = UltraEnvironmentProbe.currentSnapshot(ksuApp)
+        return current.modeActivation === health.modeActivation && current.rootAvailable &&
+            current.managerOwnerIdentity == health.managerOwnerIdentity &&
+            (health.managerOwnerIdentity != null || health.legacyCredentialFingerprint != null &&
+                current.legacyCredentialFingerprint == health.legacyCredentialFingerprint)
+    }
+
+    private suspend fun finishEnvironmentSession(candidate: HomeStateRead?, deadlineExceeded: Boolean) {
+        val confirmed = candidate?.takeIf { it.hasFreshIdentityEvidence() }
+        val observed = confirmed?.let { read ->
+            val state = read.state
+            if (state.sdkRootAvailable && !read.hasCurrentSdkHealthScope()) state.copy(
+                sdkRootAvailable = false, environmentRuntimeReady = false,
+                ultraObservationFailure = HomeEnvironmentFailure.UNCONFIRMED,
+                ultraObservationDetail = "SDK_IDENTITY_SCOPE_CHANGED",
+            ) else state
+        } ?: _uiState.value
+        val state = observed.copy(
+            environmentChecking = false, litePending = false,
+            environmentFailure = null, manualEnvironmentChecking = false, manualEnvironmentFailure = null,
+            previousEnvironmentMode = null, cachedEnvironmentReady = false,
+        ).let { settled ->
+            when (confirmed?.evidence?.verdict) {
+                EnvironmentVerdict.ULTRA -> settled.copy(environmentMode = WorkMode.LITE,
+                    environmentConfirmedAbsent = false, liteInstalled = true,
+                    ultraObservationFailure = if (deadlineExceeded && settled.ultraObservationDetail == "home_health_pending")
+                        HomeEnvironmentFailure.TIMED_OUT else settled.ultraObservationFailure,
+                    ultraObservationDetail = if (deadlineExceeded && settled.ultraObservationDetail == "home_health_pending")
+                        "home_health_session_deadline" else settled.ultraObservationDetail)
+                EnvironmentVerdict.KSU_NORMAL -> settled.copy(environmentMode = WorkMode.KSU,
+                    environmentConfirmedAbsent = false, liteInstalled = false,
+                    sdkRootAvailable = false,
+                    ultraBrandVisible = false, ultraObservationFailure = null, ultraObservationDetail = null)
+                EnvironmentVerdict.NOT_INSTALLED -> settled.asLiteHiddenNotInstalled()
+                else -> settled.copy(
+                    environmentMode = null, environmentConfirmedAbsent = false, ultraBrandVisible = false,
+                    ksuVersion = null, kernelUAPIVersion = null, liteInstalled = false,
+                    environmentRuntimeReady = false, sdkRootAvailable = false,
+                    isManager = false, isRootAvailable = false, rootReadiness = null,
+                    liteRootFailure = false, ultraObservationFailure = null, ultraObservationDetail = null,
+                    isLateLoadMode = false,
+                )
+            }
+        }
+        val owner = publishMutex.withLock {
+            HomeInformationOwner(++environmentOwner, ModeRuntime.detectionRevision.value, ModeRuntime.active,
+                confirmed?.owner?.bootId.orEmpty())
+        }
+        publishState(state, owner)
+        if (owner.isCurrent(environmentOwner)) publishedDetectionRevision = owner.revision
+        refreshUpdate(_uiState.value.checkUpdateEnabled)
+    }
+
+    /** The fresh runner returns only evidence from this invocation; UNKNOWN history is ignored. */
+    private suspend fun checkEnvironmentPresence(deadline: Long): EnvironmentCheckOutcome? = withContext(Dispatchers.IO) {
+        val remaining = remainingEnvironmentTime(deadline)
+        if (remaining == 0L) return@withContext null
+        runCatching { withTimeoutOrNull(remaining) { EnvironmentCheckProduction.freshRunner(ksuApp).check(remaining) } }
+            .onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                if (error is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw error
+                }
+                Log.w(TAG, "Silent environment check failed; retaining confirmed state", error)
+            }.getOrNull()
     }
 
     private fun refreshUpdate(enabled: Boolean) {
@@ -539,65 +619,35 @@ class HomeViewModel(
      * @param rootProbeSettled root 探测结论是否已经等到"模式判定落定"(见 [LiteStartupFacts])。
      *                  未判定窗口内传 false —— 那一次失败不作为 Lite 启动失败提示。
      * @param modeSettled 模式判定是否已经落定(activate 或 8s 超时)。
-     *                    false = 判定中 → 无种子时界面渲染 loading 占位,不渲染「未安装」。
+     *                    false = 判定中 → 保留历史或中性操作卡，不宣称「未安装」。
      */
     private fun buildState(
         probeRoot: Boolean,
         rootProbeSettled: Boolean = true,
         modeSettled: Boolean = ModeRuntime.active != null,
+        evidence: EnvironmentCheckOutcome? = null,
+        healthObservation: UltraEnvironmentProbe.Snapshot? = null,
     ): HomeStateRead {
-        val environment = runCatching { EnvironmentCheckProduction.store(ksuApp).snapshot() }.getOrNull()
-        // 未安装记录跨 boot 后先重探；SU 能力不作为已安装模式展示。
-        val currentBootId = runCatching { ProcBootIdSource.read() }.getOrDefault("")
-        val liveReadiness = if (probeRoot) {
-            runCatching { EnvironmentProbesAdapter(ksuApp).suReadiness() }
-                .onFailure { Log.w(TAG, "su readiness probe failed; keeping previous state", it) }
-                .getOrNull()
-        } else {
-            null
+        val absenceConfirmed = evidence?.verdict == EnvironmentVerdict.NOT_INSTALLED
+        // Identity observation does not enumerate or invoke ordinary/third-party SU.
+        // SDK Root remains a separate capability; standard SU has no proof in this session.
+        val liveReadiness: SuReadiness? = null
+        val ultraEnvironmentRunning = healthObservation?.state == UltraEnvironmentProbe.State.Running
+        val ultraSafeMode = healthObservation?.state == UltraEnvironmentProbe.State.Fault
+        val environmentMode = when (evidence?.verdict) {
+            EnvironmentVerdict.ULTRA -> WorkMode.LITE
+            EnvironmentVerdict.KSU_NORMAL -> WorkMode.KSU
+            EnvironmentVerdict.NOT_INSTALLED -> null
+            else -> null
         }
-        val projection = EnvironmentHomeProjection.decide(
-            EnvironmentHomeProjection.Facts(
-                snapshot = environment,
-                currentBootId = currentBootId,
-                liveReadiness = liveReadiness,
-            ),
-        )
-        // 模式门控（主文档 §3.3）：MapleSuRuntime/KsuCli/Ultra SDK 都是 A（LITE）专属路径；
-        // KSU/未判定不得起 Lite 一次性 root 进程，也不得调用 Ultra SDK。
-        if (probeRoot && !projection.confirmedNotInstalled) {
-            dev.maplesu.manager.workmode.ModeRuntime.runIfLite {
-                // Ultra 环境探测只在 IO 线程(probeRoot = true)上跑;主线程首帧只读缓存,绝不碰 JNI。
-                val ultraRunning = runCatching {
-                    UltraEnvironmentProbe.refresh(ksuApp, force = false) == UltraEnvironmentProbe.State.Running
-                }
-                    .onFailure { Log.w(TAG, "系统环境探测失败,保持缓存值: ", it) }
-                    .getOrDefault(false)
-                if (!ultraRunning && !UltraEnvironmentProbe.usesUltraBackend(ksuApp) &&
-                    !UltraEnvironmentProbe.isSafeMode(ksuApp) && MapleSuRuntime.refresh(ksuApp)) {
-                    KsuCli.onRuntimeReady()
-                }
-            }
-        }
-        val ultraEnvironmentRunning =
-            ModeRuntime.active != WorkMode.KSU && UltraEnvironmentProbe.currentSnapshot(ksuApp).state == UltraEnvironmentProbe.State.Running
-        // 本次 SDK 已确认运行时，启动早期的未安装快照不再是当前结论。
-        val ultraSafeMode = UltraEnvironmentProbe.isSafeMode(ksuApp)
-        val ultraKernelVerified = UltraEnvironmentProbe.isKernelRootVerified(ksuApp)
-        val installedKernelKnown = dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade.installedKernelKnown(ksuApp)
-        val installedKernelUnbound = installedKernelKnown && ModeRuntime.active == null &&
-            !ultraEnvironmentRunning && !ultraSafeMode && !ultraKernelVerified
-        val environmentMode = if (ultraEnvironmentRunning || ultraSafeMode || ultraKernelVerified || installedKernelKnown) WorkMode.LITE
-            else ModeRuntime.active ?: projection.cachedMode
-        val confirmedNotInstalled = projection.confirmedNotInstalled && !ultraEnvironmentRunning &&
-            !ultraSafeMode && !ultraKernelVerified && !installedKernelKnown
+        val confirmedNotInstalled = absenceConfirmed
         // ⚠️ 2026-09-19 修:下面每一个 runCatching 都是"防闪退" ——
         //    Natives 是 JNI(可能 UnsatisfiedLinkError),读设置走磁盘,Os.uname 也可能抛。
         //    以前任何一个抛了,HomeViewModel 的构造 / 刷新协程就炸;现在各自兜底,
         //    最坏只是某个字段显示默认值,页面照样打开。
         val kernelVersion = runCatching { getKernelVersion() }
             .getOrElse { KernelVersion(-1, -1, -1) }
-        val isManager = if (probeRoot) runCatching { Natives.isManager }.getOrDefault(false) else false
+        val isManager = if (probeRoot && environmentMode != null) runCatching { Natives.isManager }.getOrDefault(false) else false
         // isManager 为 false 有两种原因,不能混着提示(详见 HomeUiState.managerNotRecognized 的注释):
         //   ① 隐身模式   → stealthState() 能读到 1(内核仍然认我们)
         //   ② 内核没认主 → 读不到(返回 -1)→ 只要重启一次设备即可,不要引导用户去刷机
@@ -627,57 +677,22 @@ class HomeViewModel(
         val managerVersion = runCatching { getManagerVersion(ksuApp) }
             .getOrElse { ManagerVersion("未知", 0L) }
 
-        // P0：Lite 已安装判据（首帧即已安装，不等 Ultra 探测/root）。
-        // 证据 = 模式已判定为 LITE、本地 Lite 凭据（no-backup），或启动期六态判定已认出 A 态
-        //（工作模式页显示"已配对/已安装（未绑定）"用的就是它 —— 首页必须与设置页一致，
-        //  否则模式激活失败时会出现"设置页已配对、首页一直未安装"，即本次 P0 缺陷）。
-        // ⚠️ 证据只在"不是 KSU"时参与：KSU 模式下残留的 Lite 凭据/判定痕迹不得把首页翻成
-        //    Lite 已安装（用户要求 4：KSU 行为不变），见 LiteStartupStatusPolicy.liteInstalled。
-        val activeMode = ModeRuntime.active
-        val liteMode = activeMode == WorkMode.LITE
-        val ksuMode = activeMode == WorkMode.KSU
-        val liteEvidence = runCatching {
-            SettingsPrefsPolicy.hasLiteEvidence(ksuApp.noBackupFilesDir)
-        }.getOrDefault(false)
-        // 判定痕迹是纯内存读（ModeRuntime.latestDetection），不 IO、不起进程，主线程首帧也安全。
-        val detectedState = runCatching { ModeRuntime.latestDetection?.state }.getOrNull()
-
-        // P0（闪烁修复）：首帧同步读**持久化 last-known 种子**。
-        // 只在判定未落定时读 —— 判定已落定就以本次结果为准，种子一律不参与
-        //（LiteStartupStatusPolicy.hasInstalledEvidence 里也有同一道闸）。
-        // 是一次很小的 prefs 读（中性 prefs，只查三个键），用户明确要求"首帧同步读取"；
-        // 读失败/损坏当"没有种子"，绝不因此影响首帧。
-        val lastKnownInstalled = if (!modeSettled && projection.cachedMode == WorkMode.LITE) {
-            runCatching { HomeLiteInstalledHintStore.isInstalled(ksuApp) }.getOrDefault(false)
-        } else {
-            false
-        }
-        // Reuse the current boot's observed channel; no persisted pairing secret is required.
-        val ultraPaired = ultraEnvironmentRunning || isRootAvailable
+        // Installation identity comes from the current runtime/owner/carrier, never credentials or history.
         val liteFacts = LiteStartupFacts(
-            liteMode = liteMode,
-            liteEvidence = liteEvidence,
+            liteMode = environmentMode == WorkMode.LITE,
+            liteEvidence = false,
             ultraEnvironmentRunning = ultraEnvironmentRunning,
             rootAvailable = isRootAvailable,
             probeRoot = probeRoot,
             stealthOn = stealthOn,
-            ksuMode = ksuMode,
+            ksuMode = environmentMode == WorkMode.KSU,
             rootProbeSettled = rootProbeSettled && liveReadiness != null && liveReadiness != SuReadiness.UNKNOWN,
-            detectedState = detectedState,
-            ultraPaired = ultraPaired,
-            lastKnownInstalled = lastKnownInstalled,
+            ultraPaired = ultraEnvironmentRunning,
             modeSettled = modeSettled,
             // 既有已安装通道（KSU 认主 / Ultra Running）→ 不需要 Lite 判定，也不该进 loading。
             nonLiteInstalled = ksuVersion != null || ultraEnvironmentRunning,
         )
         val liteStatus = LiteStartupStatusPolicy.evaluate(liteFacts)
-
-        // P0：结果确定后把 last-known 种子落盘（写/清都在 IO 线程，首帧绝不写磁盘）。
-        // 隐身由策略侧判成 NONE（不留新痕迹）；任何异常都只记日志，不影响首页。
-        if (probeRoot && !confirmedNotInstalled) {
-            runCatching { persistLiteHint(liteFacts) }
-                .onFailure { Log.w(TAG, "Ultra 已安装种子更新失败(忽略): ", it) }
-        }
 
         val state = HomeUiState(
             kernelVersion = kernelVersion,
@@ -686,6 +701,8 @@ class HomeViewModel(
             isLkmBundled = lkmMode == true &&
                 runCatching { Natives.isLkmBundled }.getOrDefault(false),
             isManager = isManager,
+            environmentRuntimeReady = if (environmentMode == WorkMode.LITE) ultraEnvironmentRunning
+                else environmentMode == WorkMode.KSU && ksuVersion != null && isManager,
             managerNotRecognized = managerNotRecognized,
             isManagerPrBuild = BuildConfig.IS_PR_BUILD,
             isKernelPrBuild = probeRoot && runCatching { Natives.isPrBuild }.getOrDefault(false),
@@ -715,11 +732,12 @@ class HomeViewModel(
             ),
             liteInstalled = liteStatus.liteInstalled,
             environmentMode = environmentMode,
+            environmentConfirmedAbsent = confirmedNotInstalled,
             liteRootFailure = liteStatus.liteRootFailure,
-            // P0：判定中且无任何证据 → 界面画 loading 占位（绝不先渲染「未安装」）。
+            // 仅记录后台未落定；自动检查不把主卡替换为等待页。
             litePending = if (!probeRoot && !liteStatus.liteInstalled) true else liteStatus.litePending,
             // 2026-10-31：隐藏/寄生的「确认窗口」——在寄生结果与运行环境都确认前，
-            // 首页只画既有提示（正在确认 MapleSU 运行环境，请稍候），不先报「正在运行」。
+            // 首页只保留安装历史，不先报「正在运行」。
             hiddenConfirming = runCatching {
                 HiddenStartupConfirm.current(ksuApp)
             }.getOrDefault(true),
@@ -727,7 +745,7 @@ class HomeViewModel(
 
         // P0：Lite 已安装 → 追加"已安装/正常"语义（首帧即可）；root 失败只置提示行，
         // **绝不**把已安装回退成未安装（KSU/未判定保持原判定）。
-        val liteForced = if (liteStatus.liteInstalled && !installedKernelUnbound) {
+        val liteForced = if (liteStatus.liteInstalled) {
             state.copy(
                 isManager = true,
                 managerNotRecognized = false,
@@ -779,24 +797,4 @@ class HomeViewModel(
         return HomeStateRead(projected)
     }
 
-    /**
-     * P0：维护"上次已知 Lite 已安装"种子（只在 IO 线程调用）。
-     *
-     * 写/清/不动的判据全在 [LiteStartupStatusPolicy.hintUpdate]（纯函数、JVM 可测）：
-     * - 模式或 Ultra 结果确定 → 写（证据类型：模式 / 六态 A 态 / 本地凭据 / Ultra 配对）；
-     * - 判定落定却没有任何证据（含 KSU）→ 清，避免下次冷启动继续误报已安装；
-     * - 判定中且无证据 / 隐身 → 不动。
-     * 只写布尔 + 时间戳 + 证据枚举名，**不写**凭据、key、路径或包名。
-     */
-    private fun persistLiteHint(facts: LiteStartupFacts) {
-        when (LiteStartupStatusPolicy.hintUpdate(facts)) {
-            HomeLiteHintUpdate.WRITE -> {
-                val evidence = LiteStartupStatusPolicy.hintEvidence(facts) ?: return
-                HomeLiteInstalledHintStore.write(ksuApp, evidence)
-            }
-
-            HomeLiteHintUpdate.CLEAR -> HomeLiteInstalledHintStore.clear(ksuApp)
-            HomeLiteHintUpdate.NONE -> Unit
-        }
-    }
 }

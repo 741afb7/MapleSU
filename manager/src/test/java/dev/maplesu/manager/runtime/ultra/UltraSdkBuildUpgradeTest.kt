@@ -259,7 +259,7 @@ class UltraSdkBuildUpgradeTest {
             "upgrade() 必须走升级意图（Running 不得短路）",
             upgrade.contains("Intent.UpgradeToBundledBuild"),
         )
-        val guard = upgrade.indexOf("if (!upgradeAllowed(UltraEnvUpgradePolicy.decide(readObservation(app, {}, binding).first)))")
+        val guard = upgrade.indexOf("if (!fullInstall && !upgradeAllowed(UltraEnvUpgradePolicy.decide(readObservation(app, {}, binding).first)))")
         val submit = upgrade.indexOf("UltraEnvironmentInstaller.install(")
         assertTrue("拒绝判定必须在写设备之前（guard=$guard submit=$submit）", guard >= 0 && guard < submit)
         assertTrue(
@@ -268,8 +268,8 @@ class UltraSdkBuildUpgradeTest {
         )
         val panel = uiSource("UltraEnvironmentPanel.kt")
         assertTrue(
-            "startUpgrade 必须接受 Available 与 Unverified",
-            panel.contains("UltraEnvironmentUpgrade.upgradeAllowed(decided)"),
+            "显式升级独立于旧身份与版本记录",
+            panel.contains("UltraEnvironmentUpgrade.installBundled(context)"),
         )
     }
 
@@ -598,15 +598,17 @@ class UltraSdkBuildUpgradeTest {
         assertEquals(listOf("verify", "persist", "authority"), events)
     }
 
-    @Test fun upgradeAndReopeningNeverInitializeOrReenableTheAuthority() {
+    @Test fun fullUpgradeInitializesOnlyAnAbsentAuthorityAndReuseDoesNotRunMigration() {
         for (intent in listOf(UltraEnvironmentInstaller.Intent.UpgradeToBundledBuild,
             UltraEnvironmentInstaller.Intent.ReuseRunning)) {
             val base = attachments()
+            var checks = 0
             val outcome = UltraEnvironmentInstaller.install(FakePort(), intent,
                 UltraEnvironmentInstaller.Attachments(base.whitelist,
                     verify = base.verify, persist = base.persist,
-                    initializeAuthority = { error("Existing authority must be preserved") }))
+                    initializeAuthority = { checks++; null }))
             assertTrue(outcome.ok && outcome.verified)
+            assertEquals(if (intent == UltraEnvironmentInstaller.Intent.UpgradeToBundledBuild) 1 else 0, checks)
         }
     }
 

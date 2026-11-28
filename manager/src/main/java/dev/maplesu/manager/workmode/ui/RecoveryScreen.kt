@@ -26,6 +26,7 @@ data class RecoveryActions(
     val onImportBaseline: () -> Unit,
     val onExportDiagnostics: () -> Unit,
     val onOpenDiagnosis: () -> Unit,
+    val onOpenEnvironmentSettings: () -> Unit,
     val availableControls: Set<RecoveryControl> = emptySet(),
     val exportAvailable: Boolean = false,
 )
@@ -33,19 +34,23 @@ data class RecoveryActions(
 @Composable
 fun RecoveryScreen(
     switchId: String,
-    source: RecoveryFactsSource = UnavailableRecoveryFactsSource,
+    source: RecoveryFactsSource? = null,
     onReboot: (() -> Unit)? = null,
     onVerify: (() -> Unit)? = null,
     onRollback: (() -> Unit)? = null,
     onImportBaseline: (() -> Unit)? = null,
     onExportDiagnostics: (() -> Unit)? = null,
     onOpenDiagnosis: (() -> Unit)? = null,
+    onOpenEnvironmentSettings: (() -> Unit)? = null,
     onBackEnabledChange: (Boolean) -> Unit = {},
+    runtime: RecoveryRuntime = ProductionRecoveryRuntime,
 ) {
     val navigator = LocalNavigator.current
     val viewModel = viewModel<RecoveryViewModel>()
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    LaunchedEffect(switchId, source) { viewModel.attach(switchId, source) }
+    LaunchedEffect(switchId, source, runtime) {
+        viewModel.attach(switchId, source ?: UnavailableRecoveryFactsSource, runtime.takeIf { source == null })
+    }
     SideEffect { onBackEnabledChange(!state.blocksBack) }
     NavigationBackHandler(
         state = rememberNavigationEventState(NavigationEventInfo.None),
@@ -54,16 +59,17 @@ fun RecoveryScreen(
     val actions = RecoveryActions(
         onBack = { if (!state.blocksBack) navigator.pop() },
         onRefresh = viewModel::refresh,
-        onReboot = { onReboot?.invoke() },
-        onVerify = { onVerify?.invoke() },
-        onRollback = { onRollback?.invoke() },
+        onReboot = { onReboot?.invoke() ?: viewModel.reboot() },
+        onVerify = { onVerify?.invoke() ?: viewModel.verify() },
+        onRollback = { onRollback?.invoke() ?: viewModel.rollback() },
         onImportBaseline = { onImportBaseline?.invoke() },
         onExportDiagnostics = { onExportDiagnostics?.invoke() },
         onOpenDiagnosis = { onOpenDiagnosis?.invoke() ?: navigator.push(Route.Diagnosis(switchId)) },
+        onOpenEnvironmentSettings = { onOpenEnvironmentSettings?.invoke() ?: navigator.push(Route.Settings) },
         availableControls = buildSet {
-            if (onReboot != null) add(RecoveryControl.REBOOT)
-            if (onVerify != null) add(RecoveryControl.VERIFY)
-            if (onRollback != null) add(RecoveryControl.ROLLBACK)
+            if (onReboot != null || source == null) add(RecoveryControl.REBOOT)
+            if (onVerify != null || source == null) add(RecoveryControl.VERIFY)
+            if (onRollback != null || source == null) add(RecoveryControl.ROLLBACK)
             if (onImportBaseline != null) add(RecoveryControl.IMPORT_BASELINE)
         },
         exportAvailable = onExportDiagnostics != null,

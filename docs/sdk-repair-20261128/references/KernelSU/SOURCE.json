@@ -1,0 +1,47 @@
+{
+  "repository": "https://github.com/tiann/KernelSU.git",
+  "commit": "f4603d14bd7f3bf21206d6f7c622ddf1c049ade3",
+  "purpose": "Fixed upstream Home/Settings implementation and license for UI review; reference only.",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "bytes": 35149
+    },
+    {
+      "path": "manager/app/src/main/java/me/weishu/kernelsu/ui/screen/home/HomeMaterial.kt",
+      "sha256": "937ea290120a34230ca29095473ead945704f888ec24c99fc237698a331e0e77",
+      "bytes": 23544
+    },
+    {
+      "path": "manager/app/src/main/java/me/weishu/kernelsu/ui/screen/home/HomeMiuix.kt",
+      "sha256": "0e9fc96ef4f3b8ea883167c3a1a6ecf3841eb7629952be73f51f87bbd62eb2ee",
+      "bytes": 29236
+    },
+    {
+      "path": "manager/app/src/main/java/me/weishu/kernelsu/ui/screen/home/HomeScreen.kt",
+      "sha256": "f3ef74ce1c848b0b6ee685e0dc18d1ab3e25982800b4905e37904536b7496986",
+      "bytes": 3494
+    },
+    {
+      "path": "manager/app/src/main/java/me/weishu/kernelsu/ui/screen/home/HomeUiState.kt",
+      "sha256": "70505fbb135d1177769bf926c2d3d708fada303226d6bc951a78da7451589e24",
+      "bytes": 2110
+    },
+    {
+      "path": "manager/app/src/main/java/me/weishu/kernelsu/ui/screen/settings/SettingsMaterial.kt",
+      "sha256": "6472024ab1047f684a754c8706899979f9cfa67116bf8069875c9cf27240e691",
+      "bytes": 21123
+    },
+    {
+      "path": "manager/app/src/main/java/me/weishu/kernelsu/ui/screen/settings/SettingsMiuix.kt",
+      "sha256": "3ca443ce91799eee7a0289ee6f3e995c83b03fa069c64697664713ddab42d29f",
+      "bytes": 27456
+    },
+    {
+      "path": "manager/app/src/main/java/me/weishu/kernelsu/ui/screen/settings/SettingsScreen.kt",
+      "sha256": "ff593134f77ca649fccd560a5367ac87d7efe63f8d8eb384bfae881aefb98c51",
+      "bytes": 2887
+    }
+  ]
+}

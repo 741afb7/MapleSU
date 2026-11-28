@@ -1,9 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="home_environment_check_failed">Environment check did not complete</string>
-    <string name="home_environment_check_timeout_summary">The environment probe timed out. Tap to retry or export diagnostic logs.</string>
-    <string name="home_environment_check_failed_summary">The environment probe failed. Tap to retry or export diagnostic logs.</string>
-    <string name="home_environment_check_unconfirmed_summary">The runtime could not be confirmed. Tap to retry or export diagnostic logs.</string>
-    <string name="home_environment_check_busy_summary">The previous environment probe is still stopping. Please retry shortly.</string>
+    <string name="home_environment_check_failed">Detecting environment…</string>
+    <string name="home_environment_check_timeout_summary">Confirming the current MapleSU environment.</string>
+    <string name="home_environment_check_failed_summary">Confirming the current MapleSU environment.</string>
+    <string name="home_environment_check_unconfirmed_summary">Confirming the current MapleSU environment.</string>
+    <string name="home_environment_check_busy_summary">Confirming the current MapleSU environment.</string>
     <string name="home_environment_refresh_warning">Environment refresh: %1$s</string>
+    <string name="home_environment_cached_title">Installed</string>
+    <string name="home_environment_check_retry">Confirm again</string>
+    <string name="home_environment_unknown_title">Detecting environment…</string>
+    <string name="home_environment_unknown_summary">Confirming the current MapleSU environment. Please wait.</string>
+    <string name="home_environment_confirmation_title">Confirm the environment</string>
+    <string name="home_environment_confirmation_summary">Tap Confirm again to check the current MapleSU environment.</string>
+    <string name="home_environment_installed_unready_summary">Installed. The current runtime is not confirmed yet.</string>
+    <string name="home_ultra_observation_timeout_summary">Ultra status read timed out. Open settings to check its status or repair it.</string>
+    <string name="home_ultra_observation_busy_summary">Ultra status read is busy. Open settings to check its status.</string>
+    <string name="home_ultra_observation_unconfirmed_summary">Ultra is installed; its current component status needs confirmation. Open settings to check it.</string>
+    <string name="home_ultra_observation_failed_summary">Ultra status read returned an error. Open settings to check its status or repair it.</string>
+    <string name="home_ultra_observation_detail">%1$s\n%2$s</string>
 </resources>

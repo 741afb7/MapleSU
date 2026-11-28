@@ -393,10 +393,12 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
     }
     private val ultraStartupTriggeredAt = java.util.concurrent.atomic.AtomicLong(0L)
     private val ultraRecoveryRequestedAt = java.util.concurrent.atomic.AtomicLong(0L)
+    private var unlockedInitializationStarted = false
 
     /** Startup, foreground and explicit refreshes share one event-driven recovery path. */
     fun requestUltraRecovery() {
         if (Application.getProcessName() != packageName || !isUserUnlocked()) return
+        ensureUnlockedInitialization()
         ultraStartupTriggeredAt.compareAndSet(0L, android.os.SystemClock.elapsedRealtime())
         ultraRecoveryRequestedAt.compareAndSet(0L, android.os.SystemClock.elapsedRealtime())
         ultraRecoveryRequests.request()
@@ -474,7 +476,8 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
                 stage("environment") { runCatching { dev.maplesu.manager.runtime.ultra.UltraEnvironmentAutoSetup.ensure(this) }
                     .onSuccess { result ->
                         setupReason = result.reason
-                        if (dev.maplesu.manager.runtime.ultra.UltraSdkSession.current(this) != null) {
+                        if (result.installationFailed ||
+                            dev.maplesu.manager.runtime.ultra.UltraSdkSession.current(this) != null) {
                             bootReadiness = result.installed
                         }
                         Log.i(TAG, "Ultra 环境自动配置: $result")
@@ -574,6 +577,13 @@ class KernelSUApplication : Application(), ViewModelStoreOwner {
         if (!isUserUnlocked()) {
             return
         }
+        ensureUnlockedInitialization()
+    }
+
+    @Synchronized
+    private fun ensureUnlockedInitialization() {
+        if (!isUserUnlocked() || unlockedInitializationStarted) return
+        unlockedInitializationStarted = true
 
         // Discovery has the same binding before and after Root becomes available.
         dev.maplesu.manager.runtime.NativeSuBrokerService.initialize(this)

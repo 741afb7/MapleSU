@@ -23,13 +23,19 @@ class ModeBootstrapThreadStartTest {
 
     @Test fun phaseTwoStartFailureReleasesItsClaimForTheNextAttempt() {
         val retry = ModeBootstrapRetryState(3, 750)
+        val completion = retry.requestRetry().completion
         assertEquals(1, retry.tryStart())
         var delay: Long? = null
         ModeBootstrap.startDetectionThread("failed-phase-two", onStartFailure = {
             delay = retry.finish(resolved = false)
         }, startThread = { throw OutOfMemoryError("pthread_create failed") }) { fail("Probe was started") }
         assertEquals(750L, delay)
+        assertFalse(completion.isCompleted)
         assertEquals(2, retry.tryStart())
+        assertEquals(1_500L, retry.finish(resolved = false))
+        assertEquals(3, retry.tryStart())
+        assertNull(retry.finish(resolved = false))
+        assertTrue(completion.isCompleted)
     }
 
     @Test fun successfulLaunchRunsExactlyOnceWithoutAFailureCallback() {

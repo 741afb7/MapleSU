@@ -2,6 +2,7 @@
 package dev.maplesu.manager.workmode.detect
 
 import android.util.Log
+import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import dev.maplesu.manager.workmode.WorkMode
 import java.util.concurrent.CancellationException
 
@@ -36,8 +37,12 @@ interface EnvironmentProbes {
     /** Current key/boot or Hook evidence only; no credential recovery or ordinary SU probe. */
     fun currentUltraFingerprint(): String? = null
 
+    fun currentUltraIdentity(): UltraIdentityObservation = UltraIdentityObservation(currentUltraFingerprint())
+
     /** b) Ultra recovery fallback after the current channel did not confirm its identity. */
     fun ultraFingerprint(): String?
+
+    fun ultraIdentity(): UltraIdentityObservation = UltraIdentityObservation(ultraFingerprint())
 
     /**
      * c) 是否 MapleSU_Normal（KSU）：JNI `KsuBackends.natives()` 或 `ksud debug info`。
@@ -67,6 +72,12 @@ interface EnvironmentProbes {
      */
     fun rootShellAvailable(): Boolean? = null
 }
+
+/** Identity evidence returned by this probe call, independently of Root or runtime health. */
+data class UltraIdentityObservation(
+    val fingerprint: String?,
+    val managerOwnerIdentity: UltraRuntimeClient.ManagerOwnerIdentity? = null,
+)
 
 /** 判定终态（每一种都有具名 code；用户明确要求不得静默成功）。 */
 enum class EnvironmentVerdict(val code: String) {
@@ -123,6 +134,7 @@ data class EnvironmentCheckOutcome(
     val elapsedMillis: Long,
     /** 实际调用过的探针名（顺序敏感，用于断言短路）：ultraCurrent / su / ultra / ksu。 */
     val probes: List<String> = emptyList(),
+    val ultraOwnerIdentity: UltraRuntimeClient.ManagerOwnerIdentity? = null,
 ) {
     val code: String
         get() = if (verdict != EnvironmentVerdict.UNKNOWN) verdict.code else when {
@@ -153,6 +165,7 @@ class EnvironmentResolver(
     private val probes: EnvironmentProbes,
     private val store: EnvironmentStateStore,
     private val clock: Clock = WallClock,
+    private val allowInheritance: Boolean = true,
 ) {
 
     /**
@@ -163,6 +176,7 @@ class EnvironmentResolver(
         val startedAt = clock.nowMillis()
         val previous = store.snapshot()
         val inheritanceTrigger = EnvironmentInheritancePolicy.triggerFor(previous, currentBootId)
+            ?: EnvironmentCheckTrigger.SU_RECHECK.takeUnless { allowInheritance }
         var trigger = inheritanceTrigger ?: EnvironmentCheckTrigger.SU_RECHECK
         val calls = mutableListOf<String>()
         calls += PROBE_KSU
@@ -185,7 +199,8 @@ class EnvironmentResolver(
         // Identify the current channel before ordinary SU or credential recovery can
         // occupy the SDK. Mode evidence alone does not grant an untested SU capability.
         calls += PROBE_CURRENT_ULTRA
-        val currentUltra = probeResult { probes.currentUltraFingerprint() }.getOrNull()
+        val currentIdentity = probeResult { probes.currentUltraIdentity() }.getOrNull()
+        val currentUltra = currentIdentity?.fingerprint
         Log.i(TAG, "ultraCurrent=$currentUltra after=${clock.nowMillis() - startedAt}ms")
         if (currentUltra != null) {
             return persist(
@@ -199,19 +214,23 @@ class EnvironmentResolver(
                 bootId = currentBootId,
                 startedAt = startedAt,
                 calls = calls,
+                ultraOwnerIdentity = currentIdentity?.managerOwnerIdentity,
             )
         }
         // 快速核对读不**到**（异常/被中断）≠ 读到了"没有"：一律如实 UNKNOWN，绝不折叠成 false。
-        calls += PROBE_SU
         val readiness: SuReadiness
         var ultra: String? = null
+        var ultraOwnerIdentity: UltraRuntimeClient.ManagerOwnerIdentity? = null
         var ultraChecked = false
         var ultraFailure: Throwable? = null
         var ksu: Boolean? = null
         var ksuChecked = false
         try {
             // Ordinary SU failure does not invalidate independent kernel/key evidence.
-            readiness = probeResult { probes.suReadiness() }.getOrDefault(SuReadiness.UNKNOWN)
+            readiness = if (allowInheritance) {
+                calls += PROBE_SU
+                probeResult { probes.suReadiness() }.getOrDefault(SuReadiness.UNKNOWN)
+            } else SuReadiness.UNKNOWN
             Log.i(TAG, "suReadiness=$readiness after=${clock.nowMillis() - startedAt}ms")
             if (inheritanceTrigger == null && previous?.mode == WorkMode.KSU) {
                 calls += PROBE_KSU
@@ -220,9 +239,11 @@ class EnvironmentResolver(
             }
             if (inheritanceTrigger == null && previous?.mode == WorkMode.LITE) {
                 calls += PROBE_ULTRA
-                ultra = probeResult { probes.ultraFingerprint() }
+                val observed = probeResult { probes.ultraIdentity() }
                     .onFailure { ultraFailure = it; EnvDiag.log("ultraFingerprint(prev LITE) failed: ${it.message}") }
                     .getOrNull()
+                ultra = observed?.fingerprint
+                ultraOwnerIdentity = observed?.managerOwnerIdentity
                 ultraChecked = true
             }
             if (inheritanceTrigger == null && readiness != SuReadiness.NOT_USABLE &&
@@ -245,9 +266,11 @@ class EnvironmentResolver(
                 // 没有 Ultra 凭据的设备，恢复探针会抛错（ULTRA_RECOVERY_PROBE_UNKNOWN）。
                 // "没有 Ultra 环境" ≠ "读不到"：这一路失败不得作废整次判定，否则永远停在
                 // 「环境检查未完成」——这正是首页互锁的另一半。
-                ultra = probeResult { probes.ultraFingerprint() }
+                val observed = probeResult { probes.ultraIdentity() }
                     .onFailure { ultraFailure = it; EnvDiag.log("ultraFingerprint failed: ${it.message}") }
                     .getOrNull()
+                ultra = observed?.fingerprint
+                ultraOwnerIdentity = observed?.managerOwnerIdentity
                 Log.i(TAG, "ultraFingerprint=$ultra after=${clock.nowMillis() - startedAt}ms")
             }
         } catch (error: CancellationException) {
@@ -280,6 +303,7 @@ class EnvironmentResolver(
                 bootId = currentBootId,
                 startedAt = startedAt,
                 calls = calls,
+                ultraOwnerIdentity = ultraOwnerIdentity,
             )
         }
 
@@ -417,6 +441,7 @@ class EnvironmentResolver(
         startedAt: Long,
         calls: List<String>,
         mayPersist: () -> Boolean,
+        ultraOwnerIdentity: UltraRuntimeClient.ManagerOwnerIdentity? = null,
     ): EnvironmentCheckOutcome {
         val snapshot = EnvironmentSnapshot(
             mode = mode,
@@ -443,6 +468,7 @@ class EnvironmentResolver(
             bootId = bootId,
             elapsedMillis = clock.nowMillis() - startedAt,
             probes = calls,
+            ultraOwnerIdentity = ultraOwnerIdentity,
         )
     }
 

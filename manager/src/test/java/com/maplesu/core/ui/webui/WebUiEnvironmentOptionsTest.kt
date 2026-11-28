@@ -140,11 +140,44 @@ class WebUiEnvironmentOptionsTest {
         assertEquals(0 to "literal", shell(command(options("PROBE", "literal space"), "printf '%s' \"\$PROBE\"")))
     }
 
-    @Test fun spawnInheritsPathAndPreservesIndividualArguments() {
+    @Test fun spawnInheritsPathAndConsumesQuotedArgumentsOnce() {
         val value = "space ' \" \$PATH \$(printf injected) ;\nargument"
+        val quoted = "'" + value.replace("'", "'\"'\"'") + "'"
         assertEquals(0 to "$value:/module/bin:$inherited", shell(command(options("PATH", "/module/bin:\$PATH"),
-            "printf '%s' " + "'" + value.replace("'", "'\"'\"'") + "'" + ":\"\$PATH\"")))
-        assertEquals(0 to value, shell(spawn(options("PATH", "/module/bin:\${PATH}"), value)))
+            "printf '%s' " + quoted + ":\"\$PATH\"")))
+        assertEquals(0 to value, shell(spawn(options("PATH", "/module/bin:\${PATH}"), quoted)))
+    }
+
+    @Test fun officialKpatchParameterFragmentsFollowTheKsuContract() {
+        val cases = mapOf(
+            "\"nonce with spaces\"" to "nonce with spaces",
+            "\"nonce \\\"quoted\\\"\"" to "nonce \"quoted\"",
+            "\"nonce\\'s value\"" to "nonce\\'s value",
+            "\"nonce \\\$HOME \\`printf x\\`\"" to "nonce \$HOME `printf x`"
+        )
+        cases.forEach { (fragment, expected) ->
+            assertEquals(fragment, 0 to expected, shell(spawn("{}", fragment)))
+        }
+    }
+
+    @Test fun spawnArgumentsRetainShellExpansionAndQuoteRemoval() {
+        assertEquals(0 to inheritedHome, shell(spawn("{}", "\"\${HOME}\"")))
+        assertEquals(0 to "computed", shell(spawn("{}", "\$(printf computed)")))
+        assertEquals(0 to "", shell(spawn("{}", "\"\"")))
+    }
+
+    @Test fun invalidSpawnArgumentsRemainRejected() {
+        val method = WebViewInterface::class.java.getDeclaredMethod("buildSpawnCommand", String::class.java,
+            String::class.java, String::class.java).apply { isAccessible = true }
+        for (args in listOf(JSONArray().put(7).toString(), JSONArray().put("before\u0000after").toString())) {
+            try {
+                bridge().use { method.invoke(it, "printf", args, "{}"); "" }
+                fail("Invalid spawn argument was accepted")
+            } catch (error: InvocationTargetException) {
+                assertTrue(error.targetException is IllegalArgumentException)
+                assertEquals("Invalid spawn argument", error.targetException.message)
+            }
+        }
     }
 
     @Test fun cwdWithQuotesAndSpacesUsesTheActualDirectory() {

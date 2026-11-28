@@ -150,7 +150,20 @@ REF_RETURN(void *, vmalloc_range, (unsigned long size, unsigned long align,
     unsigned long start, unsigned long end, gfp_t gfp, pgprot_t prot,
     unsigned long flags, int node, const void *caller), (size, align, start, end, gfp, prot, flags, node, caller))
 REF_VOID(vfree, (const void *address), (address))
+#if defined(MODULE)
+/* The exported cache routine is assembly and need not carry a CFI type word.
+ * A direct, header-checked export call supplies the SDK's typed C entry. */
+static noinline void reference_cache(unsigned long start, unsigned long end)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+    __flush_icache_range(start, end);
+#else
+    caches_clean_inval_pou(start, end);
+#endif
+}
+#else
 REF_VOID(cache, (unsigned long start, unsigned long end), (start, end))
+#endif
 REF_RETURN(struct cred *, prepare_creds, (void), ())
 REF_RETURN(int, commit_creds, (struct cred *cred), (cred))
 REF_RETURN(const struct cred *, get_task_cred, (struct task_struct *task), (task))
@@ -291,7 +304,15 @@ unsigned long msu_init_bridge_checked_lookup(const char *name)
     if (!strcmp(name, "vmalloc") || !strcmp(name, "vmalloc_noprof")) reference = reference_vmalloc;
     if (!strcmp(name, "vmalloc_user") || !strcmp(name, "vmalloc_user_noprof")) reference = reference_vmalloc_user;
     if (!strcmp(name, "__vmalloc_node_range") || !strcmp(name, "__vmalloc_node_range_noprof")) reference = reference_vmalloc_range;
+#if defined(MODULE)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+    if (!strcmp(name, "__flush_icache_range")) return (unsigned long)reference_cache;
+#else
+    if (!strcmp(name, "caches_clean_inval_pou")) return (unsigned long)reference_cache;
+#endif
+#else
     if (!strcmp(name, "caches_clean_inval_pou") || !strcmp(name, "__flush_icache_range")) reference = reference_cache;
+#endif
     if (reference)
         return msu_init_bridge_resolve_cfi(name, reference, &address) ? 0 : address;
     if (!strcmp(name, "set_memory_ro")) reference = msu_native_set_memory_ro;
@@ -308,7 +329,7 @@ unsigned long msu_init_bridge_checked_lookup(const char *name)
 #endif
     /* These are address-only inputs. No unchecked native indirect call is
      * made through them here; environment ABI qualification stays separate. */
-    if (!strcmp(name, "_text") || !strcmp(name, "kallsyms_lookup_name") ||
+    if (!strcmp(name, "_text") || !strcmp(name, "_end") || !strcmp(name, "kallsyms_lookup_name") ||
         !strcmp(name, "do_execveat_common") || !strcmp(name, "filldir64") ||
         !strcmp(name, "slow_avc_audit") || !strcmp(name, "avc_denied"))
         return msu_init_bridge_lookup(name);

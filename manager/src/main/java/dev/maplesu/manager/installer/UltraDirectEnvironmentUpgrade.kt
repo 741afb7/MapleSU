@@ -5,7 +5,6 @@ import com.maplesu.core.R
 import com.maplesu.core.ui.util.FlashOutcome
 import com.maplesu.core.ui.util.FlashResult
 import dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade
-import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
 import dev.maplesu.manager.runtime.ultra.UltraEnvUpgrade
 
 /** Keeps a direct SDK update distinct from a native boot transaction after process death. */
@@ -14,12 +13,7 @@ internal object UltraDirectEnvironmentUpgrade {
 
     fun install(context: Context, taskId: String?): FlashResult {
         record(context, taskId, "STARTED")
-        val outcome = when (UltraEnvironmentProbe.refresh(context, force = true)) {
-            UltraEnvironmentProbe.State.Unknown, UltraEnvironmentProbe.State.Fault,
-            UltraEnvironmentProbe.State.NotInstalled ->
-                UltraEnvironmentUpgrade.repairEnvironment(context)
-            else -> UltraEnvironmentUpgrade.upgrade(context)
-        }
+        val outcome = UltraEnvironmentUpgrade.installBundled(context)
         val result = when (outcome) {
             UltraEnvironmentUpgrade.Result.SUBMITTED -> completed(context)
             UltraEnvironmentUpgrade.Result.REFUSED -> FlashResult(1,

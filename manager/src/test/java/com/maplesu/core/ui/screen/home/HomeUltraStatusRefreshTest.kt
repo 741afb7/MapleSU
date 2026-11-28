@@ -66,7 +66,7 @@ class HomeUltraStatusRefreshTest {
             switchPending = switchPending,
         ))
         val visible = shouldShowUltraBrand(homeUltraBrandFacts(switch, masking, state.hiddenConfirming))
-        return state.copy(ultraBrandVisible = visible)
+        return state.copy(ultraBrandVisible = visible, environmentMode = mode.takeIf { installed.isInstalled })
     }
 
     @Test fun verifiedUltraSurvivesRefreshChecking() {
@@ -85,15 +85,15 @@ class HomeUltraStatusRefreshTest {
             val failed = project(state(root = true).copy(environmentFailure = failure))
             assertFalse("$failure must not replace the verified Ultra card", failed.showEnvironmentStatusCard)
             assertTrue(failed.showInstalledStatus)
-            assertTrue("$failure must remain visible as a refresh warning", failed.showEnvironmentRefreshWarning)
+            assertFalse("$failure stays diagnostic during automatic refresh", failed.showEnvironmentRefreshWarning)
             assertEquals(failure, failed.environmentFailure)
         }
     }
 
     @Test fun successfulRetryClearsOnlyTheRefreshWarning() {
-        val failed = project(state().copy(environmentFailure = HomeEnvironmentFailure.TIMED_OUT))
+        val failed = project(state().copy(manualEnvironmentFailure = HomeEnvironmentFailure.TIMED_OUT))
         assertTrue(failed.showEnvironmentRefreshWarning)
-        val completed = project(failed.copy(environmentFailure = null))
+        val completed = project(failed.copy(manualEnvironmentFailure = null))
         assertFalse(completed.showEnvironmentRefreshWarning)
         assertTrue(completed.showInstalledStatus)
     }
@@ -111,7 +111,7 @@ class HomeUltraStatusRefreshTest {
         val initial = project(state().copy(liteInstalled = true, environmentChecking = true),
             installed = HomeInstallSignal.UNKNOWN)
         assertFalse(initial.ultraBrandVisible)
-        assertTrue(initial.showEnvironmentStatusCard)
+        assertFalse(initial.showEnvironmentStatusCard)
         assertFalse(initial.showInstalledStatus)
     }
 
@@ -119,7 +119,7 @@ class HomeUltraStatusRefreshTest {
         for (signal in listOf(HomeInstallSignal.UNKNOWN, HomeInstallSignal.NOT_INSTALLED)) {
             for (failure in HomeEnvironmentFailure.entries) {
                 val failed = project(state().copy(environmentFailure = failure), installed = signal)
-                assertTrue(failed.showEnvironmentStatusCard)
+                assertFalse(failed.showEnvironmentStatusCard)
                 assertFalse(failed.showInstalledStatus)
                 assertFalse(failed.showEnvironmentRefreshWarning)
                 assertFalse(failed.isRootAvailable)
@@ -132,9 +132,11 @@ class HomeUltraStatusRefreshTest {
         assertTrue(failed.showInstalledStatus)
         for (mode in listOf(null, WorkMode.KSU)) {
             val changed = project(failed, mode = mode)
+            assertEquals(mode, changed.environmentMode)
             assertFalse(changed.ultraBrandVisible)
-            assertFalse(changed.showInstalledStatus)
-            assertTrue(changed.showEnvironmentStatusCard)
+            assertEquals(mode == WorkMode.KSU, changed.showInstalledStatus)
+            assertFalse(changed.isRootAvailable)
+            assertFalse(changed.showEnvironmentStatusCard)
             assertFalse(changed.showEnvironmentRefreshWarning)
         }
     }
@@ -143,7 +145,7 @@ class HomeUltraStatusRefreshTest {
         val installed = project(state())
         val confirming = project(installed.copy(hiddenConfirming = true, environmentChecking = true))
         assertFalse(confirming.ultraBrandVisible)
-        assertTrue(confirming.showEnvironmentStatusCard)
+        assertFalse(confirming.showEnvironmentStatusCard)
         for (hidden in listOf(installed.asLiteHiddenNotInstalled(), installed.asStealthKernelNotReady())) {
             assertFalse(hidden.ultraBrandVisible)
             assertFalse(hidden.showInstalledStatus)
@@ -174,11 +176,12 @@ class HomeUltraStatusRefreshTest {
             detectionComplete = true,
             detectionFailure = null,
             detectedState = ModeState.INDETERMINATE,
+            knownUltra = false, failureDetail = null,
         )
         val visible = project(completed, mode = null, installed = HomeInstallSignal.UNKNOWN)
         assertEquals(HomeEnvironmentFailure.UNCONFIRMED, visible.environmentFailure)
-        assertTrue(visible.showEnvironmentStatusCard)
-        assertFalse(visible.environmentChecking)
+        assertFalse(visible.showEnvironmentStatusCard)
+        assertTrue(visible.environmentChecking)
         assertFalse(visible.showLiteChecking)
         assertFalse(visible.showInstalledStatus)
         assertFalse(visible.liteInstalled)
@@ -186,11 +189,12 @@ class HomeUltraStatusRefreshTest {
     }
 
     @Test fun confirmedNotInstalledStillUsesTheUninstalledCard() {
-        val completed = state().copy(environmentChecking = true).afterEnvironmentCheck(
+        val completed = state().copy(environmentChecking = true, environmentConfirmedAbsent = true).afterEnvironmentCheck(
             modeResolved = false,
             detectionComplete = true,
             detectionFailure = null,
             detectedState = ModeState.NOT_INSTALLED,
+            knownUltra = false, failureDetail = null,
         )
         val visible = project(completed, mode = null, installed = HomeInstallSignal.NOT_INSTALLED)
         assertNull(visible.environmentFailure)
@@ -209,6 +213,7 @@ class HomeUltraStatusRefreshTest {
                 detectionComplete = true,
                 detectionFailure = null,
                 detectedState = ModeState.MODE_A_ACTIVE,
+                knownUltra = false, failureDetail = null,
             )
         val visible = project(completed)
         assertNull(visible.environmentFailure)
@@ -226,6 +231,7 @@ class HomeUltraStatusRefreshTest {
             detectionComplete = true,
             detectionFailure = null,
             detectedState = ModeState.INDETERMINATE,
+            knownUltra = false, failureDetail = null,
         )
         assertEquals(HomeEnvironmentFailure.UNCONFIRMED, unconfirmed.environmentFailure)
         val completed = unconfirmed.afterEnvironmentCheck(
@@ -233,6 +239,7 @@ class HomeUltraStatusRefreshTest {
             detectionComplete = true,
             detectionFailure = null,
             detectedState = ModeState.NOT_INSTALLED,
+            knownUltra = false, failureDetail = null,
         )
         assertNull(completed.environmentFailure)
         assertFalse(completed.showEnvironmentStatusCard)
@@ -251,10 +258,11 @@ class HomeUltraStatusRefreshTest {
                 detectionComplete = complete,
                 detectionFailure = reason,
                 detectedState = ModeState.INDETERMINATE,
+                knownUltra = false, failureDetail = null,
             )
             assertEquals(expected, completed.environmentFailure)
-            assertTrue(completed.showEnvironmentStatusCard)
-            assertFalse(completed.environmentChecking)
+            assertFalse(completed.showEnvironmentStatusCard)
+            assertTrue(completed.environmentChecking)
             assertFalse(completed.showLiteChecking)
             assertFalse(completed.showInstalledStatus)
             assertFalse(completed.isRootAvailable)
@@ -267,11 +275,16 @@ class HomeUltraStatusRefreshTest {
         assertTrue(screen.contains("displayState.copy(ultraBrandVisible = ultraVisible)"))
         assertEquals(2, "state = statusState".toRegex().findAll(screen).count())
         val viewModel = source("viewmodel/HomeViewModel.kt")
-        assertTrue(viewModel.contains("checked.value.state.afterEnvironmentCheck("))
-        assertTrue(viewModel.contains("detectedState = ModeRuntime.latestDetection?.state"))
+        val collection = viewModel.substringAfter(
+            "private suspend fun collectEnvironment(", missingDelimiterValue = "",
+        ).substringBefore("private suspend fun refreshInformation(", missingDelimiterValue = "")
+        assertTrue(collection.contains(".afterEnvironmentCheck("))
+        assertTrue(collection.contains("detectedState = ModeRuntime.latestDetection?.state"))
         for (theme in listOf("HomeMaterial.kt", "HomeMiuix.kt")) {
             val source = source("screen/home/$theme")
-            assertTrue(source.contains("state.showEnvironmentStatusCard"))
+            assertFalse(source.contains("if (state.showEnvironmentStatusCard)"))
+            assertTrue(source.contains("EnvironmentRefreshAction(state.environmentChecking || state.manualEnvironmentChecking"))
+            assertTrue(source.contains("state.environmentUnknown"))
             assertTrue(source.contains("state.showInstalledStatus"))
             assertTrue("$theme must display the retained refresh diagnostic", source.contains("state.showEnvironmentRefreshWarning"))
         }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package dev.maplesu.manager.workmode.detect
 
+import android.os.Process
+import dev.maplesu.manager.runtime.ultra.UltraRuntimeClient
 import dev.maplesu.manager.workmode.WorkMode
 import dev.maplesu.manager.workmode.detect.activeMode
 import org.junit.Assert.assertEquals
@@ -11,8 +13,7 @@ import org.junit.Test
 /**
  * T14：环境结论 → 启动判定覆盖（纯映射）。
  *
- * 覆盖只允许发生在两个终态（KSU / 未安装）；LITE、ULTRA、UNKNOWN 必须返回 null，
- * 否则会绕过既有 LITE 握手语义或把一个"读不到"写成结论。
+ * 当前完整 Ultra owner 仅投影已安装未绑定；历史 LITE 和 UNKNOWN 保持未授能力。
  */
 class EnvironmentDetectionProjectionTest {
 
@@ -22,6 +23,7 @@ class EnvironmentDetectionProjectionTest {
         trigger: EnvironmentCheckTrigger? = EnvironmentCheckTrigger.NO_STATE,
         detail: String = "TEST",
         bootId: String = "boot-1",
+        owner: UltraRuntimeClient.ManagerOwnerIdentity? = null,
     ) = EnvironmentCheckOutcome(
         verdict = verdict,
         mode = mode,
@@ -31,6 +33,7 @@ class EnvironmentDetectionProjectionTest {
         bootId = bootId,
         elapsedMillis = 12L,
         probes = listOf("su", "ultra"),
+        ultraOwnerIdentity = owner,
     )
 
     @Test
@@ -88,5 +91,29 @@ class EnvironmentDetectionProjectionTest {
                 outcome(EnvironmentVerdict.UNKNOWN, null, detail = EnvironmentCheckDetail.DEADLINE_EXCEEDED),
             ),
         )
+    }
+
+    @Test
+    fun currentUltraOwnerOnlyProjectsInstallationWithoutAnActiveModeOrRoot() {
+        val owner = UltraRuntimeClient.ManagerOwnerIdentity(Process.myUid(), 7, "ab".repeat(16))
+        val detection = EnvironmentDetectionProjection.override(
+            outcome(EnvironmentVerdict.ULTRA, WorkMode.LITE, owner = owner),
+        )
+        assertEquals(ModeState.MODE_A_INSTALLED_UNBOUND, detection?.state)
+        assertEquals(DetectionRules.Rule.R6_A_ULTRA_OWNER_ONLY, detection?.rule)
+        assertNull(detection?.state?.activeMode)
+        assertNull(detection?.rootChannel)
+        assertEquals(RecoveryReadiness.NONE, detection?.recovery)
+    }
+
+    @Test
+    fun anOwnerFieldDoesNotPromoteUnknownOrInheritedHistory() {
+        val owner = UltraRuntimeClient.ManagerOwnerIdentity(Process.myUid(), 7, "ab".repeat(16))
+        assertNull(EnvironmentDetectionProjection.override(
+            outcome(EnvironmentVerdict.UNKNOWN, WorkMode.LITE, owner = owner),
+        ))
+        assertNull(EnvironmentDetectionProjection.override(
+            outcome(EnvironmentVerdict.INHERITED, WorkMode.LITE, trigger = null, owner = owner),
+        ))
     }
 }

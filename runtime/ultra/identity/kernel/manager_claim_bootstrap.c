@@ -12,6 +12,8 @@ const msu_loader_u32 msu_manager_deployment_support_facts[] = {
 
 typedef int (*msu_permissions)(unsigned long, int);
 typedef int (*msu_materializer)(const struct msu_loader_binding *, const void *, void *, msu_loader_u32);
+typedef int (*msu_source_materializer)(const struct msu_loader_binding *, const void *,
+    const void *, msu_loader_u32, void *, msu_loader_u32);
 
 /* This callback and the allocator/permissions stubs execute from the kernel
  * Image. It may release the drained resident allocation and its external work
@@ -84,7 +86,8 @@ __asm__(".pushsection .text.msu_manager_claim_bootstrap,\"ax\",%progbits\n"
  * established reference-ABI validation rather than new indirect checks. */
 __attribute__((no_sanitize("kcfi")))
 static int msu_resident_start(const struct msu_manager_claim_anchor *a,
-    unsigned int initialize, struct msu_resident_slot **published)
+    unsigned int initialize, struct msu_resident_slot **published,
+    const void *source_base, msu_loader_u32 source_bytes)
 {
     const struct msu_loader_header *h;
     const unsigned char *image;
@@ -101,7 +104,8 @@ static int msu_resident_start(const struct msu_manager_claim_anchor *a,
     if (!a || a->magic != MSU_CLAIM_ANCHOR_MAGIC ||
         (a->version != MSU_CLAIM_RESIDENT_ANCHOR_VERSION &&
          a->version != MSU_CLAIM_BOOT_ANCHOR_VERSION &&
-         a->version != MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION) ||
+         a->version != MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION &&
+         a->version != MSU_CLAIM_SOURCE_ANCHOR_VERSION) ||
         (a->page_shift != 12 && a->page_shift != 14 && a->page_shift != 16) ||
         a->allocator_kind > 1 || a->binding.image_bytes < sizeof(*a) ||
         a->binding.descriptor_bytes < sizeof(*h) ||
@@ -126,11 +130,16 @@ static int msu_resident_start(const struct msu_manager_claim_anchor *a,
     }
     image = (const unsigned char *)a - a->self_offset;
     h = (const void *)(image + a->binding.descriptor_offset);
+    if (a->version == MSU_CLAIM_SOURCE_ANCHOR_VERSION &&
+        (a->binding.descriptor_bytes < sizeof(struct msu_loader_source_header) ||
+         h->version != MSU_LOADER_SOURCE_VERSION ||
+         (initialize && (!source_base || !source_bytes)))) return -22;
     if (!h->memory_bytes || h->memory_bytes > MSU_LOADER_MAX_MEMORY_BYTES) return -22;
     {
         if (a->reserved[0] % 4 || a->reserved[0] > a->binding.image_bytes - sizeof(*resident)) return -22;
         resident = (const void *)(image + a->reserved[0]);
-        if (a->version == MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION) {
+        if (a->version == MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION ||
+            a->version == MSU_CLAIM_SOURCE_ANCHOR_VERSION) {
             const struct msu_resident_deployment_binding *binding;
             if (a->binding.image_bytes < sizeof(*binding) ||
                 a->reserved[0] > a->binding.image_bytes - sizeof(*binding)) return -22;
@@ -188,7 +197,11 @@ static int msu_resident_start(const struct msu_manager_claim_anchor *a,
     if (error) goto cleanup;
     error = rw((unsigned long)memory, pages);
     if (error) goto cleanup;
-    entry = ((msu_materializer)(image + a->materializer_offset))(&a->binding, image, memory, bytes);
+    if (a->version == MSU_CLAIM_SOURCE_ANCHOR_VERSION)
+        entry = ((msu_source_materializer)(image + a->materializer_offset))(
+            &a->binding, image, source_base, source_bytes, memory, bytes);
+    else
+        entry = ((msu_materializer)(image + a->materializer_offset))(&a->binding, image, memory, bytes);
     if (entry <= 0) {
         slot->last_error = entry ? entry : -22;
         goto cleanup;
@@ -274,14 +287,22 @@ int msu_manager_resident_boot(const struct msu_manager_claim_anchor *a)
 {
     struct msu_resident_slot *slot;
     if (!a || a->version != MSU_CLAIM_BOOT_ANCHOR_VERSION) return -22;
-    return msu_resident_start(a, 1, &slot);
+    return msu_resident_start(a, 1, &slot, 0, 0);
 }
 
 int msu_manager_resident_boot_deployment(const struct msu_manager_claim_anchor *a)
 {
     struct msu_resident_slot *slot;
     if (!a || a->version != MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION) return -22;
-    return msu_resident_start(a, 1, &slot);
+    return msu_resident_start(a, 1, &slot, 0, 0);
+}
+
+int msu_manager_resident_boot_deployment_source(const struct msu_manager_claim_anchor *a,
+    const void *source_base, msu_loader_u32 source_bytes)
+{
+    struct msu_resident_slot *slot;
+    if (!a || a->version != MSU_CLAIM_SOURCE_ANCHOR_VERSION) return -22;
+    return msu_resident_start(a, 1, &slot, source_base, source_bytes);
 }
 
 void msu_manager_claim_bootstrap(const struct msu_manager_claim_anchor *a, const char *name)
@@ -295,6 +316,7 @@ void msu_manager_claim_bootstrap(const struct msu_manager_claim_anchor *a, const
         for (i = 0; i < MAPLESU_OWNER_ENVELOPE_PREFIX_BYTES; ++i)
             if (name[i] != MAPLESU_OWNER_ENVELOPE_PREFIX[i]) return;
     }
-    if (!a || msu_resident_start(a, a->version == MSU_CLAIM_RESIDENT_ANCHOR_VERSION, &slot)) return;
+    if (!a || msu_resident_start(a, a->version == MSU_CLAIM_RESIDENT_ANCHOR_VERSION,
+            &slot, 0, 0)) return;
     ((int (*)(const char *))(msu_loader_uptr)slot->dispatch)(name);
 }

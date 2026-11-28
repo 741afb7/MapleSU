@@ -18,6 +18,7 @@
 #include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/module.h>
+#include <linux/pid_namespace.h>
 #include <linux/preempt.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
@@ -88,6 +89,10 @@ _Static_assert(MSU_MANAGEMENT_CRED_UCOUNTS == 0 || MSU_MANAGEMENT_CRED_UCOUNTS =
 #if defined(__GNUC__)
 _Static_assert(__builtin_types_compatible_p(typeof(&prepare_creds),
     struct cred *(*)(void)), "management prepare_creds ABI");
+#ifdef MSU_BOOT_SDK_NATIVE
+_Static_assert(__builtin_types_compatible_p(typeof(&prepare_kernel_cred),
+    struct cred *(*)(struct task_struct *)), "management prepare_kernel_cred ABI");
+#endif
 _Static_assert(__builtin_types_compatible_p(typeof(&commit_creds),
     int (*)(struct cred *)), "management commit_creds ABI");
 _Static_assert(__builtin_types_compatible_p(typeof(&abort_creds),
@@ -3367,7 +3372,31 @@ int msu_credential_profile_validate(const struct msu_credential_profile *profile
     return profile->selinux_domain[0] ? msu_credential_domain_supported() : 0;
 }
 
+static struct cred *msu_credential_prepare(bool bootstrap_root)
+{
+#ifdef MSU_BOOT_SDK_NATIVE
+    if (bootstrap_root) {
+        struct task_struct *init;
+        struct cred *prepared;
+        rcu_read_lock();
+        init = find_task_by_pid_ns(1, &init_pid_ns);
+        if (init) msu_dynamic_get_task_struct(init);
+        rcu_read_unlock();
+        if (!init) return ERR_PTR(-ESRCH);
+        /* The native constructor retains PID1's credential and creates its own
+         * LSM state. Never inherit the app SID or copy a prepared LSM blob. */
+        prepared = prepare_kernel_cred(init);
+        msu_dynamic_put_task_struct(init);
+        return prepared;
+    }
+#else
+    (void)bootstrap_root;
+#endif
+    return prepare_creds();
+}
+
 static int msu_credential_replace_profile(const struct msu_credential_profile *profile,
+    bool bootstrap_root,
     int (*validate)(void *context),
     int (*adopt)(void *context, const struct cred *before, const struct cred *after),
     void *context, u32 *effects)
@@ -3407,7 +3436,8 @@ static int msu_credential_replace_profile(const struct msu_credential_profile *p
         error = -EOPNOTSUPP;
         goto put_original;
     }
-    prepared = prepare_creds();
+    prepared = msu_credential_prepare(bootstrap_root);
+    if (IS_ERR(prepared)) { error = PTR_ERR(prepared); goto put_original; }
     if (!prepared) { error = -ENOMEM; goto put_original; }
     prepared_owned = true;
 #ifdef CONFIG_MULTIUSER
@@ -3457,6 +3487,12 @@ static int msu_credential_replace_profile(const struct msu_credential_profile *p
             strnlen(profile->selinux_domain, sizeof(profile->selinux_domain)));
         if (error) goto abort;
     }
+#ifdef MSU_BOOT_SDK_NATIVE
+    if (bootstrap_root) {
+        error = msu_native_root_prepare(prepared);
+        if (error) goto abort;
+    }
+#endif
     error = validate(context);
     if (error) goto abort;
     if (current != task || READ_ONCE(MSU_DYN_FIELD(current, task_struct, mm)) != mm || READ_ONCE(MSU_DYN_FIELD(current, task_struct, self_exec_id)) != exec_id ||
@@ -3498,10 +3534,10 @@ int msu_credential_replace_profile_current(const struct msu_credential_profile *
     if (!effects) return -EINVAL;
     *effects = 0;
     if (!adopt) return -EINVAL;
-    return msu_credential_replace_profile(profile, validate, adopt, context, effects);
+    return msu_credential_replace_profile(profile, false, validate, adopt, context, effects);
 }
 
-int msu_credential_replace_current(const maplesu_caps_v3 *caps,
+static int msu_credential_replace_current_mode(const maplesu_caps_v3 *caps, bool bootstrap_root,
     int (*validate)(void *context), void *context, u32 *effects)
 {
     struct msu_credential_profile profile = {0};
@@ -3522,7 +3558,13 @@ int msu_credential_replace_current(const maplesu_caps_v3 *caps,
         profile.replace_ids = profile.replace_groups = profile.clear_securebits = true;
     }
     profile.cap_write_mask = MSU_CRED_CAP_ALL;
-    return msu_credential_replace_profile(&profile, validate, NULL, context, effects);
+    return msu_credential_replace_profile(&profile, bootstrap_root, validate, NULL, context, effects);
+}
+
+int msu_credential_replace_current(const maplesu_caps_v3 *caps,
+    int (*validate)(void *context), void *context, u32 *effects)
+{
+    return msu_credential_replace_current_mode(caps, false, validate, context, effects);
 }
 
 int msu_management_validate_credentials(void *context)
@@ -3539,7 +3581,7 @@ static int msu_management_credentials(struct msu_management_session *session,
     int error;
     if (!root && copy_from_user_nofault(&caps,
         msu_management_user_pointer(operation->data_user), sizeof(caps))) return -EFAULT;
-    error = msu_credential_replace_current(root ? NULL : &caps,
+    error = msu_credential_replace_current_mode(root ? NULL : &caps, root,
         msu_management_validate_credentials, session, &response->metadata_length);
     if (response->metadata_length & MAPLESU_EFFECT_COMMITTED) {
         if (error || msu_dynamic_current_cred() != msu_dynamic_current_real_cred()) msu_management_retire(session);

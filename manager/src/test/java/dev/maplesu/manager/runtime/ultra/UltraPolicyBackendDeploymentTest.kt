@@ -77,6 +77,49 @@ class UltraPolicyBackendDeploymentTest {
         assertEquals(1, calls)
     }
 
+    @Test fun receiptFailurePreservesStructuredChildFactsAndReportsOnlyOnce() {
+        var calls = 0
+        var reports = 0
+        var diagnostic: org.json.JSONObject? = null
+        val receipt = NativeReceipt.parse("""{"backend":"maplesu_ultra","operation":"run_root_cmd",
+            "ok":false,"sdkError":"ERR_READ_CHILD_ERRCODE","sdkErrorCode":-19914,
+            "data":{"rootCommand":{"phase":11,"childStatus":256,"receiptComplete":false,
+            "childStatusValid":true,"command":"DO_NOT_EXPORT"},"stderr":"child exited 1"}}""")!!
+        val failure = UltraPolicyBackendDeployment.prepareTools("write-once", {
+            calls++; receipt
+        }, ::decode) {
+            reports++
+            diagnostic = org.json.JSONObject(UltraPolicyBackendDeployment.preparationDiagnostic(it, ::decode))
+        }
+        assertTrue(failure!!.startsWith("MODULE_TOOLS_TRANSPORT:ERR_READ_CHILD_ERRCODE"))
+        assertEquals(1, calls)
+        assertEquals(1, reports)
+        assertEquals(-19914, diagnostic!!.getInt("sdkErrorCode"))
+        assertEquals(11, diagnostic!!.getJSONObject("rootCommand").getInt("phase"))
+        assertEquals(256, diagnostic!!.getJSONObject("rootCommand").getInt("childStatus"))
+        assertFalse(diagnostic!!.getJSONObject("rootCommand").getBoolean("receiptComplete"))
+        assertEquals("child exited 1", diagnostic!!.getString("stderr"))
+        assertFalse(diagnostic.toString().contains("DO_NOT_EXPORT"))
+    }
+
+    @Test fun diagnosticStorageFailureNeverReplacesTheSdkFailureOrReplaysTheScript() {
+        var calls = 0
+        val failure = UltraPolicyBackendDeployment.prepareTools("write-once", {
+            calls++; NativeReceipt.rootCommand(SuExecResult(7, "child failed"))
+        }, ::decode, onFailure = { error("diagnostic storage failed") })
+        assertEquals("MODULE_TOOLS_TRANSPORT:MAPLESU_ROOT_COMMAND_EXIT:exitCode=7:timedOut=false", failure)
+        assertEquals(1, calls)
+    }
+
+    @Test fun preparationDiagnosticsRedactCredentialsWithoutLosingOutputOrStatus() {
+        val secret = "A".repeat(48)
+        val receipt = NativeReceipt.rootCommand(SuExecResult(1, "child failed\n$secret\n"))
+        val diagnostic = org.json.JSONObject(UltraPolicyBackendDeployment.preparationDiagnostic(receipt, ::decode))
+        assertEquals(1, diagnostic.getInt("exitCode"))
+        assertEquals("child failed\n<REDACTED-KEY>\n", diagnostic.getString("output"))
+        assertFalse(diagnostic.toString().contains(secret))
+    }
+
     @Test fun validZeroShellMarkerNeverRepairsAnSdkTransportFailure() {
         var calls = 0
         val failure = UltraPolicyBackendDeployment.prepareTools("write-once", { script ->

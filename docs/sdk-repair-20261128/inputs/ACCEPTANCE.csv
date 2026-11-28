@@ -1,0 +1,143 @@
+id,work_package,lane,scenario,procedure,expected,evidence_key,status,artifact_generation,device_or_fixture,evidence_path,review
+S001,A10,source,所有词法命中处置,重生成源码索引并逐文件登记修改/保留/隔离/历史未选源,活跃标准Key依赖0；每个保留项有非RootKey理由,file-dispositions,NOT_RUN,未运行,未运行,未产生,未复核
+S002,A10,source,实际选源与副本,核manifest sources/include/compile_commands/archive map,改到真正所选实现；无同名旧副本混入,selection-map,NOT_RUN,未运行,未运行,未产生,未复核
+S003,A10,source,标准归档Key符号,检查新archive/bridge/payload符号和引用图,无RootKey getter/setter/LegacyKey请求生产依赖,symbol-closure,NOT_RUN,未运行,未运行,未产生,未复核
+S004,A10,source,生成模板与schema,检查Kotlin配方/claim/SDK/helper/program/catalog模板,无秘密槽参数；新合同字段与尺寸一致,schema-closure,NOT_RUN,未运行,未运行,未产生,未复核
+S005,A10,source,旧修复保全,比对主线最终交付与改造diff,Panic/TLBI/13参/tagged pointer/TASK_STATE/APPEND64/retirement原修复保留,prior-fix-preservation,NOT_RUN,未运行,未运行,未产生,未复核
+S006,A10,source,注释与使用示例,按第14节逐项检查头文件/注释/样例并编译样例,标准说明无找Key步骤；历史准确标注；样例用新SDK,comment-cleanup,NOT_RUN,未运行,未运行,未产生,未复核
+K001,A01,kernel-host,零凭据resident启动,完全不传credential初始化keyless config并启动host,真实初始化成功；无空字符串假Key,resident-keyless,NOT_RUN,未运行,未运行,未产生,未复核
+K002,A01,kernel-host,现有 config/anchor 布局,对当前实际版本核尺寸、布局、合法及畸形输入,现有生命周期保全；若新增版本明确同代生产者与消费者,config-version,NOT_RUN,未运行,未运行,未产生,未复核
+K003,A01,kernel-host,retirement生命周期,在新config运行retire/caller_active/清理失败注入,v3既有排空与内存保活语义保留,retirement,NOT_RUN,未运行,未运行,未产生,未复核
+K004,A01,device-negative,假包或错签Manager,使用同包错签与不同包样本请求claim,不获Manager/Root；保持原调用失败语义,manager-signature,NOT_RUN,未运行,未运行,未产生,未复核
+K005,A01,device,同签更新与重装,更新同签APK；卸载后以不同fullUID重装,重新核验身份；旧会话失效；无Key恢复步骤,manager-reinstall,NOT_RUN,未运行,未运行,未产生,未复核
+K006,A01,device-negative,多用户Manager,主用户与次用户分别请求并复制公开帧数据,遵守fullUID合同；无跨用户借权,manager-multiuser,NOT_RUN,未运行,未运行,未产生,未复核
+K007,A01,kernel-host,安装事件定向撤销,更新/删除APK或安装记录；保留其他无关主体,仅相关绑定失效；无全局粗暴清空,install-revoke,NOT_RUN,未运行,未运行,未产生,未复核
+K008,A01,kernel-host,watch与在途竞态,在验证/OPEN/变更/回执间注入安装变化,真实错误与effects保留；观察窗口如实描述,watch-inflight,NOT_RUN,未运行,未运行,未产生,未复核
+K009,A01,device-negative,公开前缀与host伪造,普通应用复制prefix/host/epoch/request ID,公开信息不产生资格,public-frame-not-authority,NOT_RUN,未运行,未运行,未产生,未复核
+K010,A01,device-negative,旧Key与旧claim重放,在新代重放真实历史Key报文与旧claim名字,无提权；无旧Key网关被选中,legacy-replay,NOT_RUN,未运行,未运行,未产生,未复核
+K011,A01,kernel-host,user namespace与Root主体,在非init user-ns以及仅euid0情况下请求管理,按现有资格精确检查；不冒充Manager,root-principal,NOT_RUN,未运行,未运行,未产生,未复核
+K012,A01,kernel-host,helper实际inode,替换路径同名可执行文件并请求helper OPEN,只有当前合法安装可执行身份可用,helper-inode,NOT_RUN,未运行,未运行,未产生,未复核
+T001,A02,sdk-native,31命令全覆盖,逐个执行owner命令1-31的合法/缺参/错误主体,所有命令有真实正负结果；无Key回落,wire-all-31,NOT_RUN,未运行,未运行,未产生,未复核
+T002,A02,sdk-native,新线程默认态,在线程池新线程直接请求及显式选择后请求,默认无授权；正确选择后独立验证,thread-mode,NOT_RUN,未运行,未运行,未产生,未复核
+T003,A02,sdk-native,fork会话,父worker OPEN后fork并执行父子并发操作,子不借父session；合法子独立OPEN/CLOSE,fork-sessions,NOT_RUN,未运行,未运行,未产生,未复核
+T004,A02,sdk-native,exec继承,exec新payload并枚举继承FD及其用途,仅白名单FD；无秘密argv/env/trailer,exec-handoff,NOT_RUN,未运行,未运行,未产生,未复核
+T005,A02,sdk-native,并发资源准入,并发只读列表/授权/模块变更/卸载,资源冲突正确；无跨请求身份串扰或全局长阻塞,sdk-concurrency,NOT_RUN,未运行,未运行,未产生,未复核
+T006,A02,sdk-native,Owner失败不降级,对OPEN/ROOT/READ注入EPERM/ESTALE/EFAULT,准确原错；Legacy发送次数0,no-auth-fallback,NOT_RUN,未运行,未运行,未产生,未复核
+T007,A02,sdk-native,无回执变更,在变更完成后丢弃响应,标记未确认；按事务观察；变更提交次数1,uncertain-mutation,NOT_RUN,未运行,未运行,未产生,未复核
+T008,A02,sdk-native,部分Root结果,ROOT成功后令TASK_STATE或procattr失败,保留ROOT effects；不发布整体成功或重放,partial-root,NOT_RUN,未运行,未运行,未产生,未复核
+T009,A02,sdk-native,caps/task/procattr,逐项覆盖profile与no_new_privs及错误writer,凭据和task语义真实且与旧修复一致,credential-profile,NOT_RUN,未运行,未运行,未产生,未复核
+T010,A02,sdk-native,ALLOC/WRITE/EXEC,覆盖13参allocator/INNER fallback/范围/权限切换,真实分配执行与回执；TLBI发布修复保留,executor-memory,NOT_RUN,未运行,未运行,未产生,未复核
+T011,A02,sdk-native,publication/shared bool,创建/发布/禁用/retire与跨会话对象操作,所有权和引用正确；无提前释放,publication-lifetime,NOT_RUN,未运行,未运行,未产生,未复核
+T012,A02,sdk-native,UID事务,prepare/commit/cancel/readback/shutdown并发与失败,名单和runtime原子语义保持,uid-transaction,NOT_RUN,未运行,未运行,未产生,未复核
+T013,A02,sdk-native,指针与APPEND64,tagged pointer/嵌套指针/非法范围/大于32位offset,完整64位与原生copy验证；不截断不假成功,pointer-append64,NOT_RUN,未运行,未运行,未产生,未复核
+T014,A02,sdk-native,cache身份,同namespace不同boot/host/kernel布局并交错查询,缓存精确失效；不复用陈旧地址,cache-binding,NOT_RUN,未运行,未运行,未产生,未复核
+T015,A02,sdk-native,cleanup错误,主操作失败后再注入close/wait失败,主错误和已完成回执可追溯；无吞错,cleanup-receipt,NOT_RUN,未运行,未运行,未产生,未复核
+T016,A02,sdk-native,全部public API,逐项调用Root/安装/日志/测试/授权/模块/WebUI/寄生,新SDK无Key调用均有编译与执行证据,public-api-complete,NOT_RUN,未运行,未运行,未产生,未复核
+I001,A03,image,33份正式组件修补,以现有33份去重原图和新正式cohort执行修补,每图成功或明确不支持；修补成功项结构正确,corpus-patch,PASS,r17 APK 1191709b8cc8; 328包内资产逐字核等; 当前编译生产闭包复用,HOST_PRODUCTION_FILE_ALGORITHMS;33原图;26支持+7明确不支持;非设备,WORKSPACE/.tmp/ultra-keyless-20261124/mainline/corpus33-r17-compressed/native-r2/RECEIPT.json,33份原图逐项实跑：26生产修补完成；7精确TARGET_KMI_UNPROVEN且productionInvoked=false；0算法FAIL；输入无漂移。exit1为7项不支持的原入口退出语义；未计设备或零新增信号通过。
+I002,A03,image,重复修补,对全部成功修补图再次修补,幂等不叠加；namespace保留；无需seed,corpus-repatch,PASS,r17 APK 1191709b8cc8; 328包内资产逐字核等; 当前编译生产闭包复用,HOST_PRODUCTION_FILE_ALGORITHMS;33原图;26支持+7明确不支持;非设备,WORKSPACE/.tmp/ultra-keyless-20261124/mainline/corpus33-r17-compressed/native-r2/RECEIPT.json,26份支持图重复修补逐字幂等；每项repatchByteIdentical=true且namespaceSha256已记录。7份未证KMI未执行，不计成功。
+I003,A03,image,完整原图恢复,对每份成功图用对应原记录恢复,原图逐字SHA一致；恢复不依赖Key,corpus-restore,PASS,r17 APK 1191709b8cc8; 328包内资产逐字核等; 当前编译生产闭包复用,HOST_PRODUCTION_FILE_ALGORITHMS;33原图;26支持+7明确不支持;非设备,WORKSPACE/.tmp/ultra-keyless-20261124/mainline/corpus33-r17-compressed/native-r2/RECEIPT.json,26份支持图首次/重复修补均用图内记录完整恢复；imageBoundExactRecovery=true且恢复SHA等原图。7份未证KMI未执行；非设备恢复。
+I004,A03,image,AVB容量与压缩,检测footer/有效区/尾部/gzip/lz4及ramdisk容量,保留合法结构；无越界覆盖,corpus-layout,NOT_RUN,未运行,未运行,未产生,未复核
+I005,A03,image,raw载体,对受支持raw Image生成新anchor与metadata,无secret slot；地址/长度/LR布局正确,raw-keyless,NOT_RUN,未运行,未运行,未产生,未复核
+I006,A03,image,init_boot-only,只提供目标init_boot和匹配组件执行修补,无配对boot写入要求；无credential模块参数,init-only-patch,NOT_RUN,未运行,未运行,未产生,未复核
+I007,A03,device,init_boot-only上机,记录boot分区SHA后只安装init_boot并重启,boot SHA不变；SU与模块实际可用,init-only-device,NOT_RUN,未运行,未运行,未产生,未复核
+I008,A03,device,boot与init_boot双向迁移,同设备按用户选择执行两方向载体迁移,正常单向完成；旧载体按事务恢复；无回弹,carrier-migration,NOT_RUN,未运行,未运行,未产生,未复核
+I009,A03,image,离线目标KMI,当前设备与所选镜像KMI不同并选择匹配组件,根据目标镜像事实选择；不借运行内核代替,offline-kmi,NOT_RUN,未运行,未运行,未产生,未复核
+I010,A03,image,CFI和页大小,覆盖4K/16K/64K及none/KCFI/legacy-LTO组件,按真实ABI验证；缺覆盖项明示,carrier-abi,NOT_RUN,未运行,未运行,未产生,未复核
+I011,A03,image-negative,损坏与不支持图,截断header/ramdisk/metadata/错误KMI组件,原图未变；准确阶段错误；无盲写,bad-image,NOT_RUN,未运行,未运行,未产生,未复核
+I012,A03,image,无prefs导出再安装,导出图后清Manager数据并用同图安装,namespace在图中；无需导出seed或rootkey,offline-no-seed,NOT_RUN,未运行,未运行,未产生,未复核
+A001,A04,device,全新无Key直接安装,清除旧测试部署并确认prefs/备份为空后安装,helper/SU/WebUI/resetprop完整安装与实际调用,fresh-install,NOT_RUN,未运行,未运行,未产生,未复核
+A002,A04,sdk-native,m049 resetprop目录,令所有旧getter为空并执行所选安装body,由StorageLocator定位；无空路径或Key派生,resetprop-locator,NOT_RUN,未运行,未运行,未产生,未复核
+A003,A04,sdk-native,m050 WebUI安装,在无Key环境执行所选installer并启动loader,发布新payload；无feature token前置,webui-installer,NOT_RUN,未运行,未运行,未产生,未复核
+A004,A04,device,Refresh已安装环境,已有合法namespace执行Refresh,保留模块/授权；不因缺Key重建目录,environment-refresh,NOT_RUN,未运行,未运行,未产生,未复核
+A005,A04,device,环境卸载,新代完整安装后卸载并重启,真实清理与回执；无Key恢复阻断,environment-uninstall,NOT_RUN,未运行,未运行,未产生,未复核
+A006,A04,sdk-native,发布IO错误,注入ENOSPC/EACCES/fsync/rename错误,保留当前正常代和真实阶段；不误报成功,install-io,NOT_RUN,未运行,未运行,未产生,未复核
+A007,A04,device,准备阶段响应,直接安装冷暖各采样并记录工作量,无串行重复全盘检查；阶段可见；不笼统准备失败,install-preflight-perf,NOT_RUN,未运行,未运行,未产生,未复核
+A008,A04,device,两个入口一致,同一原图分别通过直接安装和文件修补,相同合同及组件选择；无某入口强制Key,install-entry-parity,NOT_RUN,未运行,未运行,未产生,未复核
+A009,A04,sdk-native,StorageScope结束,scope结束或owner失效后继续调用目录API,准确失效；无旧Key目录fallback,storage-lifetime,NOT_RUN,未运行,未运行,未产生,未复核
+A010,A04,device,用户取消和返回,提交前取消与提交后返回分别测试,提交前清临时；提交后跟踪原任务；不回滚,install-cancel,NOT_RUN,未运行,未运行,未产生,未复核
+B001,A05,device,未开Manager冷启,安装新代后重启且不启动Manager,helper/SU/模块按配置完成；无Key备份,cold-no-manager,NOT_RUN,未运行,未运行,未产生,未复核
+B002,A05,device,连续正常冷启,在零模块及有模块配置各完成三轮冷启,不误入安全模式；正常回滚0,cold-repeat,NOT_RUN,未运行,未运行,未产生,未复核
+B003,A05,device,helper无token,核标准helper无secret槽并直接观察boot执行,EarlyHelper建立自有合法会话,helper-no-token,NOT_RUN,未运行,未运行,未产生,未复核
+B004,A05,sdk-native,阶段重入和重复事件,重复post-fs-data/service/boot-completed事件,阶段幂等；不重置在用分配游标,boot-events,NOT_RUN,未运行,未运行,未产生,未复核
+B005,A05,device,真实失败保护,使用固定会失败模块触发保护条件,只按真实失败保护；可维护Root与状态一致,safe-mode-positive,NOT_RUN,未运行,未运行,未产生,未复核
+B006,A05,device,安全模式负例,缺Manager prefs/暂未就绪/首次查询错误,不因此禁用环境；不自动rollback,safe-mode-negative,NOT_RUN,未运行,未运行,未产生,未复核
+B007,A05,sdk-native,helper更新在途,持有旧inode lease时更新helper并启动新实例,旧在途按合同排空；新实例绑定新revision,helper-upgrade,NOT_RUN,未运行,未运行,未产生,未复核
+B008,A05,device,boot锁与崩溃恢复,helper阶段运行中杀进程并合法重入,无重复模块副作用；锁和状态真实恢复,helper-reentry,NOT_RUN,未运行,未运行,未产生,未复核
+U001,A06,device,32位传统SU,真实32位授权应用执行发现路径和su-c-id,uid0及profile正确；无Key文件,su32,NOT_RUN,未运行,未运行,未产生,未复核
+U002,A06,device,64位传统SU,真实64位授权应用执行发现路径和su-c-id,uid0及profile正确；无Key文件,su64,NOT_RUN,未运行,未运行,未产生,未复核
+U003,A06,device,交互SU与环境,交互shell/argv/env/exit/stdout/stderr测试,与既有合同及KSU可比体验一致,su-interactive,NOT_RUN,未运行,未运行,未产生,未复核
+U004,A06,device-negative,未授权普通应用,stat/access/exec及普通应用观测采样,原调用行为；无新增全局策略/挂载/属性/进程,ordinary-baseline,NOT_RUN,未运行,未运行,未产生,未复核
+U005,A06,device,授权撤权并发,授权后并发SU；撤权后继续新请求,新请求准确受限；已在途按合同记账,su-revoke,NOT_RUN,未运行,未运行,未产生,未复核
+U006,A06,device-negative,UID重用与错签更新,卸载应用再用相同UID不同签名样本,旧授权不泄漏给新主体,su-uid-reuse,NOT_RUN,未运行,未运行,未产生,未复核
+U007,A06,device,多用户分身sharedUID,分别授权同包多用户及sharedUID条件,fullUID和既有主体合同准确,su-multiuser,NOT_RUN,未运行,未运行,未产生,未复核
+U008,A06,device,授权持久与Manager重装,保存策略后清Manager数据/重装再冷启,策略由受保护来源恢复；旧session失效,su-durable,NOT_RUN,未运行,未运行,未产生,未复核
+U009,A06,sdk-native,SU句柄重放,复制anon-inode句柄信息跨任务/boot请求,不借权；新合法请求独立获得资格,su-session-replay,NOT_RUN,未运行,未运行,未产生,未复核
+U010,A06,device,profile与命名空间,对UID/GID/groups/caps/SELinux/mount profile采样,与所选profile及KSU同类语义一致,su-profile,NOT_RUN,未运行,未运行,未产生,未复核
+M001,A07,sdk-native,模块 entry/callback 同代迁移,运行同代自有模块 entry/install/uninstall/WebUI prepare,标准路径零 RootKey；有效业务参数/输出所有权与错误保持正确,same-generation-module-abi,NOT_RUN,未运行,未运行,未产生,未复核
+M002,A07,sdk-native-negative,旧ABI识别,安装直接拼旧Key协议的历史ELF,预检精确定位需重编译；不破坏当前环境,old-plugin-detection,NOT_RUN,未运行,未运行,未产生,未复核
+M003,A07,device,KSU模块安装生命周期,固定原包安装→action→更新→禁用→卸载→重启,脚本/标记/runtime/目录状态一致,ksu-module-lifecycle,NOT_RUN,未运行,未运行,未产生,未复核
+M004,A07,device,启动脚本与属性,验证post-fs-data/service/boot-completed/system.prop,实际配置生效；不是仅复制成功,module-boot-effects,NOT_RUN,未运行,未运行,未产生,未复核
+M005,A07,device,策略规则,固定模块sepolicy.rule及失败规则负例,parser/apply结果真实；无额外全局放宽,module-policy,NOT_RUN,未运行,未运行,未产生,未复核
+M006,A07,device,官方Zygisk-Next,固定官方Next包和依赖执行启动及功能探针,KSU facade/ABI/zygote实际可用；无虚报feature,zygisk-next,NOT_RUN,未运行,未运行,未产生,未复核
+M007,A07,device,Tenc固定原包,按主线原包SHA与配置逐项实测,配置真实效果/多用户/冷启/卸载闭合,tenc,NOT_RUN,未运行,未运行,未产生,未复核
+M008,A07,sdk-native,callback失败与卸载Pending,注入安装/更新/卸载callback失败和子进程错误,真实errno与PendingRemoval；无假Removed,module-callback,NOT_RUN,未运行,未运行,未产生,未复核
+M009,A07,device,无Manager卸载收尾,提交模块卸载后退出Manager并重启,boot dispatcher完成既有任务且状态一致,module-remove-cold,NOT_RUN,未运行,未运行,未产生,未复核
+M010,A07,sdk-native,日志和工具全部API,读清日志/自检/保护开关/resetprop按清单执行,无隐藏Key；错误与输出不混淆,tools-api,NOT_RUN,未运行,未运行,未产生,未复核
+W001,A07+A10,device,月虹样本一,使用主线固定月虹包打开WebUI及各配置,资源和实际命令效果正常,moon-webui-1,NOT_RUN,未运行,未运行,未产生,未复核
+W002,A07+A10,device,月虹样本二,使用主线另一月虹包重复完整流程,资源和实际命令效果正常,moon-webui-2,NOT_RUN,未运行,未运行,未产生,未复核
+W003,A07+A10,device,Next WebUI,打开官方Next WebUI并执行其操作,页面和后台真实结果可用,next-webui,NOT_RUN,未运行,未运行,未产生,未复核
+W004,A07+A10,device,exec和spawn,覆盖stdout/stderr/exit/options/callback编码,JS结果完整且与实际命令对应,webui-process,NOT_RUN,未运行,未运行,未产生,未复核
+W005,A07+A10,device,文件和pm API,测试文件读写流/随机访问/包查询及错误,接口语义与权限正确,webui-file-pm,NOT_RUN,未运行,未运行,未产生,未复核
+W006,A07+A10,device,下载全链,blob/普通URL/ksu_download/取消/文件名与路径,下载真实落盘或准确取消/失败,webui-download,NOT_RUN,未运行,未运行,未产生,未复核
+W007,A07+A10,device,所有宿主路线,内联及外部HTTP两条服务路线分别访问,无路线特有Key依赖；来源/导航隔离正确,webui-host-parity,NOT_RUN,未运行,未运行,未产生,未复核
+W008,A07+A10,device,页面生命周期,旋转/进程重建/返回再开/端口冲突,服务与页面复用/清理正确；无残留死锁,webui-lifecycle,NOT_RUN,未运行,未运行,未产生,未复核
+W009,A07+A10,device,模块更新与卸载,WebUI运行中更新或卸载模块,旧generation停止/失效；不串模块,webui-module-generation,NOT_RUN,未运行,未运行,未产生,未复核
+W010,A07+A10,device-negative,伪造目录FD和非Root loader,直接启动并传假handoff或复制公开目录,无提权；真实失败回执,webui-handoff-negative,NOT_RUN,未运行,未运行,未产生,未复核
+W011,A07+A10,device,返回滚动不中断,滚动模块列表中部打开WebUI返回并持续滑动,可交互；anchor/offset保留；无整页Loading,webui-return-ux,NOT_RUN,未运行,未运行,未产生,未复核
+W012,A07+A10,device,取消超时与服务回收,取消长命令/令server退出/断开页面,真实生命周期与子进程回收；无重复执行,webui-cancel,NOT_RUN,未运行,未运行,未产生,未复核
+P001,A08,device,DeepSeek再次寄生,固定宿主完成寄生→撤除→再寄生三轮,每轮真实预检/启动/交互成功；无旧checkpoint阻断,deepseek-reimplant,NOT_RUN,未运行,未运行,未产生,未复核
+P002,A08,device,寄生全流程免Key,移除标准Key材料执行precheck/implant/撤除,统一新SDK身份；无旧适配器要求Key,parasite-keyless,NOT_RUN,未运行,未运行,未产生,未复核
+P003,A08,device,宿主搜索与动画,冷暖加载大量应用并搜索/选择/操作,UI风格一致；稳定列表；spinner和真实阶段,parasite-search,NOT_RUN,未运行,未运行,未产生,未复核
+P004,A08,device-negative,宿主包或库变化,预检后更新包/替换库/更改inode,真实冲突阻止错误覆盖；保留原文件,parasite-conflict,NOT_RUN,未运行,未运行,未产生,未复核
+P005,A08,device,隐藏与Manager重装,隐藏后撤除/卸载Manager再同签安装恢复,不依赖rootkey/sdk-session解密；资格准确,hidden-reinstall,NOT_RUN,未运行,未运行,未产生,未复核
+P006,A08,device,宿主权限撤销,寄生后撤销宿主相关授权并重新启动,不保留秘密借权；按既有撤权合同,parasite-revoke,NOT_RUN,未运行,未运行,未产生,未复核
+P007,A08,device,寄生性能根因,记录包扫描/库扫描/Root验证/停止启动次数,消除重复工作；不是简单减短timeout,parasite-perf,NOT_RUN,未运行,未运行,未产生,未复核
+X001,A09+A10,android,JNI与R8接口,编译新Java/JNI并运行混淆Release调用,参数与符号一致；无旧rootKey入口被调用,jni-r8,NOT_RUN,未运行,未运行,未产生,未复核
+X002,A09+A10,android,分层运行状态,组合身份/安装/Running/SU/模块/Pending状态,不混报Ready/未安装；缺Key不影响判定,state-layers,NOT_RUN,未运行,未运行,未产生,未复核
+X003,A09+A10,android,后台列表差异归并,安装/执行/卸载后滚动中刷新且无变更再刷新,稳定行ID；局部动画；无变化不重建,list-diff,NOT_RUN,未运行,未运行,未产生,未复核
+X004,A09+A10,android,过期结果隔离,队列中更换boot/host/mode/身份后返回旧结果,旧结果不发布到新操作,stale-result,NOT_RUN,未运行,未运行,未产生,未复核
+X005,A09+A10,android,主线程与触感,首帧/滚动/刷新中采集trace,无同步Root或全包扫描；反馈一个可显示帧内,ui-main-thread,NOT_RUN,未运行,未运行,未产生,未复核
+X006,A09+A10,android,日志错误脱敏,令各层失败并导出诊断,原code/errno/stage/effects保留；无秘密或假Key提示,error-report,NOT_RUN,未运行,未运行,未产生,未复核
+R001,A09,device,清数据自动恢复管理,pm-clear Manager后重新打开,验签/安装身份自动识别；不找Key,manager-clear-data,NOT_RUN,未运行,未运行,未产生,未复核
+R002,A09,device,旧部署一次迁移,从固定支持旧版本升级新代,模块/配置/授权保留；标准运行无Key,legacy-migrate,NOT_RUN,未运行,未运行,未产生,未复核
+R003,A09,device,迁移每阶段中断,Preflight/Staged/提交/待重启各杀Manager再续接,原任务恢复；不回滚正常代；不重复写,migration-interrupt,NOT_RUN,未运行,未运行,未产生,未复核
+R004,A09,device,模式切换重启,KSU/Ultra双向切换含AwaitingReboot,本boot路由不抢占；新boot单次激活,mode-switch,NOT_RUN,未运行,未运行,未产生,未复核
+R005,A09,device,snapshot还原,恢复设置/模式快照但不恢复旧Key配置,业务配置保留；无RootKey复活,snapshot-keyless,NOT_RUN,未运行,未运行,未产生,未复核
+R006,A09,device,提交后清退,完成新代验证后检查prefs/rootkey/sdk-session/KeyStore用途,标准Key材料清退；其他业务密钥保留,secret-retirement,NOT_RUN,未运行,未运行,未产生,未复核
+R007,A09,device-negative,伪造恢复记录,修改namespace/transaction/AndroidId/旧密封文件,非秘密恢复数据不产生授权,recovery-negative,NOT_RUN,未运行,未运行,未产生,未复核
+R008,A09,device,正常零回滚,冷启/重装/清数据/返回/重试/短暂Pending全序列,自动rollback=0；LegacyFallback=0；重复变更=0,normal-forward-only,NOT_RUN,未运行,未运行,未产生,未复核
+R009,A09,device,显式恢复原图,通过独立恢复入口核目标/来源后恢复原镜像,恢复真实可用；与正常流程隔离,explicit-recovery,NOT_RUN,未运行,未运行,未产生,未复核
+R010,A09,device,丢成功回执,提交成功后断连/取消等待/超时再打开任务,先观察已有效果；提交计数1；无降级,lost-success,NOT_RUN,未运行,未运行,未产生,未复核
+D001,A10,artifact,全部组件同代,核SDK/helper/SU/WebUI/backend/claim/support/catalog/bridge/APK,authContract/ABI/sourceSHA一致；无retained代混入,cohort-identity,NOT_RUN,未运行,未运行,未产生,未复核
+D002,A10,artifact,APK内实际字节,解包签名R8正式APK核manifest和每个组件SHA,版本/签名/资产与所验正式cohort一致,apk-byte-verification,NOT_RUN,未运行,未运行,未产生,未复核
+D003,A10,artifact,秘密槽与参数缺失,核新payload/镜像/module args/key slot manifest,无RootKey token/trailer/credential参数；非秘密metadata保留,artifact-keyless,NOT_RUN,未运行,未运行,未产生,未复核
+D004,A10,build,两次干净SDK构建,固定工具链与相同输入独立干净构建两轮,哈希/允许差异可解释；实际选源完整,sdk-reproducibility,PASS,keyless-521-r8,formal two clean SDK builds; device NOT_RUN,.tmp/ultra-keyless-20261124/mainline/keyless-521-r8/SDK-HANDOFF-PASS.json,两轮完整构建及比较/发布均exit0；1049对1049、archive全字节一致；6项差异精确解释，未解释0；首轮ENOSPC保留，同源独立目录重试
+D005,A10,device,Panic正式代稳定性,同代安装器镜像运行真实SU/模块与既定观察窗口,无同签名复发；记录完整uptime/操作/设备,panic-current-cohort,NOT_RUN,未运行,未运行,未产生,未复核
+D006,A10,performance,KSU同机对照,同设备固定KSU与新Ultra按冷暖各至少30样本,报告p50/p95/次数；可比p95不劣于1.2倍或修后重验,ksu-performance,NOT_RUN,未运行,未运行,未产生,未复核
+D007,A10,performance,正常工作量,统计签名/磁盘/metadata/fork/JNI/SDK次数,减少重复工作；不以缩timeout冒充加速,work-reduction,NOT_RUN,未运行,未运行,未产生,未复核
+D008,A10,device,设备与内核范围,逐实际设备/cohort填5.10-6.18与页大小/CFI/RT/BTF矩阵,未覆盖格子不标通过；同版本跨品牌分账,device-coverage,NOT_RUN,未运行,未运行,未产生,未复核
+L001,A05+A09,source,根执行路由,追踪RootExecutionRouter所有标准分支及调用者,新Ultra不走旧Key stdin/root-kit/SU trailer,root-route,NOT_RUN,未运行,未运行,未产生,未复核
+L002,A05+A09,artifact,旧root-kit打包清退,核CMake/Gradle链接map和APK可执行程序,无标准可达旧Key二进制；仍用无Key功能保留,rootkit-retirement,NOT_RUN,未运行,未运行,未产生,未复核
+L003,A05+A09,device,全部根命令消费者,安装/重启/模块/daemon/寄生/恢复走新路线,无遗漏菜单或后台服务要求旧Key,root-consumer-complete,NOT_RUN,未运行,未运行,未产生,未复核
+T017,A02,kernel-host,已 Root 非 Manager 免 Key 调用,通过当前真实 CLI/模块/daemon 发起各自需要的 SDK 操作,与固定 KSU 对照补齐实际缺口；不冒充 Manager 或扩大 helper,root-caller-open,NOT_RUN,未运行,未运行,未产生,未复核
+T018,A02,device-negative,伪造请求与资格不足,普通应用复制公开帧及部署标识发起请求,未获得对应操作权限；不产生 Root 或 Manager 身份,root-caller-negative,NOT_RUN,未运行,未运行,未产生,未复核
+T019,A02,sdk-native,多调用主体线程与 fork/exec,Root 工具与 Manager/helper 交错并发及 fork/exec,会话与真实生命周期一致；不复用他人身份,root-caller-lifecycle,NOT_RUN,未运行,未运行,未产生,未复核
+T020,A02,kernel-host,逐操作权限对照,按固定 KSU 与项目当前真实命令核正负例,各操作按真实主体核权；实际缺口由对应 owner 关闭,root-caller-permissions,NOT_RUN,未运行,未运行,未产生,未复核
+T021,A02,sdk-native,当前请求编码与耗尽,覆盖实际 tag/sequence 边界及全部快捷判断,编码自洽；无 LegacyKey 标准回落；不预设 tag 升级,current-request-encoding,NOT_RUN,未运行,未运行,未产生,未复核
+T022,A02,kernel-host,Manager 重装与 Root 模块,Root 模块运行期间执行同签 Manager 重装,旧 Manager 安装绑定按合同撤销；已有效模块按真实自身生命周期处理,root-caller-manager-independent,NOT_RUN,未运行,未运行,未产生,未复核
+T023,A02,kernel-host,会话失效与退役,合法会话降权/exec 变化/安装退役后再请求并清理,新操作按真实资格失效；在途对象按既有合同排空,root-caller-retire,NOT_RUN,未运行,未运行,未产生,未复核
+M011,A07,device,冷启模块无 Manager,冷启自有同代模块并执行 SDK/工具调用,已有 Root 的模块按实际身份与操作核权；零 Key，非 Manager 冒认,native-module-rootworker,NOT_RUN,未运行,未运行,未产生,未复核
+W013,A07+A10,device,外部原生WebUI SDK调用,新context handler在独立Root loader内调用受支持SDK,无Manager也可使用实际Root权限；无Key或错误QUERY,webui-rootworker,NOT_RUN,未运行,未运行,未产生,未复核
+R011,A09,device,隐藏daemon免Key维护,移除Manager后由合法Root daemon执行既有撤权与卸载维护,来源与对象验证正确；无sealedKey/rootkey要求,daemon-rootworker,NOT_RUN,未运行,未运行,未产生,未复核
+D009,A10,artifact,SDK 插件宏输出,检查本代第一方宏生成 section 与 entry/callback,消费同代无 Key 合同；布局正确，未混入旧 Key 宏,module-macro-output,NOT_RUN,未运行,未运行,未产生,未复核
+D010,A10,sdk-native,38SDK与43JNI迁移项,对SDK-API-MIGRATION每项编译并由真实消费者执行,所有迁移项有执行证据；未变更public API也回归,api-migration-items,NOT_RUN,未运行,未运行,未产生,未复核

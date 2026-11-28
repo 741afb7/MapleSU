@@ -151,9 +151,9 @@ object UltraEnvironmentInstaller {
         val bootId = UltraEnvironmentAutoSetup.currentBootId()
         val activation = ModeRuntime.activation
         val current = UltraSdkCredentials.captureOwnerMarker(context)
-        val legacy = UltraLegacyCredential.read(context)?.takeIf {
+        val legacy = if (client.legacyCredentialFingerprint != null) UltraLegacyCredential.read(context)?.takeIf {
             it.fingerprint == client.legacyCredentialFingerprint
-        }
+        } else null
         val owner = if (client.legacyCredentialFingerprint == null) client.queryManagerOwnerIdentity().identity else null
         fun checkScope(): String? = when {
             Thread.currentThread().isInterrupted -> "MAPLESU_SDK_INTERRUPTED"
@@ -196,9 +196,12 @@ object UltraEnvironmentInstaller {
                         val scope = UltraAuthorization.Scope(scopedClient, current, current)
                         val initialized = dev.maplesu.manager.runtime.authorization.SuperuserControl
                             .initializeForInstallationIfAbsent(context, scope)
-                        if (initialized.succeeded) null else listOfNotNull(
-                            initialized.code ?: "SU_AUTH_APPLY_PENDING",
-                            initialized.detail.takeIf(String::isNotBlank),
+                        val migrated = if (initialized.succeeded && current())
+                            dev.maplesu.manager.runtime.authorization.SuperuserControl.migrate(context, scope)
+                        else initialized
+                        if (migrated.succeeded && current()) null else listOfNotNull(
+                            migrated.code ?: "SU_AUTH_APPLY_PENDING",
+                            migrated.detail.takeIf(String::isNotBlank),
                         ).joinToString(":")
                     },
                 ),
@@ -276,7 +279,8 @@ object UltraEnvironmentInstaller {
         // Persist readback before whitelist/identity deployment can consume the reboot window.
         val verified = if (!reuse) verifyAndPersist(attachments) else IdentityVerification.passed(null)
         scopeFailure(attachments)?.let { return submittedUnverified(it) }
-        val authorityFailure = if (intent == Intent.InstallToBundledBuild && verified.verified) {
+        val completeUpgrade = intent == Intent.UpgradeToBundledBuild
+        val authorityFailure = if ((intent == Intent.InstallToBundledBuild || completeUpgrade) && verified.verified) {
             try { attachments.initializeAuthority() }
             catch (error: Exception) {
                 if (error is InterruptedException) Thread.currentThread().interrupt()
@@ -284,24 +288,29 @@ object UltraEnvironmentInstaller {
             }
         } else null
         scopeFailure(attachments)?.let { return submittedUnverified(it) }
+        var authorization: UltraSelfWhitelist.Result? = null
         val outcome = afterInstall(
             succeeded = true,
             sdkError = receipt.sdkError,
             reason = receipt.reason,
             whitelist = {
                 check(scopeFailure(attachments) == null) { "INSTALL_CONTEXT_CHANGED" }
-                if (authorityFailure == null) attachments.whitelist()
-                else UltraSelfWhitelist.Result(false, false, false, false, false, authorityFailure)
+                (if (authorityFailure == null) attachments.whitelist()
+                else UltraSelfWhitelist.Result(false, false, false, false, false, authorityFailure))
+                    .also { authorization = it }
             },
         )
         scopeFailure(attachments)?.let { return submittedUnverified(it) }
         attachments.refreshProbe()
         scopeFailure(attachments)?.let { return submittedUnverified(it) }
+        val authorizationFailure = if (completeUpgrade && authorization?.succeeded != true)
+            authorization?.failure ?: "SU_AUTH_APPLY_PENDING" else null
         val result = outcome.copy(
-            verified = verified.verified && authorityFailure == null,
+            verified = verified.verified && authorityFailure == null && authorizationFailure == null,
             detail = when {
                 !verified.verified -> "UNVERIFIED:${verified.reason ?: "UNKNOWN"}"
                 authorityFailure != null -> "UNVERIFIED:AUTHORITY:$authorityFailure"
+                authorizationFailure != null -> "UNVERIFIED:AUTHORIZATION:$authorizationFailure"
                 else -> outcome.detail
             },
             buildId = verified.buildId,

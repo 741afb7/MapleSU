@@ -126,7 +126,6 @@ object UltraEnvUpgradePolicy {
         // 本次开机已经提交过：等重启，不再提示第二次（版本回读可能要重启后才变）。
         if (facts.submittedThisBoot) return UltraEnvUpgrade.Rebooting(target)
         if (facts.readUnknown) return UltraEnvUpgrade.None
-        // 只升级运行中的环境：未安装由首页安装卡负责，故障交给用户排查，都不在这里写。
         if (!facts.running) return UltraEnvUpgrade.None
         // 管理器回退（例如把刚升到 5.0.5 的构建换回 5.0.3）：不自动降级，交用户显式处理。
         val bundledApp = EnvVersion.parse(facts.bundledAppVersion)

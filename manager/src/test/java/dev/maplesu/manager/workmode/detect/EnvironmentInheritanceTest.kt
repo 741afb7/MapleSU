@@ -102,21 +102,22 @@ class EnvironmentInheritanceTest {
 
     // 1) 同 boot、未脏的 Normal 仍需内核认主；无需探测另一模式。
     @Test
-    fun inheritedNormalRechecksItsOwnKernelWithoutUltraProbes() = runBlocking {
+    fun sameBootNormalChecksItsOwnKernelBeforeOtherChannels() = runBlocking {
         val store = store(snapshot(mode = WorkMode.KSU))
         val probes = CountingProbes(su = true, ksu = true)
 
         val outcome = runner(probes, store).check()
 
-        assertEquals(EnvironmentVerdict.INHERITED, outcome.verdict)
-        assertEquals("ENV_INHERITED", outcome.code)
+        assertEquals(EnvironmentVerdict.KSU_NORMAL, outcome.verdict)
+        assertEquals("ENV_KSU_NORMAL", outcome.code)
         assertEquals(WorkMode.KSU, outcome.mode)
-        assertTrue(outcome.inherited)
-        assertNull("继承不该有触发原因", outcome.trigger)
-        assertEquals(listOf("su", "ksu"), probes.calls)
-        assertEquals(1, probes.count("su"))
+        assertFalse(outcome.inherited)
+        assertEquals(EnvironmentCheckTrigger.SU_RECHECK, outcome.trigger)
+        assertEquals(listOf("ksu"), probes.calls)
+        assertEquals(0, probes.count("su"))
         assertEquals(0, probes.count("ultra"))
         assertEquals(1, probes.count("ksu"))
+        assertFalse("未执行普通 SU 探针时不得授予该能力", store.snapshot()!!.suAvailable)
         assertEquals(0, probes.rootShellCalls)
     }
 
@@ -129,7 +130,7 @@ class EnvironmentInheritanceTest {
             assertNull(outcome.mode)
             assertNull(store.snapshot()?.mode)
             assertEquals(true, store.snapshot()?.suAvailable)
-            assertEquals(listOf("su", "ultra", "ksu"), probes.calls)
+            assertEquals(listOf("ksu", "su", "ultra", "ksu"), probes.calls)
         }
     }
 
@@ -140,12 +141,12 @@ class EnvironmentInheritanceTest {
         val outcome = runner(probes, store).check()
         assertEquals(EnvironmentVerdict.INHERITED, outcome.verdict)
         assertEquals(previous, store.snapshot())
-        assertEquals(listOf("su", "ultra"), probes.calls)
+        assertEquals(listOf("ksu", "su", "ultra"), probes.calls)
     }
 
-    // 2) 没有状态 → 走完整降级探测链。
+    // 2) 没有状态时先核对 Normal 自身身份，确认即短路。
     @Test
-    fun missingStateRunsFullChain() = runBlocking {
+    fun missingStateChecksNormalOwnershipFirst() = runBlocking {
         val store = store()
         val probes = CountingProbes(su = true, ultra = null, ksu = true)
 
@@ -154,7 +155,7 @@ class EnvironmentInheritanceTest {
         assertEquals(EnvironmentVerdict.KSU_NORMAL, outcome.verdict)
         assertEquals(WorkMode.KSU, outcome.mode)
         assertEquals(EnvironmentCheckTrigger.NO_STATE, outcome.trigger)
-        assertEquals("探测顺序必须是 su → ultra → ksu", listOf("su", "ultra", "ksu"), probes.calls)
+        assertEquals("当前 Normal 认主无需依赖普通 SU 或另一模式", listOf("ksu"), probes.calls)
         assertEquals(0, probes.rootShellCalls)
         // 终态必须落盘，下一次才能继承。
         assertEquals(WorkMode.KSU, store.snapshot()?.mode)
@@ -166,7 +167,7 @@ class EnvironmentInheritanceTest {
     @Test
     fun dirtyStateReprobes() = runBlocking {
         val store = store(snapshot(mode = WorkMode.KSU, dirty = true))
-        val probes = CountingProbes(su = true, ultra = "lite:credential", ksu = true)
+        val probes = CountingProbes(su = true, ultra = "lite:credential", ksu = false)
 
         val outcome = runner(probes, store).check()
 
@@ -192,25 +193,26 @@ class EnvironmentInheritanceTest {
         assertEquals("ENV_NOT_INSTALLED", outcome.code)
         assertNull(outcome.mode)
         assertTrue(outcome.terminal)
-        assertEquals("自身模式身份均需排除", listOf("su", "ultra", "ksu"), probes.calls)
-        assertEquals("Normal 内核必须明确排除", 1, probes.count("ksu"))
+        assertEquals("自身模式身份均需排除", listOf("ksu", "su", "ultra", "ksu"), probes.calls)
+        assertEquals("恢复前后都需明确排除 Normal", 2, probes.count("ksu"))
         assertEquals("不得起 root shell", 0, probes.rootShellCalls)
         assertNull("未安装也要落盘（mode=null）", store.snapshot()?.mode)
         assertNotNull(store.snapshot())
     }
 
-    // 5) 有 Ultra 环境 → Ultra，短路（不再探测 KSU）。
+    // 5) 未确认 Normal 且有 Ultra 环境时短路，不再重复探测 KSU。
     @Test
-    fun ultraEnvironmentShortCircuitsBeforeKsu() = runBlocking {
+    fun ultraRecoverySkipsTheSecondNormalProbe() = runBlocking {
         val store = store()
-        val probes = CountingProbes(su = true, ultra = "ultra:running", ksu = true)
+        val probes = CountingProbes(su = true, ultra = "ultra:running", ksu = false)
 
         val outcome = runner(probes, store).check()
 
         assertEquals(EnvironmentVerdict.ULTRA, outcome.verdict)
         assertEquals("ENV_ULTRA", outcome.code)
         assertEquals(WorkMode.LITE, outcome.mode)
-        assertEquals(0, probes.count("ksu"))
+        assertEquals(listOf("ksu", "su", "ultra"), probes.calls)
+        assertEquals(1, probes.count("ksu"))
         assertEquals(0, probes.rootShellCalls)
         assertEquals("ultra:running", store.snapshot()?.ultraEnvFingerprint)
     }
@@ -255,7 +257,7 @@ class EnvironmentInheritanceTest {
     fun deadlineExceededReturnsUnknownAndKeepsPreviousState() = runBlocking {
         val previous = snapshot(mode = WorkMode.LITE, dirty = true, ultra = "lite:credential", checkedAt = 7_000L)
         val store = store(previous)
-        val probes = CountingProbes(su = true, ultra = "lite:credential", ksu = true, suDelayMillis = 1_500L)
+        val probes = CountingProbes(su = true, ultra = "lite:credential", ksu = false, suDelayMillis = 1_500L)
 
         val outcome = runner(probes, store, timeoutMillis = 150L).check()
 
@@ -271,12 +273,14 @@ class EnvironmentInheritanceTest {
     // 9) 并发两次 refresh → 只跑一次探测（single-flight）。
     @Test
     fun concurrentChecksJoinOneProbe() = runBlocking {
-        val suCalls = AtomicInteger(0)
+        val ksuCalls = AtomicInteger(0)
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val probes = object : EnvironmentProbes {
-            override fun suPresent(): Boolean {
-                suCalls.incrementAndGet()
+            override fun suPresent(): Boolean = error("Normal owner is checked first")
+
+            override fun ksuNormal(): Boolean {
+                ksuCalls.incrementAndGet()
                 entered.countDown()
                 release.await(5, TimeUnit.SECONDS)
                 return true
@@ -284,7 +288,6 @@ class EnvironmentInheritanceTest {
 
             override fun ultraFingerprint(): String? = null
 
-            override fun ksuNormal(): Boolean = true
         }
         val store = store()
         val runner = runner(probes, store, timeoutMillis = 5_000L)
@@ -298,13 +301,13 @@ class EnvironmentInheritanceTest {
         val a = first.await()
         val b = second.await()
 
-        assertEquals("并发两次只能跑一次探测", 1, suCalls.get())
+        assertEquals("并发两次只能跑一次探测", 1, ksuCalls.get())
         assertEquals(a.verdict, b.verdict)
         assertEquals(a.code, b.code)
         assertEquals(EnvironmentVerdict.KSU_NORMAL, a.verdict)
     }
 
-    // 10) 重试后状态不抖动：相同输入 → 相同终态；第二次直接继承，不再探测。
+    // 10) 重试核对当前认主，相同输入保持同一终态。
     @Test
     fun retryDoesNotFlap() = runBlocking {
         val firstStore = store()
@@ -314,11 +317,10 @@ class EnvironmentInheritanceTest {
         val retryProbes = CountingProbes(su = true, ultra = null, ksu = true)
         val retry = runner(retryProbes, firstStore).check()
 
-        // 第二次不再探测，直接继承同一个终态 —— 界面不会在两种状态之间跳。
-        assertEquals(EnvironmentVerdict.INHERITED, retry.verdict)
+        assertEquals(EnvironmentVerdict.KSU_NORMAL, retry.verdict)
         assertEquals("重试必须给出与首次相同的终态", first.mode, retry.mode)
-        assertEquals("重试核对 SU 与本模式内核，无需 Ultra 探针", listOf("su", "ksu"), retryProbes.calls)
-        assertTrue("继承了终态就算终态", retry.terminal)
+        assertEquals("重试核对本模式内核，无需 Ultra 或普通 SU 探针", listOf("ksu"), retryProbes.calls)
+        assertTrue(retry.terminal)
 
         // 相同输入、全新状态下重复一次，终态必须逐字相同（无随机/顺序依赖）。
         val repeatStore = store()

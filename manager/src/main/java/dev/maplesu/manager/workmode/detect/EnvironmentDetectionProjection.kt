@@ -15,8 +15,8 @@ import dev.maplesu.manager.workmode.WorkMode
  * - [EnvironmentVerdict.KSU_NORMAL] / 继承的 KSU → `MODE_B_KERNEL_ONLY`（激活 KSU）。
  * - [EnvironmentVerdict.NOT_INSTALLED] / 继承的"未安装" → `NOT_INSTALLED`（无 activeMode，
  *   立即终态，不再跑任何 root 探测）。
- * - **LITE 不覆盖**：Ultra 的激活必须带本 boot 的凭据握手证据（既有 LITE 探测语义零改动）。
- * - [EnvironmentVerdict.ULTRA] / [EnvironmentVerdict.UNKNOWN] → 不覆盖（照常全量判定；
+ * - 当前完整 Ultra owner 只投影为已安装未绑定，不授予 activeMode 或 Root 通道。
+ * - 缺少本次 owner 的 [EnvironmentVerdict.ULTRA] / [EnvironmentVerdict.UNKNOWN] → 不覆盖（照常全量判定；
  *   UNKNOWN 尤其不得被写成任何结论）。
  */
 object EnvironmentDetectionProjection {
@@ -33,7 +33,9 @@ object EnvironmentDetectionProjection {
                 null -> ModeState.NOT_INSTALLED
                 WorkMode.LITE -> return null
             }
-            EnvironmentVerdict.ULTRA, EnvironmentVerdict.UNKNOWN -> return null
+            EnvironmentVerdict.ULTRA -> if (outcome.mode == WorkMode.LITE && outcome.ultraOwnerIdentity != null)
+                ModeState.MODE_A_INSTALLED_UNBOUND else return null
+            EnvironmentVerdict.UNKNOWN -> return null
         }
         return DetectionResult(
             state = state,
@@ -41,6 +43,7 @@ object EnvironmentDetectionProjection {
             rule = when (state) {
                 ModeState.MODE_B_KERNEL_ONLY -> DetectionRules.Rule.R2_KSU_KERNEL_ONLY
                 ModeState.NOT_INSTALLED -> DetectionRules.Rule.R11_FRESH_INSTALL
+                ModeState.MODE_A_INSTALLED_UNBOUND -> DetectionRules.Rule.R6_A_ULTRA_OWNER_ONLY
                 else -> DetectionRules.Rule.R12_INDETERMINATE
             },
             bootId = outcome.bootId,

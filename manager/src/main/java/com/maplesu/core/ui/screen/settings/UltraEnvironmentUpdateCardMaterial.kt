@@ -17,6 +17,7 @@ import com.maplesu.core.R
 import com.maplesu.core.ui.component.WarningLevel
 import com.maplesu.core.ui.component.dialog.rememberConfirmDialog
 import com.maplesu.core.ui.component.material.WarningCard
+import dev.maplesu.manager.runtime.ultra.UltraEnvironmentUpgrade
 import dev.maplesu.manager.runtime.ultra.UltraEnvUpgrade
 
 /** Both home skins share the manual check and the existing confirmation/write flow. */
@@ -31,7 +32,7 @@ internal fun rememberUltraEnvironmentUpdateClick(panel: UltraEnvironmentUpdatePa
         if (message != null) dialog.showConfirm(title = title, content = message, confirm = confirm)
         checked = null
     }
-    return { panel.checkForUpgrade { checked = it } }
+    return { checked = panel.upgrade }
 }
 
 /**
@@ -43,12 +44,13 @@ fun UltraEnvironmentUpdateCardMaterial(
     modifier: Modifier = Modifier,
 ) {
     val upgrade = panel.upgrade
+    val canUpgrade = UltraEnvironmentUpgrade.upgradeAllowed(upgrade)
     val onClick = rememberUltraEnvironmentUpdateClick(panel)
     val enabled = !panel.busy && !panel.checking
 
     AnimatedVisibility(
         visible = upgrade is UltraEnvUpgrade.Rebooting || panel.allowed &&
-            (panel.busy || !panel.readUnknown && upgrade is UltraEnvUpgrade.Available),
+            (panel.busy || !panel.readUnknown && canUpgrade),
         enter = fadeIn() + expandVertically(),
         exit = shrinkVertically() + fadeOut(),
     ) {
@@ -56,7 +58,7 @@ fun UltraEnvironmentUpdateCardMaterial(
             message = ultraUpdateMessage(upgrade, panel.busy),
             modifier = modifier,
             level = WarningLevel.Warning,
-            onClick = if (enabled && upgrade is UltraEnvUpgrade.Available) onClick else null,
+            onClick = if (enabled && canUpgrade) onClick else null,
         )
     }
 }

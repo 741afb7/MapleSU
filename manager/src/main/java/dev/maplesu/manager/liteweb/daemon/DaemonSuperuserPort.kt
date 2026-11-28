@@ -119,7 +119,7 @@ private class DaemonSuSdk(
         when (val opened = access.open()) {
             is DaemonUltraSdkResult.Unavailable -> LiteWebSuResult.Failed(opened.code, unavailable = true)
             is DaemonUltraSdkResult.Ready -> runCatching {
-                bootAuthority = opened.source == "boot-session"
+                bootAuthority = opened.source == "boot-session" || opened.source == "current-task"
                 val environment = opened.client.environmentState()
                 if (!environment.succeeded || environment.string("state") != "Running") {
                     UltraSdkLogging.logSafely(Log.WARN, "ultra-su-environment ${environment.authorizationDiagnosticSummary()}")

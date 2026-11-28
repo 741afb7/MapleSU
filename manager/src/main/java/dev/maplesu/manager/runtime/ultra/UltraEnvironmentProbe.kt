@@ -32,6 +32,7 @@ object UltraEnvironmentProbe {
         internal val modeActivation: ModeActivation = ModeRuntime.activation,
         val sdkChannelAvailable: Boolean = false,
         val legacyCredentialFingerprint: String? = null,
+        val rootProbeDetail: String? = null,
     ) {
         val rootAvailable: Boolean get() = kernelRootVerified &&
             state in setOf(State.Running, State.Unknown, State.NotInstalled)
@@ -60,10 +61,11 @@ object UltraEnvironmentProbe {
     fun current(): State = currentSnapshot().state
     fun currentSnapshot(): Snapshot = snapshot.takeIf { it.modeActivation === ModeRuntime.activation } ?: Snapshot()
     internal fun currentSnapshot(context: Context): Snapshot = synchronized(lock) {
+        val owner = snapshot.managerOwnerIdentity
         scopeOwnerSnapshot(currentSnapshot(), snapshot.managerOwnerIdentity,
             UltraEnvironmentAutoSetup.currentBootId(), snapshotBootId,
             UltraSdkCredentials.suspended(context), UltraSdkCredentials.hookWithoutSdk(context),
-            UltraLegacyCredential.read(context)?.fingerprint)
+            if (owner == null) UltraLegacyCredential.read(context)?.fingerprint else null)
     }
     internal fun webUiOwnerScope(context: Context): ModuleWebUiSessions.OwnerScope? =
         currentSnapshot(context).managerOwnerIdentity?.takeIf { ModeRuntime.active != WorkMode.KSU }?.let {
@@ -112,25 +114,75 @@ object UltraEnvironmentProbe {
         }
     }
 
-    fun refresh(context: Context, force: Boolean = true): State {
+    fun refresh(context: Context, force: Boolean = true): State = observe(context, force, fresh = false).state
+
+    /** The returned value belongs to this read; retained runtime observations are never substituted. */
+    internal fun observeFresh(context: Context): Snapshot = observe(context, force = true, fresh = true)
+
+    /** Identity discovery never waits for a health worker or starts a Root operation. */
+    internal fun observeFreshIdentity(context: Context): Snapshot {
         check(Looper.myLooper() != Looper.getMainLooper()) { "ULTRA_PROBE_BACKGROUND_THREAD_REQUIRED" }
         val app = context.applicationContext
-        val boot = UltraEnvironmentAutoSetup.currentBootId() ?: return State.Unknown
         val activation = ModeRuntime.activation
+        val boot = UltraEnvironmentAutoSetup.currentBootId()
+            ?: return Snapshot(detail = "ULTRA_PROBE_BOOT_UNAVAILABLE", modeActivation = activation)
+        val removalCurrent = dev.maplesu.manager.modules.UltraRootKeyStore.captureOwnerMarker(app)
+        fun current() = ModeRuntime.activation === activation &&
+            UltraEnvironmentAutoSetup.currentBootId() == boot && removalCurrent() &&
+            !UltraSdkCredentials.suspended(app)
+        return observeFreshIdentity(::current, { UltraRuntimeClient().queryManagerOwnerIdentity() }, activation)
+    }
+
+    internal fun observeFreshIdentity(
+        current: () -> Boolean,
+        queryOwner: () -> UltraRuntimeClient.ManagerOwnerIdentityResult,
+        activation: ModeActivation = ModeRuntime.activation,
+    ): Snapshot {
+        fun unknown(detail: String) = Snapshot(detail = detail, modeActivation = activation)
+        fun allowed() = !Thread.currentThread().isInterrupted && current()
+        if (!allowed()) return unknown("ULTRA_PROBE_SCOPE_CHANGED")
+        return try {
+            val observed = queryOwner()
+            if (!allowed()) return unknown("ULTRA_PROBE_SCOPE_CHANGED")
+            val owner = observed.identity?.takeIf { observed.receipt.succeeded && it.fullUid == Process.myUid() }
+            Snapshot(
+                observedAtElapsedMs = SystemClock.elapsedRealtime(),
+                observedAtWallClockMs = System.currentTimeMillis(),
+                detail = observationDetail(observed.receipt, invalidIdentity = owner == null && observed.receipt.succeeded),
+                managerOwnerIdentity = owner,
+                modeActivation = activation,
+            )
+        } catch (error: Exception) {
+            if (error is java.util.concurrent.CancellationException) throw error
+            if (error is InterruptedException) {
+                Thread.currentThread().interrupt()
+                return unknown("MAPLESU_SDK_INTERRUPTED")
+            }
+            unknown("ULTRA_PROBE_FAILED:${error.message ?: error.javaClass.simpleName}")
+        }
+    }
+
+    private fun observe(context: Context, force: Boolean, fresh: Boolean): Snapshot {
+        check(Looper.myLooper() != Looper.getMainLooper()) { "ULTRA_PROBE_BACKGROUND_THREAD_REQUIRED" }
+        val app = context.applicationContext
+        val activation = ModeRuntime.activation
+        fun unknown(detail: String) = Snapshot(detail = detail, modeActivation = activation)
+        val boot = UltraEnvironmentAutoSetup.currentBootId() ?: return unknown("ULTRA_PROBE_BOOT_UNAVAILABLE")
         val removalCurrent = dev.maplesu.manager.modules.UltraRootKeyStore.captureOwnerMarker(app)
         fun current() = !Thread.currentThread().isInterrupted && ModeRuntime.activation === activation &&
-            ModeRuntime.active != WorkMode.KSU && UltraEnvironmentAutoSetup.currentBootId() == boot &&
-            removalCurrent() && !UltraSdkCredentials.suspended(app) && !UltraSdkCredentials.hookWithoutSdk(app)
-        if (!current()) return State.Unknown
+            (fresh || ModeRuntime.active != WorkMode.KSU) && UltraEnvironmentAutoSetup.currentBootId() == boot &&
+            removalCurrent() && !UltraSdkCredentials.suspended(app) && !UltraSdkCredentials.hookWithoutSdk(app) &&
+            (!fresh || !UltraIdentityRecovery.blocked(app, freshIdentity = true))
+        if (!current()) return unknown("ULTRA_PROBE_SCOPE_CHANGED")
         val expectedRevision = synchronized(lock) {
-            if (!probeLock.tryLock()) return currentSnapshot(app).state
+            if (!probeLock.tryLock()) return if (fresh) unknown("MAPLESU_SDK_BUSY") else currentSnapshot(app)
             revision
         }
         try {
             val client = UltraRuntimeClient().scoped(::current)
             val ownerResult = client.queryManagerOwnerIdentity()
             val owner = ownerResult.identity
-            if (!current()) return State.Unknown
+            if (!current()) return unknown("ULTRA_PROBE_SCOPE_CHANGED")
             val legacy = if (owner == null) UltraLegacyCredential.read(app) else null
             if (legacy != null) {
                 val legacyClient = UltraRuntimeClient().withLegacyCredential(legacy).scoped(::current)
@@ -144,7 +196,7 @@ object UltraEnvironmentProbe {
                 }
                 return synchronized(lock) {
                     if (expectedRevision != revision || !current() || !legacy.isCurrent(app))
-                        return@synchronized State.Unknown
+                        return@synchronized unknown("ULTRA_PROBE_SCOPE_CHANGED")
                     snapshotBootId = boot
                     publish(next, observationDetail(receipt), rootVerified,
                         receipt.sdkError == "ERR_MODULE_NO_BOOT", activation = activation,
@@ -152,44 +204,36 @@ object UltraEnvironmentProbe {
                         legacyCredentialFingerprint = legacy.fingerprint)
                 }
             }
-            if (!current()) return State.Unknown
+            if (!current()) return unknown("ULTRA_PROBE_SCOPE_CHANGED")
             if (owner == null) return synchronized(lock) {
-                if (expectedRevision != revision || !current()) return@synchronized State.Unknown
+                if (expectedRevision != revision || !current()) return@synchronized unknown("ULTRA_PROBE_SCOPE_CHANGED")
                 snapshotBootId = boot
                 publish(State.Unknown, observationDetail(ownerResult.receipt, invalidIdentity = ownerResult.receipt.succeeded), false,
                     ownerResult.receipt.sdkError == "ERR_MODULE_NO_BOOT", activation = activation)
             }
-            val cached = currentSnapshot(app)
-            val sameOwner = cached.managerOwnerIdentity == owner && snapshotBootId == boot
-            val age = SystemClock.elapsedRealtime() - cached.observedAtElapsedMs
-            if (!force && sameOwner && canReuse(cached.state, age, cached.kernelRootVerified || cached.kernelChannelAbsent) &&
-                cached.kernelRootVerified) return cached.state
+            val cached = if (fresh) null else currentSnapshot(app)
+            val sameOwner = cached?.managerOwnerIdentity == owner && snapshotBootId == boot
+            val age = cached?.let { SystemClock.elapsedRealtime() - it.observedAtElapsedMs } ?: Long.MAX_VALUE
+            if (!force && cached != null && sameOwner &&
+                canReuse(cached.state, age, cached.kernelRootVerified || cached.kernelChannelAbsent) &&
+                cached.kernelRootVerified) return cached
             val receipt = client.environmentState()
             val root = if (current()) client.probeManagerOwnerRoot() else null
             val confirmed = if (current()) client.queryManagerOwnerIdentity().identity else null
-            val retained = owner.takeIf { it == confirmed }
-            val rootVerified = retained != null && root?.proof?.owner == retained
-            val next = if (retained == null || !receipt.succeeded) State.Unknown else when (receipt.string("state")) {
-                "Running" -> State.Running
-                "NotInstalled" -> State.NotInstalled
-                "Fault" -> State.Fault
-                else -> State.Unknown
-            }
+            val measured = healthSnapshot(receipt, root, owner, confirmed, activation)
             return synchronized(lock) {
-                if (expectedRevision != revision || !current()) return@synchronized State.Unknown
+                if (expectedRevision != revision || !current()) return@synchronized unknown("ULTRA_PROBE_SCOPE_CHANGED")
                 snapshotBootId = boot
-                if (sameOwner && receipt.sdkError in ADMISSION_FAILURES) {
-                    publishSnapshot(cached.copy(detail = observationDetail(receipt)), activation)
-                    return@synchronized cached.state
-                }
-                publish(next, observationDetail(receipt), rootVerified,
-                    receipt.sdkError == "ERR_MODULE_NO_BOOT" || root?.receipt?.sdkError == "ERR_MODULE_NO_BOOT",
-                    retained, activation, retained != null && (receipt.succeeded || rootVerified))
+                val observed = if (cached != null && sameOwner && measured.managerOwnerIdentity == owner) {
+                    measured.copy(state = stateAfterAdmission(cached.state, measured.state, receipt.sdkError, true))
+                } else measured
+                publishSnapshot(observed, activation)
+                observed
             }
         } catch (error: Exception) {
             if (error is java.util.concurrent.CancellationException) throw error
             Log.w(TAG, "Ultra observation failed", error)
-            return State.Unknown
+            return unknown("ULTRA_PROBE_FAILED:${error.message ?: error.javaClass.simpleName}")
         } finally { probeLock.unlock() }
     }
 
@@ -205,14 +249,47 @@ object UltraEnvironmentProbe {
         "operation=${receipt.operation};sdkError=${receipt.sdkError};sdkErrorCode=${receipt.sdkErrorCode}" +
             if (invalidIdentity) ";identity=invalid_reply" else ""
 
+    internal fun healthSnapshot(
+        receipt: NativeReceipt,
+        root: ManagerOwnerRootResult?,
+        owner: UltraRuntimeClient.ManagerOwnerIdentity,
+        confirmed: UltraRuntimeClient.ManagerOwnerIdentity?,
+        activation: ModeActivation = ModeRuntime.activation,
+    ): Snapshot {
+        val retained = confirmed ?: owner
+        val sameOwner = owner == confirmed
+        val rootVerified = sameOwner && root?.proof?.owner == retained
+        val state = if (!sameOwner || !receipt.succeeded) State.Unknown else when (receipt.string("state")) {
+            "Running" -> State.Running
+            "NotInstalled" -> State.NotInstalled
+            "Fault" -> State.Fault
+            else -> State.Unknown
+        }
+        return Snapshot(
+            state = state,
+            observedAtElapsedMs = SystemClock.elapsedRealtime(),
+            observedAtWallClockMs = System.currentTimeMillis(),
+            detail = (if (confirmed != null && !sameOwner) "ULTRA_PROBE_OWNER_CHANGED:" else "") + observationDetail(receipt),
+            kernelRootVerified = rootVerified,
+            kernelChannelAbsent = receipt.sdkError == "ERR_MODULE_NO_BOOT" || root?.receipt?.sdkError == "ERR_MODULE_NO_BOOT",
+            managerOwnerIdentity = retained,
+            modeActivation = activation,
+            sdkChannelAvailable = sameOwner && (receipt.succeeded || rootVerified),
+            rootProbeDetail = root?.receipt?.raw?.takeUnless { rootVerified },
+        )
+    }
+
     internal fun recoveryFingerprint(state: State, safeMode: Boolean, kernelRootVerified: Boolean = false,
-                                     kernelChannelAbsent: Boolean = false, detail: String? = null): String? = when {
+                                     kernelChannelAbsent: Boolean = false, detail: String? = null,
+                                     managerOwnerBound: Boolean = false): String? = when {
         state == State.Running -> "ultra:running"
         state == State.Fault && safeMode -> "ultra:fault"
         kernelRootVerified && (state == State.Unknown || state == State.NotInstalled) -> "ultra:kernel"
-        state == State.Unknown && kernelChannelAbsent -> null
+        // A scoped signed Owner proves installation, independently of runtime readiness.
+        managerOwnerBound -> "ultra:owner"
         state == State.Unknown -> throw IllegalStateException("ULTRA_RECOVERY_PROBE_UNKNOWN" +
-            (detail?.takeIf(String::isNotBlank)?.let { ":$it" } ?: ""))
+            ((detail?.takeIf(String::isNotBlank) ?: "ERR_MODULE_NO_BOOT".takeIf { kernelChannelAbsent })
+                ?.let { ":$it" } ?: ""))
         state == State.NoKey -> throw IllegalStateException("ULTRA_RECOVERY_IDENTITY_UNKNOWN")
         else -> null
     }
@@ -240,8 +317,8 @@ object UltraEnvironmentProbe {
                         ownerIdentity: UltraRuntimeClient.ManagerOwnerIdentity? = null,
                         activation: ModeActivation = ModeRuntime.activation,
                         sdkChannelAvailable: Boolean = false,
-                        legacyCredentialFingerprint: String? = null): State {
-        publishSnapshot(Snapshot(
+                        legacyCredentialFingerprint: String? = null): Snapshot {
+        val observed = Snapshot(
             state = state,
             observedAtElapsedMs = SystemClock.elapsedRealtime(),
             observedAtWallClockMs = System.currentTimeMillis(),
@@ -251,7 +328,9 @@ object UltraEnvironmentProbe {
             managerOwnerIdentity = ownerIdentity,
             sdkChannelAvailable = sdkChannelAvailable,
             legacyCredentialFingerprint = legacyCredentialFingerprint,
-        ), activation)
-        return state
+            modeActivation = activation,
+        )
+        publishSnapshot(observed, activation)
+        return observed
     }
 }

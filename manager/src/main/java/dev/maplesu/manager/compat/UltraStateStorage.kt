@@ -21,8 +21,8 @@ object UltraStateStorage {
         val inputName = StoredInputs.preferenceNames[name] ?: return target
         val inputs = app.getSharedPreferences(inputName, mode)
         val registry = app.getSharedPreferences(IMPORTS, Context.MODE_PRIVATE)
-        if (!registry.getBoolean(name, false)) {
-            if (!target.getBoolean(IMPORTED, false)) {
+        if (registry.all[name] != true) {
+            if (target.all[IMPORTED] != true) {
                 val current = target.all
                 val copied = inputs.all.filterKeys { !current.containsKey(it) }
                 val editor = target.edit()

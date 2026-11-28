@@ -14,6 +14,7 @@ import dev.maplesu.manager.workmode.detect.EnvironmentSnapshot
 import dev.maplesu.manager.workmode.detect.EnvironmentStateStore
 import dev.maplesu.manager.workmode.detect.activeMode
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
@@ -97,7 +98,13 @@ class ModeBootstrapPipeline(
     suspend fun run(request: DetectionRequest): BootstrapOutcome {
         notify(BootstrapStage.DETECT_START, null)
         val overridden = if (request.allowRootProbe) environmentOverride?.let { probe ->
-            runCatching { probe() }.getOrNull()
+            try {
+                probe()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                null
+            }
         } else null
         // A quick SU failure can be cached while a Hook becomes ready. Phase two
         // must still check the existing channel; it never starts a new attempt.

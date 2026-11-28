@@ -16,6 +16,11 @@
 
 struct cred;
 
+#ifdef MSU_BOOT_SDK_NATIVE
+/* Authenticated ROOT transaction only, before its single credential commit. */
+int msu_native_root_prepare(struct cred *prepared);
+#endif
+
 /* Normalized immutable kernel input, not an authority or a userspace wire.
  * Default/template selection belongs to the pinned business Profile producer.
  * Unselected capabilities and IDs/groups retain the prepared credential copy.

@@ -9,173 +9,68 @@ import org.junit.Test
 class UltraDirectInstallPolicyTest {
     private val direct = UltraDirectInstallRequest(WorkMode.LITE, InstallTargetMode.ULTRA,
         InstallSourceKind.CURRENT_PARTITION, "boot")
-    private val update = UltraEnvFacts(running = true, installedVersion = "5.1.0",
-        bundledVersion = "5.1.0", identityKnown = true,
-        installedBuildId = "r11", bundledBuildId = "r13",
-        installedHelperSha256 = "a".repeat(64), bundledHelperSha256 = "b".repeat(64))
 
-    @Test fun reportedSameVersionBuildUpdateUsesSdkWithoutOpeningPatchedBoot() {
-        var sdkCalls = 0
-        val result = UltraDirectInstallPolicy.dispatch(direct, { update },
-            upgrade = { sdkCalls++; "SDK_UPDATED" },
-            unavailable = { error("unexpected pending result") },
-            patchBoot = { error("ULTRA_KERNEL_GENERATE_SITE:HOOK_ENTRY_UNSUPPORTED:do_execveat_common") })
-        assertEquals("SDK_UPDATED", result)
-        assertEquals(1, sdkCalls)
-    }
-
-    @Test fun missingOldBuildIdentityStillUsesVerifiedEnvironmentInstaller() {
-        assertEquals("SDK", UltraDirectInstallPolicy.dispatch(direct,
-            { update.copy(installedHelperSha256 = null, installedBuildId = null) },
-            { "SDK" }, { "PENDING" }, { error("already patched boot must not be opened") }))
-    }
-
-    @Test fun sdkFailureOrRefusalIsReturnedWithoutFallback() {
-        for (failure in listOf("FAILED", "REFUSED", "UNVERIFIED:HELPER_MISMATCH")) {
-            var bootCalls = 0
-            val result = UltraDirectInstallPolicy.dispatch(direct, { update }, { failure },
-                { "PENDING" }, { bootCalls++; "BOOT" })
-            assertEquals(failure, result)
-            assertEquals(0, bootCalls)
+    @Test fun explicitInstallationDoesNotRequireAHistoricalUpdateVerdict() {
+        val facts = listOf(UltraEnvFacts(), UltraEnvFacts(readUnknown = true),
+            UltraEnvFacts(running = false, installedVersion = "5.2.1"),
+            UltraEnvFacts(running = true, installedVersion = "5.2.1", bundledVersion = "5.2.1",
+                identityKnown = true, installedHelperSha256 = "a".repeat(64), bundledHelperSha256 = "a".repeat(64)))
+        for (partition in listOf("boot", "init_boot")) for (observation in facts) {
+            var submits = 0
+            assertEquals("INSTALL", UltraDirectInstallPolicy.dispatch(direct.copy(partition = partition),
+                { observation }, { submits++; "INSTALL" }, { error("old records must not gate installation") },
+                { error("the full installer owns carrier replacement") }))
+            assertEquals(1, submits)
         }
     }
 
-    @Test fun factsOrUpgradeExceptionDoesNotOpenBoot() {
-        for (failFacts in listOf(true, false)) {
-            var bootCalls = 0
-            val result = runCatching {
-                UltraDirectInstallPolicy.dispatch(direct,
-                    { if (failFacts) error("FACTS_READ_FAILED") else update },
-                    { error("SDK_TRANSPORT_INTERRUPTED") }, { "PENDING" },
-                    { bootCalls++; "BOOT" })
-            }
-            assertTrue(result.isFailure)
-            assertEquals(0, bootCalls)
+    @Test fun observationFailureStillReachesTheCompleteInstaller() {
+        assertEquals("INSTALL", UltraDirectInstallPolicy.dispatch(direct,
+            { error("READ_UNAVAILABLE") }, { "INSTALL" }, { error("metadata is optional") },
+            { error("no standalone patch fallback") }))
+    }
+
+    @Test fun installerFailureOrLostReplyNeverStartsASecondOperation() {
+        for (failure in listOf("FAILED", "UNVERIFIED", "PENDING")) {
+            assertEquals(failure, UltraDirectInstallPolicy.dispatch(direct, { UltraEnvFacts() },
+                { failure }, { error("no extra gate") }, { error("no second write") }))
+        }
+        assertTrue(runCatching { UltraDirectInstallPolicy.dispatch(direct, { UltraEnvFacts() },
+            { error("LOST_INSTALL_REPLY") }, { error("no extra gate") }, { error("no second write") }) }.isFailure)
+    }
+
+    @Test fun anExistingTransactionOrExplicitDisableIsPreserved() {
+        for (facts in listOf(UltraEnvFacts(suspended = true), UltraEnvFacts(quiescing = true))) {
+            assertEquals("WAIT", UltraDirectInstallPolicy.dispatch(direct, { facts },
+                { error("conflicting write") }, { "WAIT" }, { error("conflicting patch") }))
+        }
+        assertEquals("REBOOT", UltraDirectInstallPolicy.dispatch(direct,
+            { UltraEnvFacts(submittedThisBoot = true, bundledVersion = "5.2.1") },
+            { error("duplicate installation") }, { decision ->
+                assertTrue(decision is UltraEnvUpgrade.Rebooting); "REBOOT"
+            }, { error("duplicate patch") }))
+    }
+
+    @Test fun cancellationDoesNotBecomeAnInstallationRequest() {
+        assertTrue(runCatching { UltraDirectInstallPolicy.dispatch(direct,
+            { throw java.util.concurrent.CancellationException("cancelled") },
+            { error("cancelled write") }, { "WAIT" }, { error("cancelled patch") }) }.exceptionOrNull()
+            is java.util.concurrent.CancellationException)
+    }
+
+    @Test fun explicitImageChoiceAndOtherModesKeepTheSelectedImageOperation() {
+        for (request in listOf(direct.copy(target = InstallTargetMode.NORMAL),
+            direct.copy(activeMode = WorkMode.KSU), direct.copy(activeMode = null),
+            direct.copy(source = InstallSourceKind.IMAGE), direct.copy(source = InstallSourceKind.DOWNLOADED_BOOT),
+            direct.copy(defaultKernel = false), direct.copy(signing = true), direct.copy(bootOptions = true),
+            direct.copy(forceRepatch = true))) {
+            assertEquals("IMAGE", UltraDirectInstallPolicy.dispatch(request,
+                { error("must not read SDK here") }, { error("must retain selected image operation") },
+                { error("must retain selected image operation") }, { "IMAGE" }))
         }
     }
 
-    @Test fun submittedThisBootDoesNotSubmitAgainOrPretendToSucceed() {
-        var sdkCalls = 0
-        var bootCalls = 0
-        val result = UltraDirectInstallPolicy.dispatch(direct, { update.copy(submittedThisBoot = true) },
-            { sdkCalls++; "SUCCESS" }, { decision ->
-                assertTrue(decision is UltraEnvUpgrade.Rebooting)
-                "WAIT_FOR_REBOOT"
-            }, { bootCalls++; "BOOT" })
-        assertEquals("WAIT_FOR_REBOOT", result)
-        assertEquals(0, sdkCalls)
-        assertEquals(0, bootCalls)
-    }
-
-    @Test fun lostRunningStateOrSuspendedEnvironmentDoesNotFallBackToPatchedBoot() {
-        for (facts in listOf(UltraEnvFacts(), update.copy(running = false, installedHelperSha256 = null),
-            update.copy(suspended = true), update.copy(quiescing = true))) {
-            assertEquals("UNAVAILABLE", UltraDirectInstallPolicy.dispatch(
-                direct.copy(environmentWasRunning = true), { facts },
-                { error("not ready to upgrade") }, { "UNAVAILABLE" },
-                { error("temporary probe failures must not patch the current boot") }))
-        }
-    }
-
-    @Test fun busyOrIncompleteFactsNeverBecomeAFirstInstall() {
-        assertEquals("UNAVAILABLE", UltraDirectInstallPolicy.dispatch(direct,
-            { UltraEnvFacts(readUnknown = true) }, { error("no verified update") },
-            { "UNAVAILABLE" }, { error("an incomplete read is not an absent environment") }))
-    }
-
-    @Test fun reportedIdleHelperRoutesToCheckedRecoveryBeforeOpeningPatchedBoot() {
-        var checks = 0
-        val result = UltraDirectInstallPolicy.dispatch(direct, { update.copy(running = false) },
-            { checks++; "CHECKED_RECOVERY" }, { "UNAVAILABLE" },
-            { error("An installed idle helper needs recovery preflight, not another boot patch") })
-        assertEquals("CHECKED_RECOVERY", result)
-        assertEquals(1, checks)
-    }
-
-    @Test fun confirmedFreshKernelUsesCheckedRepairAndRetainsAllWriteGuards() {
-        val fresh = UltraEnvFacts(bundledVersion = "5.2.1", freshKernelInstall = true)
-        assertEquals("CHECKED_REPAIR", UltraDirectInstallPolicy.dispatch(direct, { fresh },
-            { "CHECKED_REPAIR" }, { "UNAVAILABLE" }, { error("live kernel already selected") }))
-        assertEquals("BOOT", UltraDirectInstallPolicy.dispatch(direct, { fresh },
-            { error("retired kernel requires replacement") }, { "UNAVAILABLE" }, { "BOOT" },
-            requiresKernelUpdate = { true }))
-        for (facts in listOf(fresh.copy(readUnknown = true), fresh.copy(submittedThisBoot = true),
-            fresh.copy(suspended = true), fresh.copy(quiescing = true))) {
-            assertEquals("UNAVAILABLE", UltraDirectInstallPolicy.dispatch(direct, { facts },
-                { error("blocked repair") }, { "UNAVAILABLE" }, { error("blocked boot write") },
-                requiresKernelUpdate = { error("blocked kernel-update read") }))
-        }
-    }
-
-    @Test fun verifiedRetiredKernelMustActuallyUpdateBoot() {
-        assertEquals("BOOT", UltraDirectInstallPolicy.dispatch(direct, { update },
-            { error("An SDK-only update would leave the kernel unchanged") }, { "UNAVAILABLE" },
-            { "BOOT" }, requiresKernelUpdate = { true }))
-        assertEquals("SDK", UltraDirectInstallPolicy.dispatch(direct, { update },
-            { "SDK" }, { "UNAVAILABLE" }, { error("The existing kernel filter is verified") },
-            requiresKernelUpdate = { false }))
-    }
-
-    @Test fun installedIdleKernelCanBeUpdatedBeforeAnotherSdkOnlyRepair() {
-        assertEquals("BOOT", UltraDirectInstallPolicy.dispatch(direct, { update.copy(running = false) },
-            { error("A retired kernel must be replaced before reinstalling its helper") }, { "UNAVAILABLE" },
-            { "BOOT" }, requiresKernelUpdate = { true }))
-    }
-
-    @Test fun absentSuspendedSwitchingAndSubmittedEnvironmentsDoNotStartAKernelUpdateProbe() {
-        for (facts in listOf(update.copy(running = false, installedVersion = null), update.copy(suspended = true),
-            update.copy(quiescing = true), update.copy(submittedThisBoot = true))) {
-            UltraDirectInstallPolicy.dispatch(direct, { facts }, { "SDK_OR_RECOVERY" }, { "UNAVAILABLE" },
-                { "FIRST_INSTALL" }, requiresKernelUpdate = { error("not ready for a boot read") })
-        }
-    }
-
-    @Test fun normalMigrationFileDownloadVariantSigningAndBootOptionsKeepTheirBootPath() {
-        val requests = listOf(
-            direct.copy(target = InstallTargetMode.NORMAL),
-            direct.copy(activeMode = WorkMode.KSU),
-            direct.copy(activeMode = null),
-            direct.copy(source = InstallSourceKind.IMAGE),
-            direct.copy(source = InstallSourceKind.DOWNLOADED_BOOT),
-            direct.copy(defaultKernel = false),
-            direct.copy(signing = true),
-            direct.copy(bootOptions = true),
-        )
-        for (request in requests) {
-            var bootCalls = 0
-            assertEquals("BOOT", UltraDirectInstallPolicy.dispatch(request,
-                { error("must not probe SDK for $request") }, { error("must not upgrade $request") },
-                { error("must not intercept $request") }, { bootCalls++; "BOOT" }))
-            assertEquals(1, bootCalls)
-        }
-    }
-
-    @Test fun sameModeInitBootUsesTheSameEnvironmentUpgradeConsumer() {
-        assertEquals("SDK", UltraDirectInstallPolicy.dispatch(direct.copy(partition = "init_boot"),
-            { update }, { "SDK" }, { error("unexpected pending result") }, { error("unnecessary image write") }))
-    }
-
-    @Test fun explicitRepatchAlwaysRebuildsTheSelectedCarrier() {
-        for (partition in listOf("boot", "init_boot")) {
-            var patches = 0
-            assertEquals("REPATCHED", UltraDirectInstallPolicy.dispatch(
-                direct.copy(partition = partition, forceRepatch = true),
-                { error("Explicit repatch must not probe an environment-only update") },
-                { error("Explicit repatch must not become an environment-only update") },
-                { error("Explicit repatch must reach the image producer") },
-                { patches++; "REPATCHED" }))
-            assertEquals(1, patches)
-        }
-    }
-
-    @Test fun firstInstallAndNoUpdateRetainTheExistingPath() {
-        for (facts in listOf(UltraEnvFacts(), update.copy(installedHelperSha256 = update.bundledHelperSha256))) {
-            assertEquals("BOOT", UltraDirectInstallPolicy.dispatch(direct, { facts },
-                { error("no environment update") }, { error("not submitted") }, { "BOOT" }))
-        }
-    }
-
-    @Test fun sameModeUltraPreservesModulesAndNormalToUltraKeepsTheChoice() {
+    @Test fun sameModeUltraPreservesModulesAndOtherModesKeepTheirChoice() {
         assertFalse(UltraDirectInstallPolicy.requiresModuleChoice(InstallTargetMode.ULTRA, WorkMode.LITE))
         assertTrue(UltraDirectInstallPolicy.requiresModuleChoice(InstallTargetMode.ULTRA, WorkMode.KSU))
         assertTrue(UltraDirectInstallPolicy.requiresModuleChoice(InstallTargetMode.ULTRA, null))

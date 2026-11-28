@@ -76,9 +76,9 @@ class ModeDetectionRulesTest {
         "case13_lastKnownModeNoRoot" to (
             facts(lastKnownMode = "B") to
                 (ModeState.MODE_A_INSTALLED_UNBOUND to DetectionRules.Rule.R9_A_DISK_WEAK_UNBOUND)),
-        "case14_freshInstallWindow" to (
+        "case14_freshInstallWithoutEvidence" to (
             facts(ageMs = 60_000L) to
-                (ModeState.NOT_INSTALLED to DetectionRules.Rule.R11_FRESH_INSTALL)),
+                (ModeState.INDETERMINATE to DetectionRules.Rule.R12_INDETERMINATE)),
         "case15_oldInstallNoEvidence" to (
             facts(ageMs = 7L * 24 * 3600 * 1000) to
                 (ModeState.INDETERMINATE to DetectionRules.Rule.R12_INDETERMINATE)),
@@ -139,10 +139,10 @@ class ModeDetectionRulesTest {
     }
 
     @Test
-    fun notInstalledRequiresFreshWindow() {
+    fun installAgeAloneStaysIndeterminate() {
         val window = 5 * 60 * 1000L
         assertEquals(
-            DetectionRules.Rule.R11_FRESH_INSTALL,
+            DetectionRules.Rule.R12_INDETERMINATE,
             DetectionRules.decide(facts(ageMs = window)).rule,
         )
         assertEquals(

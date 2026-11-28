@@ -117,11 +117,18 @@ fun SettingPagerMiuix(
     var showSendLogDialog by rememberSaveable { mutableStateOf(false) }
     var showUninstall by rememberSaveable { mutableStateOf(false) }
     // 2026-10-31 模式独立性：设置页只按 uiState.modePolicy 渲染；
-    // 工作环境面板只在 Ultra 专属 section 可见时才构造（Normal/未判定零 Ultra SDK 探测），
+    // 完整环境面板由 Ultra section 许可；受限诊断只消费已确认 owner 的当前观察，
     // 隐藏/隐身生效时不构造：这张卡带模式字样（不变量 §2.1）。
     val modePolicy = uiState.modePolicy
-    val ultraPanel = rememberUltraEnvironmentPanel(
+    val fullUltraPanel = rememberUltraEnvironmentPanel(
         enabled = !appearanceOnly && modePolicy.shows(SettingsSection.ULTRA_ULTRA_ENV) && !uiState.hiddenMasked,
+    )
+    val diagnosticPanel = rememberUltraComponentDiagnosticsPanel(
+        if (appearanceOnly || fullUltraPanel != null) null else uiState.ultraComponentDiagnostic,
+    )
+    val ultraPanel = fullUltraPanel ?: diagnosticPanel
+    val savedInstallFailure = rememberSavedUltraInstallFailureDiagnostic(
+        enabled = !appearanceOnly && ultraPanel == null && modePolicy.mode == null && !uiState.hiddenMasked,
     )
     val workModeEntry = uiState.workModeEntry
     val bf = uiState.bFeatures
@@ -218,6 +225,13 @@ fun SettingPagerMiuix(
                     item(key = "ultra-env") {
                         Box(Modifier.animateItem(fadeInSpec = tween(120), placementSpec = tween(160), fadeOutSpec = null)) {
                             UltraEnvironmentSectionMiuix(panel, uiState.installedKernelUpdateRequired)
+                        }
+                    }
+                }
+                savedInstallFailure?.let { detail ->
+                    item(key = "ultra-install-failure-diagnostic") {
+                        SettingsCardMiuix(Modifier.animateItem(fadeInSpec = tween(120), placementSpec = tween(160), fadeOutSpec = null)) {
+                            SavedUltraInstallFailureDiagnosticMiuix(detail)
                         }
                     }
                 }
@@ -383,7 +397,7 @@ fun SettingPagerMiuix(
                 item(key = "last") {
                     if (ultraPanel != null || showNormalUninstall || modePolicy.shows(SettingsSection.LOG_AND_ABOUT)) {
                         SettingsCardMiuix(Modifier.animateItem(fadeInSpec = tween(120), placementSpec = tween(160), fadeOutSpec = null)) {
-                            ultraPanel?.let { panel -> UltraUninstallRowMiuix(panel) }
+                            fullUltraPanel?.let { panel -> UltraUninstallRowMiuix(panel) }
                             if (showNormalUninstall) {
                                 ArrowRowMiuix(
                                     title = stringResource(R.string.uninstall),

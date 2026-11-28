@@ -310,7 +310,8 @@ class WebViewInterface private constructor(
         for (index in 0 until arguments.length()) {
             val value = arguments.get(index)
             require(value is String && '\u0000' !in value) { "Invalid spawn argument" }
-            result.append(' ').append(ShellUtils.escapedString(value))
+            // KSU arguments are shell fragments; modules already quote values such as kptools -A.
+            result.append(' ').append(value)
         }
         return result.toString()
     }

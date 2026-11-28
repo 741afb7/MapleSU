@@ -1,9 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="home_environment_check_failed">环境检查未完成</string>
-    <string name="home_environment_check_timeout_summary">环境探测已超时。点击重试，或导出诊断日志。</string>
-    <string name="home_environment_check_failed_summary">环境探测失败。点击重试，或导出诊断日志。</string>
-    <string name="home_environment_check_unconfirmed_summary">运行环境尚未确认。点击重试，或导出诊断日志。</string>
-    <string name="home_environment_check_busy_summary">上一次环境检查仍在结束，请稍后点击重试。</string>
+    <string name="home_environment_check_failed">正在探测环境</string>
+    <string name="home_environment_check_timeout_summary">正在确认当前 MapleSU 环境。</string>
+    <string name="home_environment_check_failed_summary">正在确认当前 MapleSU 环境。</string>
+    <string name="home_environment_check_unconfirmed_summary">正在确认当前 MapleSU 环境。</string>
+    <string name="home_environment_check_busy_summary">正在确认当前 MapleSU 环境。</string>
     <string name="home_environment_refresh_warning">环境刷新提示：%1$s</string>
+    <string name="home_environment_cached_title">已安装</string>
+    <string name="home_environment_check_retry">重新确认</string>
+    <string name="home_environment_unknown_title">正在探测环境</string>
+    <string name="home_environment_unknown_summary">正在确认当前 MapleSU 运行环境，请稍候。</string>
+    <string name="home_environment_confirmation_title">确认运行环境</string>
+    <string name="home_environment_confirmation_summary">点击“重新确认”以检查当前 MapleSU 运行环境。</string>
+    <string name="home_environment_installed_unready_summary">已安装，当前运行状态尚未确认。</string>
+    <string name="home_ultra_observation_timeout_summary">Ultra 状态读取超时。点击前往设置检查状态或修复。</string>
+    <string name="home_ultra_observation_busy_summary">Ultra 状态读取正忙。点击前往设置重新检查。</string>
+    <string name="home_ultra_observation_unconfirmed_summary">Ultra 已安装，当前组件状态尚待确认。点击前往设置检查。</string>
+    <string name="home_ultra_observation_failed_summary">Ultra 状态读取发生异常。点击前往设置检查状态或修复。</string>
+    <string name="home_ultra_observation_detail">%1$s\n%2$s</string>
 </resources>

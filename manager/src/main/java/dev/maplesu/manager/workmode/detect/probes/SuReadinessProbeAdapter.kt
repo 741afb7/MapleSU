@@ -49,6 +49,10 @@ class SuReadinessProbeAdapter(private val context: Context) : SuReadinessProbe {
         }
     }
 
+    internal fun probeFresh(totalBudgetMillis: Long = DEFAULT_TIMEOUT_MILLIS): SuProbeReport =
+        runProbes(totalBudgetMillis.coerceIn(1L, MAX_TIMEOUT_MILLIS))
+            .also { Log.i(TAG, "fresh su probe ${it.describe}") }
+
     private fun runProbes(totalBudgetMillis: Long): SuProbeReport {
         val deadline = System.nanoTime() + totalBudgetMillis * 1_000_000L
         val attempts = mutableListOf<SuProbeAttempt>()

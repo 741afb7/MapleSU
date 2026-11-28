@@ -139,6 +139,8 @@ object EnvironmentHomeProjection {
         val bootChanged: Boolean,
         /** Historical installation cards may only be inherited within their recorded boot. */
         val cachedMode: dev.maplesu.manager.workmode.WorkMode?,
+        /** A previous boot's mode is display history, never a current installation verdict. */
+        val previousMode: dev.maplesu.manager.workmode.WorkMode?,
     )
 
     fun decide(facts: Facts): Result {
@@ -156,6 +158,7 @@ object EnvironmentHomeProjection {
         val cachedMode = snapshot?.mode?.takeIf {
             facts.currentBootId.isNotBlank() && snapshot.bootId == facts.currentBootId
         }
-        return Result(confirmedNotInstalled, bootChanged, cachedMode)
+        return Result(confirmedNotInstalled, bootChanged, cachedMode,
+            snapshot?.mode?.takeIf { bootChanged })
     }
 }

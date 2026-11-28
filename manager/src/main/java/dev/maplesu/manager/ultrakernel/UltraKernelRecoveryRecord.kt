@@ -52,10 +52,14 @@ internal class UltraKernelRecoveryRecord private constructor(
         return restored
     }
 
-    /** Resolve a typed locator before restore; no record/magic scanning or Key derivation. */
+    /** Resolve the typed locator, or the public init path in verified legacy write ranges. */
     fun deploymentNamespace(current: ByteArray): UltraKernelDeploymentNamespace? {
         verifyCurrent(current)
-        val selected = deployment ?: return null
+        val selected = deployment ?: run {
+            return UltraKernelDeploymentNamespace.fromLegacyInitPaths(ranges.asSequence().map { range ->
+                current.copyOfRange(range.offset, range.offset + range.original.size)
+            })
+        }
         val record = current.copyOfRange(selected.offset, selected.offset + UltraKernelDeploymentNamespace.RECORD_BYTES)
         require(MessageDigest.isEqual(selected.sha256, digest(record, 0, record.size))) {
             "ULTRA_KERNEL_RECOVERY_DEPLOYMENT_MISMATCH"

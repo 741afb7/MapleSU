@@ -42,7 +42,11 @@ class EnvironmentCheckRunner(
     val busy: Boolean
         get() = synchronized(lock) { inflight != null }
 
-    suspend fun check(): EnvironmentCheckOutcome {
+    suspend fun check(): EnvironmentCheckOutcome = check(timeoutMillis)
+
+    suspend fun check(maxBudgetMillis: Long): EnvironmentCheckOutcome {
+        val budget = minOf(timeoutMillis, maxBudgetMillis)
+        if (budget <= 0L) return execute(budget)
         var leader = false
         val deferred = synchronized(lock) {
             inflight ?: CompletableDeferred<EnvironmentCheckOutcome>().also { created ->
@@ -53,7 +57,7 @@ class EnvironmentCheckRunner(
         if (!leader) return deferred.await()
 
         try {
-            val outcome = execute()
+            val outcome = execute(budget)
             // 先发布再关窗口：这期间到达的 follower 拿到的是已完成的同一份结论（不重复探测）。
             deferred.complete(outcome)
             synchronized(lock) { if (inflight === deferred) inflight = null }
@@ -65,14 +69,18 @@ class EnvironmentCheckRunner(
         }
     }
 
-    private suspend fun execute(): EnvironmentCheckOutcome {
+    private suspend fun execute(budget: Long): EnvironmentCheckOutcome {
         val startedAt = clock.nowMillis()
         val bootId = runCatching { bootIdSource.read() }.getOrDefault("")
-        val budget = timeoutMillis.coerceAtLeast(1L)
+        if (budget <= 0L) {
+            return unknown(bootId, EnvironmentCheckDetail.DEADLINE_EXCEEDED, startedAt)
+        }
         // 预算即"落盘许可"的边界：跑到超时之后才出结果的探测不得覆盖上次状态。
         val deadlineNanos = System.nanoTime() + budget * 1_000_000L
         val ran = probeRunner.run(budget) {
-            resolver.resolve(bootId) { System.nanoTime() < deadlineNanos }
+            resolver.resolve(bootId) {
+                !Thread.currentThread().isInterrupted && System.nanoTime() < deadlineNanos
+            }
         }
         return when (ran) {
             is EnvironmentProbeResult.Completed -> ran.value

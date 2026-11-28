@@ -1,0 +1,31 @@
+{
+  "tests": 671,
+  "failures": 15,
+  "failureMethods": [
+    "absentCurrentEvidenceRetainsCredentialRecoveryAndNormalFallback(dev.maplesu.manager.workmode.detect.UltraEvidenceFirstTest)",
+    "firstNormalJailbreakSoftRebootActivatesNormalWithoutRootCycle(dev.maplesu.manager.workmode.detect.NormalRebootRecognitionTest)",
+    "dirtyNormalAfterJailbreakIsRevalidatedWithoutRoot(dev.maplesu.manager.workmode.detect.NormalRebootRecognitionTest)",
+    "fullRebootWithInstalledNormalRevalidatesTheNewBoot(dev.maplesu.manager.workmode.detect.NormalRebootRecognitionTest)",
+    "knownNormalSoftRebootInheritsAndSkipsResidualUltraRecords(dev.maplesu.manager.workmode.detect.NormalRebootRecognitionTest)",
+    "previouslyNotInstalledIsRecheckedAfterSoftReboot(dev.maplesu.manager.workmode.detect.NormalRebootRecognitionTest)",
+    "fullRebootLosingTemporaryNormalEndsNotInstalled(dev.maplesu.manager.workmode.detect.NormalRebootRecognitionTest)",
+    "historicalUltraCredentialsDoNotOverrideTheRunningNormalKernel(dev.maplesu.manager.workmode.detect.NormalRebootRecognitionTest)",
+    "explicitRetryKeepsItsOwnProgressAndFailureBesideTheCachedCard(com.maplesu.core.ui.screen.home.HomeTabCacheDisplayTest)",
+    "ordinaryTabReturnsNeverSetExplicitRetryProgress(com.maplesu.core.ui.screen.home.HomeTabCacheDisplayTest)",
+    "actualRootFailureAndRemovalReplaceTheCachedDisplay(com.maplesu.core.ui.screen.home.HomeTabCacheDisplayTest)",
+    "pendingSdkAndUnknownRootObservationsKeepTheLastConfirmedDisplay(com.maplesu.core.ui.screen.home.HomeTabCacheDisplayTest)",
+    "runningSdkWithAnUnknownRootObservationKeepsOnlyTheConfirmedDisplay(com.maplesu.core.ui.screen.home.HomeTabCacheDisplayTest)",
+    "automaticUnknownKeepsTheConfirmedCardAndItsModeWhileCapabilitiesStayCurrent(com.maplesu.core.ui.screen.home.HomeTabCacheDisplayTest)",
+    "aKeyOrPairingRecordDoesNotProveThatUltraIsRunning(com.maplesu.core.ui.screen.home.HomeRuntimeRecognitionWiringTest)"
+  ],
+  "productRed": true,
+  "preparationFailure": null,
+  "compilationFailure": null,
+  "inputIdentityChanges": [],
+  "generatedFileCount": 441,
+  "passed": false,
+  "scope": "Previous candidate: 19 complete production files; narrow K2/Compose and 67 JUnit classes, not a full Gradle/SDK/device build.",
+  "productionCompileExit": 0,
+  "originalResultSha256": "772fc5c7250be9490d78ef435634d5402e811c05f908dc6acfbcc6683f6de533",
+  "subsequentChangesExecuted": false
+}

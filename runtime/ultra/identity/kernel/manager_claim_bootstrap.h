@@ -10,6 +10,7 @@
 #define MSU_CLAIM_RESIDENT_ANCHOR_VERSION 2U
 #define MSU_CLAIM_BOOT_ANCHOR_VERSION 3U
 #define MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION 4U
+#define MSU_CLAIM_SOURCE_ANCHOR_VERSION 5U
 struct msu_manager_claim_anchor {
     msu_loader_u32 magic, version, self_offset, page_shift;
     msu_loader_u32 materializer_offset, credential_offset, allocate_offset, release_offset;
@@ -35,6 +36,11 @@ _Static_assert(__builtin_offsetof(struct msu_manager_claim_anchor, binding) == 5
 void msu_manager_claim_bootstrap(const struct msu_manager_claim_anchor *, const char *name);
 int msu_manager_resident_boot(const struct msu_manager_claim_anchor *);
 int msu_manager_resident_boot_deployment(const struct msu_manager_claim_anchor *);
+/* The boot owner supplies and retains the verified source mapping until this
+ * call returns, including failure and quarantine paths. Requests observe READY
+ * only and never initialize a v5 anchor or obtain a source pointer. */
+int msu_manager_resident_boot_deployment_source(const struct msu_manager_claim_anchor *,
+    const void *source_base, msu_loader_u32 source_bytes);
 int msu_manager_claim_permissions(const struct msu_manager_claim_anchor *,
     const struct msu_loader_header *, void *memory, int pages);
 #endif

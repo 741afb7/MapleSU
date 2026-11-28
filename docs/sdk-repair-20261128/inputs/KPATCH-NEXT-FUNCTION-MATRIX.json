@@ -1,0 +1,1245 @@
+{
+  "schema": "maplesu-kpatch-next-function-matrix/1",
+  "recordedUtc": "2026-11-27T05:47:35.993858+00:00",
+  "scope": "官方 KPatch-Next-Module v0.0.1，main 仅作源码对照；MapleSU_Ultra。",
+  "sourceRecord": "INTAKE.json",
+  "statusMeaning": {
+    "REVIEWED": "源码调用链审阅，不代表运行成功",
+    "CONFIRMED_GAP": "已确认源码兼容差异",
+    "NOT_RUN": "当前子代理未执行相应层验证",
+    "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND": "官方模块 ZIP 已绑定 SHA256；当前目标 Maple APK 尚未绑定",
+    "SOURCE_FIX_HOST_VERIFIED_DEVICE_PENDING": "源码最小修复与真实shell边界通过，模块设备效果待验证",
+    "OPTION_BOUNDARY_VERIFIED_FLOW_NOT_RUN": "共享options边界已主机验证；本条模块完整流程尚未执行",
+    "PASSED_PRODUCTION_OPTIONS_BOUNDARY_10_TESTS": "10项生产options边界回归通过，含继承、字面值、spawn/cwd；真实Root/设备不在该范围",
+    "PARTIAL_PREINJECTION_HELLO_ABSENCE_ONLY": "仅原始内核前态探针确认未收到KPatch magic，不代表本项完整模块流程已通过"
+  },
+  "functions": [
+    {
+      "id": "KPN-01",
+      "title": "正式模块、源码与产物身份",
+      "moduleSource": [
+        "release-v0.0.1/module.prop",
+        "KPatch-Next-Module-latest-release.json"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/dev/maplesu/manager/ModuleArchiveInspector.java"
+      ],
+      "conditions": "",
+      "positive": "使用官方 v0.0.1 ZIP；记录 SHA256、发布 asset ID、目标 APK SHA256、设备 build/boot_id 与 Ultra mode。",
+      "acceptance": "ZIP SHA256=ad4802ef34dd564d3935f07f5d4c8298535ffe2dd8b64dfd30e2036709995039；不把 tag/main 当完全相同的发布产物。",
+      "negative": "改动 ZIP 一个字节或更换 main 编译包必须生成独立记录。",
+      "phase": "INTAKE",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-02",
+      "title": "安装环境与 arm64 条件",
+      "moduleSource": [
+        "release-v0.0.1/customize.sh:4-13"
+      ],
+      "mapleSource": [
+        "manager/src/main/assets/maplesu/modules/runner.sh",
+        "runtime/maplesu-sdk/sdk/include/maplesu_module_environment_private.h:135-150"
+      ],
+      "conditions": "arm64；MapleSU_Ultra 已实际激活",
+      "positive": "在真实 Ultra 下记录 KSU/MAPLESU/ARCH/BOOTMODE 与执行 UID，再从管理器安装。",
+      "acceptance": "KSU=true 是兼容用户态事实；ARCH=arm64；Root 为真实 0；未伪造 KSU 内核版本。",
+      "negative": "APATCH 非空、非 arm64 的隔离 fixture 被上游脚本明确中止。",
+      "phase": "INSTALL",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-03",
+      "title": "首次安装与重启激活",
+      "moduleSource": [
+        "release-v0.0.1/customize.sh:23-29"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt:243-299",
+        "manager/src/main/assets/maplesu/modules/boot.sh:143-207"
+      ],
+      "conditions": "",
+      "positive": "从无 KPN 活动目录基线安装，检查 modules_update 与模块 ready 状态；重启后检查真实活动目录。",
+      "acceptance": "候选完整、激活后 /data/adb/modules/KPatch-Next 中脚本/bin/webroot 完整；需要重启时展示真实 pending。",
+      "negative": "中断 customize/发布失败保留旧版本；首装热复制目录不存在的上游行为必须记录，禁止假称热生效。",
+      "phase": "INSTALL",
+      "riskClass": "reversible",
+      "gaps": [
+        "KPN-UPSTREAM-02"
+      ],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-04",
+      "title": "覆盖更新与 WebUI 热更新",
+      "moduleSource": [
+        "release-v0.0.1/customize.sh:25-29"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt:261-330",
+        "manager/src/main/assets/maplesu/modules/boot.sh"
+      ],
+      "conditions": "",
+      "positive": "安装第二份带可见版本标记的受控模块包；记录活动、pending、WebUI 版本及重启前后效果。",
+      "acceptance": "旧页会话撤销，新页读取真实活动字节；pending 只表示待激活；更新失败保留一致状态。",
+      "negative": "customize 热改活动字节属于模块自己的副作用；失败回滚不得宣称完全原子。",
+      "phase": "INSTALL",
+      "riskClass": "reversible",
+      "gaps": [
+        "KPN-UPSTREAM-02"
+      ],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-05",
+      "title": "post-fs-data 与公共 service.d",
+      "moduleSource": [
+        "release-v0.0.1/post-fs-data.sh"
+      ],
+      "mapleSource": [
+        "manager/src/main/assets/maplesu/modules/boot.sh:610-632",
+        "manager/src/main/assets/maplesu/modules/run.sh:53-69"
+      ],
+      "conditions": "",
+      "positive": "重启并核对 post-fs-data 生成 /data/adb/service.d/kp-next.sh；核对公共 service 顺序与真实执行。",
+      "acceptance": "复制的 status.sh 具有可执行位；同一 boot_id 每项执行一次；状态描述更新。",
+      "negative": "重复投递 boot event 不重复运行；脚本失败保留原 exit 与阶段。",
+      "phase": "BOOT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-06",
+      "title": "未注入 KPatch 内核的诚实状态",
+      "moduleSource": [
+        "release-v0.0.1/service.sh:9-12",
+        "release-v0.0.1/status.sh:35-52",
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:39-45"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt:130-160"
+      ],
+      "conditions": "",
+      "positive": "在未有 KPatch 内核能力基线启动模块并打开主页。",
+      "acceptance": "kpatch hello 实际为空/失败时为 inactive 或未安装；脚本 exit 0 仅是脚本退出。",
+      "negative": "仅安装 ZIP、存在 webroot、退出码 0 均不得标记内核 KPM 可用。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "PARTIAL_PREINJECTION_HELLO_ABSENCE_ONLY",
+      "deviceEvidence": [
+        "../DEVICE/BASELINE.json",
+        "../DEVICE/kpatch-hello/RESULT.json"
+      ],
+      "deviceObservation": "Official ZIP kpatch bytes exact and SHA checked; parent executed as real UID0 on boot f05da9be-382a-4047-84a0-54a5c666f329, kernel6.6.89; hello exit0 stdout empty. No service/unresolved file, actual module WebUI or KPM flow executed.",
+      "remaining": "Current kernel did not return KPatch hello magic. Actual module inactive display/service flag and post-injection KPatch/KPM remain NOT_RUN."
+    },
+    {
+      "id": "KPN-07",
+      "title": "service 持久 KPM 加载",
+      "moduleSource": [
+        "release-v0.0.1/service.sh:14-17"
+      ],
+      "mapleSource": [
+        "manager/src/main/assets/maplesu/modules/boot.sh:621-632",
+        "manager/src/main/assets/maplesu/modules/run.sh:151-192"
+      ],
+      "conditions": "KPatch 内核能力与兼容 KPM",
+      "positive": "以固定 SHA256 验证 KPM 保存到 kp-next/kpm；关掉 Manager 后重启。",
+      "acceptance": "KPM 内核 list/info 与唯一功能探针同时证明已加载；不依赖打开 Manager。",
+      "negative": "损坏 KPM 时核对上游失败即删除持久文件语义，不用启动确认代替实际功能。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-08",
+      "title": "service 恢复 rehook",
+      "moduleSource": [
+        "release-v0.0.1/service.sh:19-25"
+      ],
+      "mapleSource": [
+        "manager/src/main/assets/maplesu/modules/boot.sh",
+        "manager/src/main/assets/maplesu/modules/run.sh"
+      ],
+      "conditions": "KPatch 内核能力",
+      "positive": "分别持久化 enable/disable 后重启，并查询 rehook_status 与可控 hook 探针。",
+      "acceptance": "配置、内核状态与功能效果三者一致。",
+      "negative": "无效配置值按上游删除；无 KPatch 能力保持 inactive。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-09",
+      "title": "service 恢复应用排除",
+      "moduleSource": [
+        "release-v0.0.1/service.sh:31-41"
+      ],
+      "mapleSource": [
+        "manager/src/main/assets/maplesu/modules/boot.sh",
+        "manager/src/main/assets/maplesu/modules/run.sh"
+      ],
+      "conditions": "测试包、KPatch 与可观察 hook KPM",
+      "positive": "保存两个测试包 CSV，记录 packages.list 的真实 UID，重启后从应用上下文验证效果。",
+      "acceptance": "目标包 hook 效果被排除、对照包仍有；相同应用 ID 的上游语义单独记录。",
+      "negative": "卸载重装或 UID 变化记录实际解析；不宣称 PMS 零窗口或 fullUID 隔离能力。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-10",
+      "title": "模块状态说明与 module.prop 备份",
+      "moduleSource": [
+        "release-v0.0.1/status.sh:10-56"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt:111-160"
+      ],
+      "conditions": "",
+      "positive": "记录 hello/kpm num/rehook_status；运行状态脚本；在 fixture 破坏 module.prop 的 id 后重跑。",
+      "acceptance": "description 与内核事实相符；缺 id 时从 module.prop.bak 恢复。",
+      "negative": "内核未打补丁不显示 active；目录已删时仅清理自身公共脚本。",
+      "phase": "BOOT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-11",
+      "title": "管理器禁用、启用、删除与重启",
+      "moduleSource": [
+        "release-v0.0.1/module.prop",
+        "release-v0.0.1/service.sh"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+        "manager/src/main/assets/maplesu/modules/boot.sh:599-650"
+      ],
+      "conditions": "",
+      "positive": "禁用模块后重启检查阶段与功能；启用重启后复验；标记删除后重启。",
+      "acceptance": "模块生命周期与 UI 记录一致；KPatch 已写入内核与模块脚本启停分开记账。",
+      "negative": "禁用脚本不等于撤销已经注入的 KPatch 内核；原有公共 status 脚本残留按实记录。",
+      "phase": "CLEANUP",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-12",
+      "title": "卸载脚本清理",
+      "moduleSource": [
+        "release-v0.0.1/uninstall.sh"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+        "manager/src/main/assets/maplesu/modules/run.sh:328-357"
+      ],
+      "conditions": "",
+      "positive": "在已备份 KPN 配置的基线上通过管理器卸载并重启。",
+      "acceptance": "kp-next 数据与 service.d/kp-next.sh 按上游清理，模块列表与目录一致。",
+      "negative": "不把模块卸载当作 KernelPatch 内核反修补。",
+      "phase": "CLEANUP",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-13",
+      "title": "内联 WebUI 资产与实际桥接",
+      "moduleSource": [
+        "release-v0.0.1/webroot/index.html",
+        "release-v0.0.1/webroot/assets/index-CSxEGwKq.js"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewHelper.kt:44-208",
+        "manager/src/main/java/com/maplesu/core/ui/webui/ModuleWebViewClient.kt"
+      ],
+      "conditions": "",
+      "positive": "从 MapleSU 模块行打开 WebUI；记录页面、console、资源状态和 bridge probe。",
+      "acceptance": "本地 JS/CSS/locale 均加载；window.ksu 为真实生产 bridge；无需外部 WebUI App。",
+      "negative": "丢失资源应显示错误；模块 disabled/update/remove 时按真实状态拒绝旧页执行。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-14",
+      "title": "主页、KPM、排除、设置、返回和退出",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/route.js"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:457-467",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIState.kt"
+      ],
+      "conditions": "",
+      "positive": "依次进入所有底部页、patch/unpatch 子页，使用页面返回和 Manager 返回。",
+      "acceptance": "路由与标题正确；退出释放命令与旧页，返回模块列表。",
+      "negative": "关页后迟到 callback 不修改新页面或再执行命令。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-15",
+      "title": "翻译、默认语言、RTL 与持久化",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/language.js",
+        "release-v0.0.1/webroot/locales/languages.json"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewHelper.kt:107-113",
+        "manager/src/main/java/com/maplesu/core/ui/webui/SuFilePathHandler.java"
+      ],
+      "conditions": "",
+      "positive": "测试简中、默认语言、一个 RTL 语言，重载 WebUI。",
+      "acceptance": "locale fetch 与 XML 正确；localStorage 语言选择持久化；RTL 布局与翻转图标正确。",
+      "negative": "缺失语言回落英文；使用实际 ZIP 语言清单而非 tag 中缺少/新增的语言。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-16",
+      "title": "系统、内核、指纹和 SELinux 信息",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/index.js:42-54"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:202-244"
+      ],
+      "conditions": "",
+      "positive": "将主页信息与同一 root 通道 uname/getprop/getenforce 对照。",
+      "acceptance": "各字段真实且对应设备；无开发态 mock。",
+      "negative": "命令错误或空值不得替换成成功固定值。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-17",
+      "title": "exec 结果与 root 命令身份",
+      "moduleSource": [
+        "release-v0.0.1/webroot/assets/index-CSxEGwKq.js"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:202-246",
+        "manager/src/main/java/com/maplesu/core/ui/webui/NormalWebUiCompatibility.kt"
+      ],
+      "conditions": "",
+      "positive": "通过实际库执行打印 stdout/stderr 并 exit 7 的诊断命令，另查 id。",
+      "acceptance": "errno=7，stdout/stderr 完整且分别传递，真实 root 身份；回调只归当前页。",
+      "negative": "root 通道失败保留失败；无输出不等于成功。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-18",
+      "title": "exec/spawn 的 PATH 继承与 cwd/env",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/index.js:79-107",
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:79-100,169-170,374-383"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:175-198",
+        "manager/src/main/java/dev/maplesu/manager/runtime/RootManagement.kt:142-153"
+      ],
+      "conditions": "",
+      "positive": "实际 env.PATH 使用模块值 …:$PATH；执行 sh、busybox 与带空格 cwd 的探针。",
+      "acceptance": "PATH 保留模块目录、平台路径、Maple bin；cwd 生效；普通 env 值保持字面值。",
+      "negative": "$(command)、反引号与非 PATH 环境值不产生额外 shell 执行；非法 cwd/code 保留失败。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "SOURCE_FIX_HOST_VERIFIED_DEVICE_PENDING",
+      "hostStatus": "PASSED_PRODUCTION_OPTIONS_BOUNDARY_10_TESTS",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": [],
+      "resolvedGaps": [
+        "KPN-GAP-01"
+      ],
+      "hostEvidence": [
+        "PATH-FIX-HANDOFF.json",
+        "path-green-portable/RESULT.json"
+      ],
+      "remaining": "Root/WebUI on actual new APK remains NOT_RUN."
+    },
+    {
+      "id": "KPN-19",
+      "title": "spawn 数据事件顺序和关闭清理",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:97-108,385-396",
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:210-213"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:249-324",
+        "manager/src/main/java/com/maplesu/core/ui/webui/NormalWebUiCompatibility.kt:34-54"
+      ],
+      "conditions": "",
+      "positive": "生成 stdout/stderr 多行与非零退出；实际修补输出过程中退出/切页。",
+      "acceptance": "每次 data 在对应 exit 之前可见；exit 只一次；退出后无旧命令影响新页。",
+      "negative": "并发上传失败、壳退出或页面销毁不会永远等待 exit Promise。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-20",
+      "title": "原生文件选择和 .kpm 过滤",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:270-332"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIBridge.kt:81-100",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIState.kt"
+      ],
+      "conditions": "",
+      "positive": "从系统文档选择器选 .kpm、取消、再选错误扩展名。",
+      "acceptance": "File 对象与 FileReader 可用；错误扩展名被模块说明；取消无残留 UI。",
+      "negative": "空选择、不可读 URI、撤销页面后返回 chooser 不触发旧请求。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-21",
+      "title": "多块并发上传完整性与空文件",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:185-255",
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/index.js:110-121"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:249-324"
+      ],
+      "conditions": "",
+      "positive": "选择超过 MAX_CHUNK_SIZE*4 的固定测试文件，上传后读取目标 SHA256；测试边界大小与零字节。",
+      "acceptance": "8 worker 分块拼接后 SHA256/长度与源一致，进度完成；零文件真实零字节。",
+      "negative": "超 ARG_MAX、写权限错误、分块失败显示实际失败；文件名带空格列入测试。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-22",
+      "title": "上传取消和失败清理",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:195-255,308-329"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIState.kt"
+      ],
+      "conditions": "",
+      "positive": "大文件中途取消，再强制一个 chunk 失败，再成功上传同名文件。",
+      "acceptance": "part 文件按上游清理，后续上传哈希正确；页面不会用上次部分文件。",
+      "negative": "Promise.all 失败时其他 worker 在途写入的竞态按实记录，不能仅看取消 toast。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [
+        "KPN-UPSTREAM-03"
+      ],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-23",
+      "title": "真实 KPatch hello 和版本",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:39-45"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "真实 KPatch 内核",
+      "positive": "在未注入和已注入两种启动镜像基线上记录 kpatch hello/kpver 与 UI。",
+      "acceptance": "实际能力和版本对应 kpimg；无能力时不显示 working。",
+      "negative": "非空 stdout 但非零退出的探针须单独记录，避免上游弱成功判断外推。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "PARTIAL_PREINJECTION_HELLO_ABSENCE_ONLY",
+      "deviceEvidence": [
+        "../DEVICE/BASELINE.json",
+        "../DEVICE/kpatch-hello/RESULT.json"
+      ],
+      "deviceObservation": "Official ZIP kpatch bytes exact and SHA checked; parent executed as real UID0 on boot f05da9be-382a-4047-84a0-54a5c666f329, kernel6.6.89; hello exit0 stdout empty. No service/unresolved file, actual module WebUI or KPM flow executed.",
+      "remaining": "Current kernel did not return KPatch hello magic. Actual module inactive display/service flag and post-injection KPatch/KPM remain NOT_RUN."
+    },
+    {
+      "id": "KPN-24",
+      "title": "kpimg 自带组件元信息",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:54-77",
+        "release-v0.0.1/bin/kpimg"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:202-244"
+      ],
+      "conditions": "",
+      "positive": "运行发布包 kptools -l -k 对应 kpimg，对照 WebUI version/time/config。",
+      "acceptance": "实际 kpimg SHA256 与版本/配置绑定；不按模块 tag 推断二进制版本。",
+      "negative": "缺失/损坏 kpimg 明确失败，不能沿用缓存成功显示。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-25",
+      "title": "当前槽位和 boot 载体定位",
+      "moduleSource": [
+        "release-v0.0.1/patch/boot_extract.sh",
+        "release-v0.0.1/patch/util_functions.sh:204-253"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:249-324"
+      ],
+      "conditions": "",
+      "positive": "比较 boot_extract 的 SLOT/BOOTIMAGE 与真实属性、分区链接及 Maple 当前载体。",
+      "acceptance": "KPN 定位的是含 kernel 的 boot；显示当前真实槽位；不把纯 init_boot 当 kernel 目标。",
+      "negative": "无 boot、无 A/B 或属性冲突应保留未知/失败，不复用旧 bootDev。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "SOURCE_FIX_HOST_VERIFIED_DEVICE_PENDING",
+      "hostStatus": "OPTION_BOUNDARY_VERIFIED_FLOW_NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": [],
+      "resolvedGaps": [
+        "KPN-GAP-01"
+      ],
+      "hostEvidence": [
+        "PATH-FIX-HANDOFF.json",
+        "path-green-portable/RESULT.json"
+      ],
+      "remaining": "New APK binding and actual module/device flow; kernel operations require actual KPatch kpimg injection and boot."
+    },
+    {
+      "id": "KPN-26",
+      "title": "真实 boot 解包与内核解析",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:79-202",
+        "release-v0.0.1/bin/magiskboot",
+        "release-v0.0.1/bin/kptools"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:175-324"
+      ],
+      "conditions": "",
+      "positive": "从真实目标拷贝开始，清理 tmp，解包、解析 banner/patched/extras 并对照 UI。",
+      "acceptance": "cwd、工具与 stdout 解析正确；目标来源和 SHA256 保留。",
+      "negative": "解包失败后的 kptools 不应读取陈旧 kernel；只看 parse exit 0 不足。",
+      "phase": "FILE_PATCH",
+      "riskClass": "reversible",
+      "gaps": [
+        "KPN-UPSTREAM-04"
+      ],
+      "sourceStatus": "SOURCE_FIX_HOST_VERIFIED_DEVICE_PENDING",
+      "hostStatus": "OPTION_BOUNDARY_VERIFIED_FLOW_NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": [],
+      "resolvedGaps": [
+        "KPN-GAP-01"
+      ],
+      "hostEvidence": [
+        "PATH-FIX-HANDOFF.json",
+        "path-green-portable/RESULT.json"
+      ],
+      "remaining": "New APK binding and actual module/device flow; kernel operations require actual KPatch kpimg injection and boot."
+    },
+    {
+      "id": "KPN-27",
+      "title": "内核条件和冲突检测",
+      "moduleSource": [
+        "release-v0.0.1/patch/boot_patch.sh:46-60"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "",
+      "positive": "固定 fixtures 覆盖 CONFIG_KPM=y、缺 KALLSYMS_ALL、支持的正常内核。",
+      "acceptance": "不兼容配置按上游真实中止；普通 Ultra 可用性与 KPN 可修补条件分开。",
+      "negative": "不为通过测试隐藏 CONFIG_KPM 或伪造 kallsyms 配置。",
+      "phase": "FILE_PATCH",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-28",
+      "title": "仅文件修补与保存输出",
+      "moduleSource": [
+        "release-v0.0.1/patch/boot_patch.sh:29-104",
+        "release-v0.0.1/patch/util_functions.sh:281-289"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:249-324"
+      ],
+      "conditions": "设备运行 Android 二进制；仅副本",
+      "positive": "对当前 boot 的只读副本执行 boot_patch.sh IMAGE false，保留输入、ori.img、new-boot.img 和保存文件。",
+      "acceptance": "kptools 解析输出为真实 KPatch；容器/header/ramdisk 与 Maple implant 必要字节保留；无分区写。",
+      "negative": "损坏文件、空间不足、kptools/repacks 非零不记成功。",
+      "phase": "FILE_PATCH",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-29",
+      "title": "当前槽位实际刷写与回读",
+      "moduleSource": [
+        "release-v0.0.1/patch/boot_patch.sh:86-99",
+        "release-v0.0.1/patch/util_functions.sh:255-278",
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:333-397"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "主代理设备独占、备份与回滚途径已验证",
+      "positive": "先保全原始 boot/init_boot/vbmeta 与槽位；WebUI 执行 patch；立即按长度回读并比较哈希；重启验证双能力。",
+      "acceptance": "分区前缀回读与新镜像逐字节一致；下次启动 KPatch 与 Maple Ultra 同时实际工作。",
+      "negative": "写失败或只读分区不得依据脚本 success 文本通过；其 flash_image 尾部 return 0 需专门核验。",
+      "phase": "FLASH_REBOOT",
+      "riskClass": "boot_partition_write",
+      "gaps": [
+        "KPN-UPSTREAM-05"
+      ],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-30",
+      "title": "下一槽位脚本能力与 OTA",
+      "moduleSource": [
+        "release-v0.0.1/patch/boot_extract.sh:16-20",
+        "release-v0.0.1/patch/util_functions.sh:221-253"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "A/B 与准备好的 OTA fixture",
+      "positive": "只读调用 boot_extract.sh true 与当前结果对照；真实 OTA 条件就绪后再测试副本与下一槽刷写。",
+      "acceptance": "_a/_b 正确切换；目标分区与输入对应；不存在的 UI 按钮不凭空列为已验。",
+      "negative": "单槽/未知槽明确失败；不把缺失 next boot 回落到 current 当成功。",
+      "phase": "FILE_PATCH",
+      "riskClass": "reversible",
+      "gaps": [
+        "KPN-UPSTREAM-06"
+      ],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-31",
+      "title": "反修补与 Maple Ultra 保留",
+      "moduleSource": [
+        "release-v0.0.1/patch/boot_unpatch.sh",
+        "release-v0.0.1/patch/util_functions.sh:255-278"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "先通过副本往返和回滚",
+      "positive": "先对 KPatch+Ultra boot 副本用 kptools -u 比较，再在完整备份下走真实 WebUI unpatch 与重启。",
+      "acceptance": "只撤销 KPatch；Maple Ultra 来源、root、模块仍真实可用；分区回读一致。",
+      "negative": "未 patch 或新旧备份混用按真实返回失败；不将旧 new-boot.img 当原厂备份。",
+      "phase": "FLASH_REBOOT",
+      "riskClass": "boot_partition_write",
+      "gaps": [
+        "KPN-UPSTREAM-05"
+      ],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-32",
+      "title": "新增内嵌 KPM 的元数据、参数、事件",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:281-330,346-360"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIBridge.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:307-319"
+      ],
+      "conditions": "",
+      "positive": "选择固定 .kpm 并核对 metadata；输入含空格/引号的参数并切换事件后修补副本。",
+      "acceptance": "kptools 的实际 extra 条目、args/event 与 UI 完全一致，文件 SHA256 可追。",
+      "negative": "双层 shell quoting 必须实测；同名或无效 KPM 不误标嵌入成功。",
+      "phase": "FILE_PATCH",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-33",
+      "title": "已有内嵌 KPM 编辑与删除",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:119-151,204-279,362-369"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:307-319"
+      ],
+      "conditions": "",
+      "positive": "从含两个 extra 的副本解析，分别编辑参数/事件、移除一个，重新修补并解析。",
+      "acceptance": "最终 extras 与选择一致；保留项未丢失；被移除项不在镜像和下次内核。",
+      "negative": "取消编辑不改变实际镜像；未保存 UI 不计完成。",
+      "phase": "FILE_PATCH",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-34",
+      "title": "内嵌 KPM 启动事件实际效果",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/patch.js:119-151,346-369"
+      ],
+      "mapleSource": [
+        "manager/src/main/assets/maplesu/modules/boot.sh",
+        "runtime/maplesu-sdk/sdk/include/maplesu_module_environment_private.h"
+      ],
+      "conditions": "已验证 KPM 与 boot 回滚",
+      "positive": "以只记录 nonce/受控可观察行为的验证 KPM 在指定 event 嵌入；冷重启后查实。",
+      "acceptance": "事件、参数、唯一 nonce 与内核 probe 同时证明执行；不只看镜像 extra 列表。",
+      "negative": "错误 event/ABI/依赖失败不得报运行通过。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-35",
+      "title": "KPM 动态加载与可观察功能",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:83-85,334-383"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIBridge.kt"
+      ],
+      "conditions": "KPatch、匹配 ABI/内核的验证 KPM",
+      "positive": "用固定 SHA256 验证 KPM 从 WebUI 上传加载；调用其受控功能探针并记录。",
+      "acceptance": "kpatch kpm list/info + 功能 probe 共同证明内核执行。",
+      "negative": "仅命令 exit 0、列表项或 toast 不足；不兼容 KPM 保留真实错误。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-36",
+      "title": "KPM 列表、数量、信息与刷新",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:10-65,88-184"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:202-244"
+      ],
+      "conditions": "",
+      "positive": "加载两个测试 KPM，对照 list/info/num、WebUI 卡片、搜索及下拉/菜单刷新。",
+      "acceptance": "名称、作者、版本、参数、数量和描述匹配真实内核；status 脚本执行成功。",
+      "negative": "空列表正常显示；重复刷新不会重复条目；sh 路径丢失必须被识别。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "SOURCE_FIX_HOST_VERIFIED_DEVICE_PENDING",
+      "hostStatus": "OPTION_BOUNDARY_VERIFIED_FLOW_NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": [],
+      "resolvedGaps": [
+        "KPN-GAP-01"
+      ],
+      "hostEvidence": [
+        "PATH-FIX-HANDOFF.json",
+        "path-green-portable/RESULT.json"
+      ],
+      "remaining": "New APK binding and actual module/device flow; kernel operations require actual KPatch kpimg injection and boot."
+    },
+    {
+      "id": "KPN-37",
+      "title": "KPM ctl0 参数与结果",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:68-70",
+        "source-main/KernelSU-Next-KPatch-Next-Module-b5612ad/webui/page/kpm.js"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:202-244"
+      ],
+      "conditions": "",
+      "positive": "调用验证 KPM ctl0 返回 nonce；分别测试单参数、空格、引号与多参数语义并记录 argv。",
+      "acceptance": "正式 ZIP 的未转义行为和 main 的 shell 转义修复分别验；功能变化由真实内核状态证明。",
+      "negative": "禁止把 main 已修复当正式 ZIP 已修；参数异常保持上游边界，不泛化为全部兼容。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [
+        "KPN-UPSTREAM-01"
+      ],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-38",
+      "title": "KPM 卸载与效果撤销",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:77-81"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "",
+      "positive": "从 WebUI unload 验证 KPM，再查 list/num 和同一功能 probe。",
+      "acceptance": "模块不在内核且效果确实撤销；持久文件按上游 forget 语义删除。",
+      "negative": "卸载返回失败时不得仅从卡片消失判成功。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-39",
+      "title": "KPM forget 只取消持久加载",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:73-75,98-159"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "",
+      "positive": "对仍加载的验证 KPM 使用 forget，再查当前效果和持久文件，再重启。",
+      "acceptance": "当前能力保留、持久文件删除、下次不自动加载；与 unload 分开。",
+      "negative": "删除文件失败保留错误证据；不把 UI 切换当持久状态。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-40",
+      "title": "持久 KPM 自动加载",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:354-365",
+        "release-v0.0.1/service.sh:14-17"
+      ],
+      "mapleSource": [
+        "manager/src/main/assets/maplesu/modules/boot.sh",
+        "manager/src/main/assets/maplesu/modules/run.sh"
+      ],
+      "conditions": "",
+      "positive": "使用默认保存选项加载；确认 persist SHA256；Manager 关闭冷重启；核对实际功能。",
+      "acceptance": "文件与被加载 KPM 绑定，重启后状态和探针恢复，无 Manager 前置。",
+      "negative": "损坏持久文件按上游删除；功能失败不以 started receipt 代替。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-41",
+      "title": "临时 KPM 与重启后缺席",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:354-365"
+      ],
+      "mapleSource": [
+        "manager/src/main/assets/maplesu/modules/boot.sh"
+      ],
+      "conditions": "",
+      "positive": "勾选不保存选项加载另一个 KPM；本次验真后冷重启。",
+      "acceptance": "本次有效，persist 无文件，下次内核无该 KPM 与效果。",
+      "negative": "同名旧持久 KPM 必须先记录清除，避免假阴性/假阳性。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-42",
+      "title": "错误 KPM 与失败语义",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/kpm.js:10-24,83-85,369-380"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "",
+      "positive": "选错 ABI、截断文件、重复加载、模块 init 失败的 fixtures。",
+      "acceptance": "错误有真实 errno/stderr，内核列表与文件状态一致；无虚假完成。",
+      "negative": "失败 KPM 没有残留可观察效果；再次加载正常样本成功。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-43",
+      "title": "应用列表、名称、UID、图标",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/exclude.js:1-57,159-187"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:401-454",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewHelper.kt:135-172"
+      ],
+      "conditions": "",
+      "positive": "对照 pm 和测试包，打开排除页，检查普通/系统应用、标签、UID、ksu://icon。",
+      "acceptance": "列表完整、真实 UID、图标与包对应；错误读包不伪造空成功。",
+      "negative": "不存在包返回明确项错误；多用户同名包差异按固定基线记录。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-44",
+      "title": "应用过滤、搜索与刷新",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/exclude.js:241-318"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:401-454"
+      ],
+      "conditions": "",
+      "positive": "依次切系统/用户应用，搜索名称/包名，刷新并取消搜索。",
+      "acceptance": "每项过滤正确；刷新后持久排除状态保留，图标懒加载正确。",
+      "negative": "无匹配为空且可恢复；不会丢失持久选择。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-45",
+      "title": "应用排除切换与 CSV 持久化",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/exclude.js:62-79,189-221"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "KPatch 与验证 hook KPM",
+      "positive": "切换测试包排除，等待 500ms 保存；读取 CSV，再关闭重开 WebUI。",
+      "acceptance": "CSV 包名/标志/appId 与上游语义一致，内核 exclude_set 返回与 UI 分开记录。",
+      "negative": "命令失败或写失败不以开关位置证明已生效；快速反复切换验证最终状态。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-46",
+      "title": "应用排除真实效果及用户边界",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/page/exclude.js:66-73,192-220",
+        "release-v0.0.1/service.sh:33-40"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:401-454"
+      ],
+      "conditions": "",
+      "positive": "在两个测试 App 与可用用户空间触发同一受控 KPM hook，分别打开/关闭排除并冷重启。",
+      "acceptance": "排除目标实际绕过该 hook、对照仍执行；记录上游 uid%100000 的跨用户 appId 语义。",
+      "negative": "不宣称独立 fullUID 排除；同 appId 不同用户效果必须实际观察。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-47",
+      "title": "rehook 切换、持久化与真实钩子",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/index.js:66-108",
+        "release-v0.0.1/service.sh:19-25"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt:175-244"
+      ],
+      "conditions": "",
+      "positive": "开关 rehook，读 rehook_status 和持久 rehook，再对照受控 hook 探针；重启复验。",
+      "acceptance": "内核状态、持久值、实际 hook 行为一致；操作错误有真实 stderr。",
+      "negative": "仅开关动效或 status.sh description 不证明功能；PATH 包含 sh。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "SOURCE_FIX_HOST_VERIFIED_DEVICE_PENDING",
+      "hostStatus": "OPTION_BOUNDARY_VERIFIED_FLOW_NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": [],
+      "resolvedGaps": [
+        "KPN-GAP-01"
+      ],
+      "hostEvidence": [
+        "PATH-FIX-HANDOFF.json",
+        "path-green-portable/RESULT.json"
+      ],
+      "remaining": "New APK binding and actual module/device flow; kernel operations require actual KPatch kpimg injection and boot."
+    },
+    {
+      "id": "KPN-48",
+      "title": "重启菜单各 reason",
+      "moduleSource": [
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/index.js:56-64,157-166"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "与父代理设备/回滚统一调度",
+      "positive": "在可恢复测试阶段分别验证正常、recovery、bootloader 等实际菜单 reason，记录启动模式。",
+      "acceptance": "命令退出/断连与实际设备启动模式一致；recovery 输入熄屏流程正确。",
+      "negative": "不因正常 reboot 成功推断所有 reason；未执行 reason 标 NOT_RUN。",
+      "phase": "FLASH_REBOOT",
+      "riskClass": "device_reboot",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-49",
+      "title": "外部链接和 action.sh",
+      "moduleSource": [
+        "release-v0.0.1/action.sh",
+        "source-v0.0.1/KernelSU-Next-KPatch-Next-Module-57fe983/webui/index.js:124-138"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/com/maplesu/core/ui/webui/ModuleWebViewClient.kt:35-44",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt"
+      ],
+      "conditions": "",
+      "positive": "先内联验收，再单独测试模块 action 的外部 WebUI 已装/未装分支及设置链接。",
+      "acceptance": "链接目标与上游对应；内联 WebUI 正常不依赖外部安装器；浏览器缺失可返回。",
+      "negative": "外部页加载不冒充 Maple 内联 bridge 功能通过。",
+      "phase": "UI_READ",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    },
+    {
+      "id": "KPN-50",
+      "title": "KPatch 注入后 Ultra 双能力和识别",
+      "moduleSource": [
+        "release-v0.0.1/patch/boot_patch.sh",
+        "release-v0.0.1/bin/kpimg"
+      ],
+      "mapleSource": [
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/workmode/ModeRuntime.kt"
+      ],
+      "conditions": "",
+      "positive": "完成 KPatch+Maple 真实启动后核 Maple Root、授权、模块、隐藏/免 Key 冷启相关既有验证；同时验证 KPM。",
+      "acceptance": "工作模式仍按真实来源为 Ultra；Maple 与 KPatch 的独立功能探针均通过；未因 kpatch 名称误识别 KSU。",
+      "negative": "单侧功能成功不推断共存；KernelPatch 注入与 Maple 反修补/备份选择冲突须独立失败项。",
+      "phase": "KERNEL_EFFECT",
+      "riskClass": "reversible",
+      "gaps": [],
+      "sourceStatus": "REVIEWED",
+      "hostStatus": "NOT_RUN",
+      "artifactStatus": "OFFICIAL_ZIP_BOUND; MAPLE_APK_NOT_BOUND",
+      "deviceStatus": "NOT_RUN",
+      "deviceEvidence": []
+    }
+  ],
+  "totals": {
+    "functions": 50,
+    "devicePassed": 0,
+    "deviceNotRun": 48,
+    "productionEdits": 1,
+    "deviceOperations": 0,
+    "testFilesAdded": 1,
+    "hostOptionBoundaryTestsPassed": 10,
+    "relatedJUnitTotalPassed": 19,
+    "moduleDeviceFlowsPassed": 0,
+    "deviceBaselinePartial": 2,
+    "parentDeviceProbeEvidence": "../DEVICE/kpatch-hello/RESULT.json"
+  }
+}

@@ -84,4 +84,11 @@ class UltraEnvironmentPanelSchedulingTest {
         assertTrue(refreshGate.contains("reading?.isActive == true"))
         assertTrue(refreshGate.contains("ModeRuntime.active != WorkMode.LITE"))
     }
+
+    @Test fun aReadableVersionDoesNotStopRetriesWhileTheUpdateReadIsIncomplete() {
+        val refresh = source().substringAfter("fun refresh()").substringBefore("private fun readInstalledVersion")
+        assertTrue(refresh.contains("version != null && !readUnknown"))
+        assertTrue(refresh.contains("coerceAtMost(8_000L)"))
+        assertFalse(refresh.contains("toast("))
+    }
 }

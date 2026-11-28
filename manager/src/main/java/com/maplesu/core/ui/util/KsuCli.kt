@@ -974,9 +974,6 @@ fun installBoot(
             UltraDirectEnvironmentUpgrade.unavailable(ksuApp, installationTaskId, decision)
         },
         patchBoot = { null },
-        requiresKernelUpdate = {
-            dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.required(ksuApp)
-        },
     )
     if (environmentResult != null) return environmentResult
     // 只有"安装页显式选了目标"或 Normal 路径才播报目标行：旧调用点（无 targetMode）的
@@ -1088,9 +1085,7 @@ internal fun installUltraKernelUpdate(taskId: String, onTaskSelected: (String) -
             "ULTRA_KERNEL_UPGRADE_MODE_CHANGED"
         }
         val observed = InstallerServiceClient.observeBootChain(ksuApp)
-        val carrier = requireNotNull(InstallerServiceClient.installedCarrierPartition(ksuApp, observed)) {
-            "ULTRA_KERNEL_UPGRADE_CARRIER_UNPROVEN"
-        }
+        val carrier = InstallerServiceClient.installedPartition(ksuApp, observed)
         verifyScope()
         Triple(observed, carrier, dev.maplesu.manager.installer.UltraKernelEnvironmentUpgrade.signingOptions(ksuApp))
     } catch (error: Exception) {

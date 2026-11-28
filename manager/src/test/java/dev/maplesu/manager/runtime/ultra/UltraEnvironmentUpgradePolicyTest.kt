@@ -33,6 +33,41 @@ class UltraEnvironmentUpgradePolicyTest {
         assertEquals(UltraEnvUpgrade.Available(from = "4.6.5", to = "5.0.5"), decide(olderRunning))
     }
 
+    @Test fun confirmedVersionDifferencesDoNotDependOnHelperOrHistoricalRecords() {
+        for ((installed, bundled) in listOf("5.2.0" to "5.2.1", "4.6.5" to "5.2.1",
+            "5.9.99" to "5.10.0", "5.99.99" to "6.0.0", " 5.2.0 " to " 5.2.1 ")) {
+            val facts = UltraEnvFacts(running = true, installedVersion = installed,
+                bundledVersion = bundled, identityKnown = true)
+            assertEquals("$installed -> $bundled",
+                UltraEnvUpgrade.Available(installed.trim(), bundled.trim()), decide(facts))
+            assertEquals("newer installed $bundled", UltraEnvUpgrade.None,
+                decide(facts.copy(installedVersion = bundled, bundledVersion = installed)))
+        }
+    }
+
+    @Test fun delayedReadsStaySilentAndTheNextCompleteReadFindsTheUpgrade() {
+        val complete = olderRunning.copy(observationScope = "boot-and-owner", identityKnown = true)
+        var observed: UltraEnvObservation? = null
+        repeat(5) {
+            observed = UltraEnvObservation.observe(observed, complete.copy(installedVersion = null,
+                readUnknown = true), complete.observationScope)
+            assertEquals(UltraEnvUpgrade.None, observed!!.upgrade)
+            assertTrue(observed.readUnknown)
+        }
+        observed = UltraEnvObservation.observe(observed, complete, complete.observationScope)
+        assertEquals(UltraEnvUpgrade.Available("4.6.5", "5.0.5"), observed!!.upgrade)
+        assertFalse(observed.readUnknown)
+        val busy = UltraEnvObservation.observe(observed, complete.copy(readUnknown = true),
+            complete.observationScope)!!
+        assertTrue(busy.readUnknown)
+        assertFalse(!busy.readUnknown && busy.upgrade is UltraEnvUpgrade.Available)
+        val current = UltraEnvObservation.observe(busy, complete.copy(installedVersion = "5.0.5",
+            installedHelperSha256 = "a".repeat(64), bundledHelperSha256 = "a".repeat(64)),
+            complete.observationScope)!!
+        assertEquals(UltraEnvUpgrade.None, current.upgrade)
+        assertFalse(current.readUnknown)
+    }
+
     @Test fun sameOrNewerEnvironmentIsNeverDowngraded() {
         assertEquals(UltraEnvUpgrade.None, decide(olderRunning.copy(installedVersion = "5.0.5")))
         assertEquals(UltraEnvUpgrade.None, decide(olderRunning.copy(installedVersion = "5.1.0")))

@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.splashscreen.SplashScreenViewProvider
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -517,11 +518,16 @@ class MainActivity : ComponentActivity() {
                             entry<Route.Recovery>(swipeDismiss = if (recoveryBackEnabled) swipeDismiss else NavSwipeDirection.None) { key ->
                                 dev.maplesu.manager.workmode.ui.RecoveryScreen(
                                     switchId = key.switchId,
+                                    runtime = dev.maplesu.manager.workmode.ui.ProductionRecoveryRuntime,
                                     onBackEnabledChange = { enabled ->
                                         if (navigator.current() == key) recoveryBackEnabled = enabled
                                     },
                                     onOpenDiagnosis = {
                                         navigator.push(Route.Diagnosis(key.switchId))
+                                    },
+                                    onOpenEnvironmentSettings = {
+                                        if (Route.Settings in navigator.backStack) navigator.popUntil { it == Route.Settings }
+                                        else navigator.push(Route.Settings)
                                     },
                                 )
                             }
@@ -559,7 +565,14 @@ class MainActivity : ComponentActivity() {
                             entry<Route.Home>(swipeDismiss = swipeDismiss) { mainScreenEntry() }
                             entry<Route.SuperUser>(swipeDismiss = swipeDismiss) { mainScreenEntry() }
                             entry<Route.Module>(swipeDismiss = swipeDismiss) { mainScreenEntry() }
-                            entry<Route.Settings>(swipeDismiss = swipeDismiss) { mainScreenEntry() }
+                            entry<Route.Settings>(swipeDismiss = swipeDismiss) {
+                                SettingPager(
+                                    navigator = navigator,
+                                    bottomInnerPadding = 0.dp,
+                                    isCurrentPage = true,
+                                    onBack = { navigator.pop() },
+                                )
+                            }
                         }
                     }
 

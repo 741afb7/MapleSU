@@ -17,6 +17,7 @@ object UltraAutoPair {
         val owner = observation.managerOwnerIdentity
         if (owner == null && observation.legacyCredentialFingerprint == null)
             return Result(false, observation.state, "INSTALL_IDENTITY_PENDING")
+        rootFailure(observation)?.let { return it }
         val current = UltraSdkCredentials.captureOwnerMarker(app)
         val scope = (if (owner != null) UltraAuthorization.captureOwnerScope(app, owner, current)
             else UltraAuthorization.captureScope(app)?.takeIf {
@@ -35,7 +36,7 @@ object UltraAutoPair {
 
     internal fun complete(observation: UltraEnvironmentProbe.Snapshot, current: () -> Boolean,
                           verifyManagerSu: () -> Boolean, maintain: () -> Unit): Result {
-        if (!observation.rootAvailable) return Result(false, observation.state, "SDK_ROOT_UNVERIFIED")
+        rootFailure(observation)?.let { return it }
         if (!current()) return Result(false, UltraEnvironmentProbe.State.Unknown, "SDK_IDENTITY_SCOPE_CHANGED")
         val verified = try {
             !Thread.currentThread().isInterrupted && verifyManagerSu()
@@ -51,5 +52,11 @@ object UltraAutoPair {
         if (verified) maintain()
         return if (current()) Result(verified, observation.state, if (verified) "RUNNING" else "MANAGER_SU_UNVERIFIED")
             else Result(false, UltraEnvironmentProbe.State.Unknown, "SDK_IDENTITY_SCOPE_CHANGED")
+    }
+
+    private fun rootFailure(observation: UltraEnvironmentProbe.Snapshot): Result? {
+        if (observation.rootAvailable) return null
+        val detail = observation.rootProbeDetail?.takeIf(String::isNotBlank)?.let { UltraSdkLogging.redact(it) }
+        return Result(false, observation.state, "SDK_ROOT_UNVERIFIED" + detail?.let { ":$it" }.orEmpty())
     }
 }

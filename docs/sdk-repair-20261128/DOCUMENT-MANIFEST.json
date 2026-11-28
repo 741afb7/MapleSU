@@ -1,0 +1,186 @@
+{
+  "schema": "maplesu-development-document-manifest/1",
+  "date": "2026-11-28",
+  "files": [
+    {
+      "path": "docs/development/SDK-COMPLETE-REPAIR-AGENT-PROMPT-20261128.md",
+      "bytes": 4400,
+      "sha256": "842f27c04e9ce9f646f436e4c4fdbb18b0237f8cbc27c0e5b6ae295a1633c8ed"
+    },
+    {
+      "path": "docs/development/SDK-COMPLETE-REPAIR-DEVELOPMENT-20261128.md",
+      "bytes": 5616,
+      "sha256": "afa59e61bd11fdd8d8220a9e54313dc61672d2eb07b9e12ef87afc933bc0310b"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/CURRENT-STATUS.md",
+      "bytes": 2827,
+      "sha256": "86c9eeb4788207171ce8477916792df605cc1998126dcb80a59cb3be28986f9d"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/evidence/manager-junit.txt",
+      "bytes": 16362,
+      "sha256": "e75e64e74df7ffdc2a9de1263096ee7d54bcf575cfa97b394cb39e9824c76fc3"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/evidence/manager-k2.txt",
+      "bytes": 4899,
+      "sha256": "5e04f2c815a25db96cc944012e3f0e692d419b54e9715b2f422cf08d7e1e7d5b"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/evidence/manager-regression-summary.json",
+      "bytes": 2415,
+      "sha256": "22722e439dd12b30433ab507198d06f32433d3c6868fa353ece01fbfef5d4907"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/evidence/root-return-diagnostic.txt",
+      "bytes": 7079,
+      "sha256": "352998391c56c35c9fbdd2b039e7be873a66426c52fb7dc5e41fd847a2221382"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/INPUT-PROVENANCE.json",
+      "bytes": 7654,
+      "sha256": "6bab74ef1ab0728890827cf90afdd1b2d0ac4ce3a31fa8226c00ac435cafb1c5"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/ACCEPTANCE.csv",
+      "bytes": 30780,
+      "sha256": "99cdab0d871bea92a5fd6541e9e7d28d0bba38964cee1b6b3d2499c26145635d"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/CONTINUOUS-CONDITIONS.json",
+      "bytes": 82503,
+      "sha256": "a4a3ed5cd917262cb209553252ed2f4d8fe0a80270494a3b03a7c5cd6158c7c6"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/DEVELOPMENT-MATRIX.json",
+      "bytes": 1114639,
+      "sha256": "5d15d3c940fae47aa6fb46cd09a315a4131604396edd441597b14c82a4414cb2"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FEEDBACK-ACTION.md",
+      "bytes": 18504,
+      "sha256": "8d1df8486253b168cc03f54328c2cbe8e75204c3a0144ba2befba04b80033397"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FEEDBACK-ISSUES.md",
+      "bytes": 63640,
+      "sha256": "c2fd95238902d8bf75b71ce17f2aba7b45225cf638fc4dbdb2310b211487ee7a"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FEEDBACK-ORIGINAL.json",
+      "bytes": 29454,
+      "sha256": "e8325983fd7b35daee2b7805c46cfd34cb690787c432d199dda7f6128d0c5530"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FINAL-REQUIREMENTS-REVIEW.json",
+      "bytes": 129161,
+      "sha256": "3b248060de1918c049ac536a0c71c9ea1cc432db82e600644a4e988f10770662"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FINAL-REQUIREMENTS-REVIEW.md",
+      "bytes": 7760,
+      "sha256": "3651cb95eeec9bef34c7337e66c65f651f52e0e6ccb525a2f9d997e61614efab"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/KEYLESS-DEVELOPMENT.md",
+      "bytes": 45878,
+      "sha256": "54a552436b4cdbf580ba61b44d8f11af5a9db86b40035b36e32d1a37c672a3f0"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/KPATCH-NEXT-FUNCTION-MATRIX.json",
+      "bytes": 56417,
+      "sha256": "9399d8c97b19e6e8280797f2bf36d781921161daea7112774337b9c28c884145"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/ORIGINAL-HASH-COVERAGE.json",
+      "bytes": 24401,
+      "sha256": "c936642c7b25522ea2c39ec5bd3312f017830d9b96de3e9a2e52db10157bbd4e"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/ORIGINAL-ID-CHECKS.json",
+      "bytes": 18801,
+      "sha256": "3fd46e35ad179ea034f76b0c2ddb62bf831cc87caff2e71106b2f4a5b6a1fae2"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/ORIGINAL-ID-SCOPE-MAP.json",
+      "bytes": 9890,
+      "sha256": "1053f9e3798053ba7ba3d9e4b3328cf4a7c1408aa3a2c8e0af9dad9723eff189"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/REQUIREMENT-SOURCE-AUDIT.json",
+      "bytes": 1248592,
+      "sha256": "ebcd80cbc755008719e368636d833f7209f0f7032f6d65d1af8cc18265bc6f0c"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/REQUIREMENTS-LEDGER.jsonl",
+      "bytes": 1093082,
+      "sha256": "fceb181c514eeeb296560f4c9df5825ef202a6785eadbe60784f7e97d6228aad"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/SDK-REFACTOR-PROGRESS.md",
+      "bytes": 262970,
+      "sha256": "cf7536515103e28cc22570faf78d01dd7f6f11faf31cdff02374bedacb6c7a3a"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/SDK-REFACTOR-REQUIREMENTS.md",
+      "bytes": 218872,
+      "sha256": "adc0f7e551b6c7d6b3f707a99370b366518528767aa38bd836bd4a05282b3d19"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/README.md",
+      "bytes": 2160,
+      "sha256": "ab87cb4545fd4cfbd726dab4fe53fca7b6d2832993599ab5ad2d00c0465927ba"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/LICENSE",
+      "bytes": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/manager/app/src/main/java/me/weishu/kernelsu/ui/screen/home/HomeMaterial.kt",
+      "bytes": 23544,
+      "sha256": "937ea290120a34230ca29095473ead945704f888ec24c99fc237698a331e0e77"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/manager/app/src/main/java/me/weishu/kernelsu/ui/screen/home/HomeMiuix.kt",
+      "bytes": 29236,
+      "sha256": "0e9fc96ef4f3b8ea883167c3a1a6ecf3841eb7629952be73f51f87bbd62eb2ee"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/manager/app/src/main/java/me/weishu/kernelsu/ui/screen/home/HomeScreen.kt",
+      "bytes": 3494,
+      "sha256": "f3ef74ce1c848b0b6ee685e0dc18d1ab3e25982800b4905e37904536b7496986"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/manager/app/src/main/java/me/weishu/kernelsu/ui/screen/home/HomeUiState.kt",
+      "bytes": 2110,
+      "sha256": "70505fbb135d1177769bf926c2d3d708fada303226d6bc951a78da7451589e24"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/manager/app/src/main/java/me/weishu/kernelsu/ui/screen/settings/SettingsMaterial.kt",
+      "bytes": 21123,
+      "sha256": "6472024ab1047f684a754c8706899979f9cfa67116bf8069875c9cf27240e691"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/manager/app/src/main/java/me/weishu/kernelsu/ui/screen/settings/SettingsMiuix.kt",
+      "bytes": 27456,
+      "sha256": "3ca443ce91799eee7a0289ee6f3e995c83b03fa069c64697664713ddab42d29f"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/manager/app/src/main/java/me/weishu/kernelsu/ui/screen/settings/SettingsScreen.kt",
+      "bytes": 2887,
+      "sha256": "ff593134f77ca649fccd560a5367ac87d7efe63f8d8eb384bfae881aefb98c51"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/references/KernelSU/SOURCE.json",
+      "bytes": 1866,
+      "sha256": "c840a6932a7d9ca6e4e34dcaeb0f3a47bbc35f51eca4262b95988382e65b5b4d"
+    },
+    {
+      "path": "docs/sdk-repair-20261128/SOURCE-CHECKPOINT.json",
+      "bytes": 34170,
+      "sha256": "edabc01877582768fa4e8f851c7227c6e3a6ac142e9c42a0a9897c77a3eb095c"
+    }
+  ]
+}

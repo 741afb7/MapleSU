@@ -2,17 +2,30 @@ package com.maplesu.core.ui.viewmodel
 
 import java.io.File
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** The Android VM must apply the same live-Ultra-first branch covered by detector tests. */
+/** The Android VM binds identity and Root health to this session's own observation. */
 class HomeUltraStartupRoutingContractTest {
-    @Test fun verifiedUltraIdentityKeepsTheLegacyRuntimeOutOfTemporaryProbeFailures() {
+    @Test fun verifiedUltraIdentityUsesOneFreshHealthReturnWithoutRepeatingTheProbe() {
         val relative = "src/main/java/com/maplesu/core/ui/viewmodel/HomeViewModel.kt"
         val source = listOf(File(relative), File("manager/$relative")).first { it.isFile }.readText().replace("\r\n", "\n")
-        val branch = source.substringAfter("ModeRuntime.runIfLite {").substringBefore("val ultraEnvironmentRunning")
-        val ultra = branch.indexOf("UltraEnvironmentProbe.refresh(ksuApp, force = false) == UltraEnvironmentProbe.State.Running")
-        val legacy = branch.indexOf("if (!ultraRunning && !UltraEnvironmentProbe.usesUltraBackend(ksuApp) &&\n                    !UltraEnvironmentProbe.isSafeMode(ksuApp) && MapleSuRuntime.refresh(ksuApp))")
-        assertTrue("live SDK result must be read before legacy work", ultra >= 0 && legacy > ultra)
-        assertTrue("a failed SDK refresh must still check verified identity", branch.contains(".getOrDefault(false)"))
+        val collection = source.substringAfter("private suspend fun collectEnvironment(")
+            .substringBefore("private suspend fun refreshInformation(")
+        assertEquals(1, Regex("UltraEnvironmentProbe\\.observeFresh\\(ksuApp\\)").findAll(collection).count())
+        assertTrue(collection.contains("val knownUltra = evidence?.verdict == EnvironmentVerdict.ULTRA"))
+        assertTrue(collection.contains("healthObservation = observation"))
+        assertTrue(collection.contains("projected.afterUltraEnvironmentHealth("))
+        assertTrue(collection.contains("expectedOwner = evidence?.ultraOwnerIdentity"))
+        assertFalse(collection.contains("currentSnapshot("))
+        val build = source.substringAfter("private fun buildState(")
+        assertFalse(build.contains("UltraEnvironmentProbe.refresh("))
+        assertFalse(build.contains("UltraEnvironmentProbe.currentSnapshot("))
+        assertFalse(build.contains("MapleSuRuntime.refresh("))
+        val identity = build.substringAfter("val environmentMode = when (evidence?.verdict)")
+            .substringBefore("val confirmedNotInstalled")
+        assertTrue(identity.contains("else -> null"))
+        assertFalse(identity.contains("ModeRuntime.active"))
     }
 }

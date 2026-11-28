@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-/* Isolated prototype. This is not installed into the product or a syscall.
- * Existing K22 thread marker is scoped to synchronous protected-file reads.
- * It is NOT a new SELinux policy, global allowance or permanent root grant.
+/* Protected synchronous installation I/O. Native reads retain PID1's live
+ * credential; the legacy K22 marker remains scoped to its own carrier.
+ * No SELinux policy, global allowance or permanent root grant is added.
  * Disk snapshots are not synchronized with the PMS in-memory commit lock. */
 #include <linux/cred.h>
 #include <linux/err.h>
@@ -24,7 +24,11 @@
 
 struct msu_io_scope {
     const struct cred *old_cred;
+#ifdef MSU_BOOT_SDK_NATIVE
+    const struct cred *io_cred;
+#else
     char saved_comm[TASK_COMM_LEN];
+#endif
     bool active;
 };
 struct msu_document {
@@ -226,33 +230,64 @@ _Static_assert(sizeof(msu_resolver_target_layout) / sizeof(unsigned int) ==
     6 + 3 * 66, "resolver target layout schema");
 #undef MSU_RESOLVER_TYPE
 #undef MSU_RESOLVER_FIELD
+#ifdef MSU_BOOT_SDK_NATIVE
+static const struct cred *msu_pid1_io_cred(void)
+{
+    struct task_struct *init;
+    const struct cred *cred;
+    rcu_read_lock();
+    init = find_task_by_pid_ns(1, &init_pid_ns);
+    if (init) msu_dynamic_get_task_struct(init);
+    rcu_read_unlock();
+    if (!init) return ERR_PTR(-ENOENT);
+    /* PID1's live credential carries the platform init domain. The static
+     * init_cred remains in the kernel domain and does not grant Android /data
+     * reads. Retain this immutable snapshot only for synchronous internal I/O. */
+    cred = get_task_cred(init);
+    msu_dynamic_put_task_struct(init);
+    return cred;
+}
+#endif
 static int msu_io_enter(struct msu_io_scope *scope)
 {
+#ifndef MSU_BOOT_SDK_NATIVE
     static const u64 marker = 0xf000f000f000f000ULL;
+#endif
     memset(scope, 0, sizeof(*scope));
     if (!msu_runtime_layout_ready()) return -EPROTO;
     /* The generated hook resolves comm independently from cred. Keep the
      * caller's credential contract without imposing the old field adjacency. */
     if (msu_dynamic_current_cred() != rcu_access_pointer(MSU_DYN_FIELD(current, task_struct, real_cred)))
         return -EOPNOTSUPP;
+#ifdef MSU_BOOT_SDK_NATIVE
+    scope->io_cred = msu_pid1_io_cred();
+    if (IS_ERR(scope->io_cred)) return PTR_ERR(scope->io_cred);
+    scope->old_cred = override_creds(scope->io_cred);
+#else
     msu_dynamic_task_lock(current);
     memcpy(scope->saved_comm, MSU_DYN_FIELD(current, task_struct, comm), TASK_COMM_LEN);
     memcpy(MSU_DYN_FIELD(current, task_struct, comm), &marker, sizeof(marker));
     msu_dynamic_task_unlock(current);
     scope->old_cred = override_creds(&init_cred);
+#endif
     scope->active = true;
     return 0;
 }
 static void msu_io_leave(struct msu_io_scope *scope)
 {
     if (!scope->active) return;
+#ifndef MSU_BOOT_SDK_NATIVE
     /* Restore the marker before reverting root subjective creds. Signals only
      * resume user handlers after this synchronous kernel invocation returns.
      * No spinlock is held across sleeping I/O and other threads keep own creds. */
     msu_dynamic_task_lock(current);
     memcpy(MSU_DYN_FIELD(current, task_struct, comm), scope->saved_comm, TASK_COMM_LEN);
     msu_dynamic_task_unlock(current);
+#endif
     revert_creds(scope->old_cred);
+#ifdef MSU_BOOT_SDK_NATIVE
+    msu_dynamic_put_cred(scope->io_cred);
+#endif
     scope->active = false;
 }
 static int msu_pid1_root(struct path *root)

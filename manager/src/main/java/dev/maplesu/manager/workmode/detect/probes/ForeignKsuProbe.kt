@@ -38,10 +38,10 @@ internal class ForeignKsuProbe(
     private var cached: Boolean? = null
 
     /** true = 有内核在响应；false = 明确没有；null = 这次读不到。 */
-    fun kernelResponds(): Boolean? {
+    fun kernelResponds(fresh: Boolean = false): Boolean? {
         if (Thread.currentThread().isInterrupted) throw InterruptedException("FOREIGN_KSU_PROBE_INTERRUPTED")
         val now = nanoTime()
-        if (cachedAtMillis != Long.MIN_VALUE && now - cachedAtMillis in 0 until CACHE_MILLIS) {
+        if (!fresh && cachedAtMillis != Long.MIN_VALUE && now - cachedAtMillis in 0 until CACHE_MILLIS) {
             Log.i(TAG, "foreign ksu probe cached=$cached")
             return cached
         }
@@ -56,8 +56,10 @@ internal class ForeignKsuProbe(
         } catch (_: Throwable) {
             null
         }
-        cached = answer
-        cachedAtMillis = now
+        if (!fresh) {
+            cached = answer
+            cachedAtMillis = now
+        }
         Log.i(TAG, "foreign ksu probe answer=$answer took=${nanoTime() - startedAt}ms")
         return answer
     }

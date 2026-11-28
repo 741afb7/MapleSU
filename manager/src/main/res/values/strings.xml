@@ -7,6 +7,7 @@
          resolved. This is NOT "not installed"; it must never be rendered as such. -->
     <string name="home_status_checking">Checking environment…</string>
     <string name="home_status_checking_summary">Confirming the MapleSU runtime, please wait</string>
+    <string name="home_environment_previous_status">Last confirmed: %1$s. The current boot environment is not confirmed yet.</string>
     <!-- Second fact source (2026-11-02 reboot regression): a real SU probe returned uid 0, but
          the installation record is missing or belongs to a previous boot. This is NOT "not
          installed": it never activates a backend and grants no root by itself. -->
@@ -413,7 +414,7 @@
     <string name="ultra_env_update_unverified_confirm">Upgrade to %1$s and retain authorizations and module data. The device will restart afterward; save your work first.</string>
     <string name="ultra_env_update_title">Environment update</string>
     <string name="ultra_env_update_check_none">No confirmed environment update was found.</string>
-    <string name="ultra_env_update_check_failed">Environment update check did not finish. Tap to try again.</string>
+    <string name="ultra_env_update_check_failed">Ultra update check returned an error. Tap to try again.</string>
     <string name="hook_su_channel">Hook superuser session</string>
     <string name="hook_su_running">Jailbreak mode active · Superuser access available</string>
 
@@ -440,4 +441,8 @@
     <string name="install_ultra_current_carrier">Current carrier / slot</string>
     <string name="install_ultra_carrier_unknown">Unconfirmed</string>
     <string name="ultra_init_components_unavailable">This build has no init_boot components. Install a build that includes the component for the target KMI, then retry.</string>
+    <string name="ultra_sdk_install_title">SDK installation and upgrade</string>
+    <string name="ultra_sdk_install_summary">Install the bundled SDK and update authorization automatically. The device may restart.</string>
+    <string name="ultra_sdk_install_action">Install / upgrade</string>
+    <string name="ultra_sdk_install_submitted">SDK installation submitted. Setup will continue automatically after restart.</string>
 </resources>

@@ -17,14 +17,14 @@ fun RecoveryScreenMaterial(state: RecoveryUiState, actions: RecoveryActions) {
     ) {
         WorkModeSectionMaterial {
             when {
-                state.loading -> {
+                state.loading || state.actionRunning -> {
                     Text(style = MaterialTheme.typography.titleMedium, text = stringResource(R.string.recovery_loading))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 state.unavailable -> Text(style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, text = stringResource(R.string.recovery_unavailable))
                 else -> {
                     Text(style = MaterialTheme.typography.titleMedium, text = stringResource(RecoveryStrings.action(state.action)))
-                    Text(style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, text = stringResource(RecoveryStrings.next(state.decision?.nextStepKey)))
+                    Text(style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, text = stringResource(RecoveryStrings.next(state.nextStepKey)))
                     state.baselineState?.let { Text(style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, text = stringResource(RecoveryStrings.baseline(it))) }
                     if (state.diagnosticOnly) Text(style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, text = stringResource(R.string.recovery_diagnostic_only))
                     if (state.decision?.allowed?.any { it in setOf(
@@ -60,10 +60,16 @@ fun RecoveryScreenMaterial(state: RecoveryUiState, actions: RecoveryActions) {
         }
         WorkModeSectionMaterial {
             OutlinedButton(onClick = actions.onOpenDiagnosis, enabled = true, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.recovery_open_diagnosis)) }
+            OutlinedButton(onClick = actions.onOpenEnvironmentSettings, enabled = !state.blocksBack, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.settings)) }
             if (actions.exportAvailable) { OutlinedButton(onClick = actions.onExportDiagnostics, enabled = true, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.recovery_export_diagnostics)) } }
-            OutlinedButton(onClick = actions.onRefresh, enabled = !state.loading, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.recovery_refresh)) }
+            OutlinedButton(onClick = actions.onRefresh, enabled = !state.loading && !state.actionRunning, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.recovery_refresh)) }
         }
         val technical = buildList {
+            state.status?.let {
+                add("switch.id=${state.switchId}; state=${it.stateWire}; stage=${it.stage}; step=${it.step}")
+                if (it.code.isNotBlank()) add("error=${it.code}")
+                if (it.detail.isNotBlank()) add(it.detail)
+            }
             state.decision?.let { decision ->
                 add("switch.id=${state.switchId}")
                 add("recovery.action=${decision.action.wire}")

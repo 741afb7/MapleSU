@@ -536,7 +536,7 @@ object UltraRootKeyStore {
     /** An explicit uninstall must survive reboot without startup reinstalling it. */
     fun isSuspended(context: Context): Boolean = context
         .ultraPreferences(PREFS, Context.MODE_PRIVATE)
-        .getString(REMOVAL, null) != null
+        .contains(REMOVAL)
 
     @Synchronized
     fun recordRemoval(context: Context, permanent: Boolean) {

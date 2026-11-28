@@ -318,7 +318,7 @@ class HomeLiteInstalledHintTest {
         assertEquals(
             "判定落定仍无证据 → 清种子（否则下次冷启动继续误报已安装）",
             HomeLiteHintUpdate.CLEAR,
-            LiteStartupStatusPolicy.hintUpdate(facts(modeSettled = true)),
+            LiteStartupStatusPolicy.hintUpdate(facts(modeSettled = true, detectedState = ModeState.NOT_INSTALLED)),
         )
         assertEquals(
             "KSU 明确不是 Lite → 清种子",
@@ -330,5 +330,17 @@ class HomeLiteInstalledHintTest {
             HomeLiteHintUpdate.WRITE,
             LiteStartupStatusPolicy.hintUpdate(facts(liteEvidence = true, modeSettled = true)),
         )
+    }
+
+    @Test
+    fun anUnknownCompletedRoundDoesNotEraseTheLastConfirmedHint() {
+        for (detected in listOf(null, ModeState.INDETERMINATE)) {
+            assertEquals(HomeLiteHintUpdate.NONE, LiteStartupStatusPolicy.hintUpdate(
+                facts(modeSettled = true, detectedState = detected, lastKnownInstalled = true),
+            ))
+            assertNull(LiteStartupStatusPolicy.hintEvidence(
+                facts(modeSettled = true, detectedState = detected, lastKnownInstalled = true),
+            ))
+        }
     }
 }

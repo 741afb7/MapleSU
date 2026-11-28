@@ -132,6 +132,21 @@ final class UltraInitRamdisk {
         return record;
     }
 
+    /** Called only after the caller verifies the complete owned-image manifest. */
+    static byte[] readLegacyDeploymentNamespace(byte[] cpio) throws IOException {
+        RamdiskInspector.Entry entry = unique(inspect(cpio), CREDENTIAL);
+        if (entry == null) return null;
+        if (!entry.path.equals(CREDENTIAL) || entry.mode != 0100600 || entry.uid != 0 || entry.gid != 0 ||
+                entry.links != 1 || entry.size != 48) throw error("LEGACY_DEPLOYMENT_METADATA");
+        byte[] credential = Arrays.copyOfRange(cpio, (int) entry.offset, (int) (entry.offset + entry.size));
+        try {
+            UltraInitBootProducer.credentialShape(credential);
+            return java.nio.ByteBuffer.allocate(24).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    .putInt(0x4e44534d).putShort((short) 1).putShort((short) 24)
+                    .put(credential, 0, 16).array();
+        } finally { Arrays.fill(credential, (byte) 0); }
+    }
+
     private static RamdiskInspector.Entry unique(RamdiskInspector.Report report, String path) throws IOException {
         RamdiskInspector.Entry found = null;
         for (RamdiskInspector.Entry entry : report.entries) if (canonical(entry.path).equals(path)) {

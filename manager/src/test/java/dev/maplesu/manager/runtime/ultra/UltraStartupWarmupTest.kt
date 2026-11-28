@@ -137,7 +137,7 @@ class UltraStartupWarmupTest {
         assertEquals(listOf("setup", "pair"), calls)
     }
 
-    @Test fun healthyLiveEnvironmentRequestsDetectionBeforeManagerSuPairing() {
+    @Test fun healthyLiveEnvironmentFinishesManagerSuPairingBeforeDetection() {
         for (ready in listOf(true, false)) {
             val calls = mutableListOf<String>()
             val result = UltraStartupWarmup.run(pending.copy(liveEnvironmentReady = true,
@@ -147,12 +147,12 @@ class UltraStartupWarmupTest {
                 pairEnvironment = { calls += "manager-su"; ready },
                 retryDetection = { calls += "detect" })
             assertEquals(ready, result.paired)
-            assertEquals(listOf("detect", "manager-su"), calls)
+            assertEquals(listOf("manager-su") + if (ready) listOf("detect") else emptyList(), calls)
             assertEquals(if (ready) "RUNNING" else "MANAGER_SU_UNVERIFIED", result.reason)
         }
     }
 
-    @Test fun recoveredIdentityRequestsDetectionBeforeSetupWithoutRepeatingAfterPairing() {
+    @Test fun recoveredIdentityFinishesSetupAndPairingBeforeRequestingDetection() {
         for (ready in listOf(true, false)) {
             val calls = mutableListOf<String>()
             val result = UltraStartupWarmup.run(pending.copy(pendingInstall = false,
@@ -163,12 +163,12 @@ class UltraStartupWarmupTest {
                 retryDetection = { calls += "detect" })
             assertTrue(result.ran)
             assertEquals(ready, result.paired)
-            assertEquals(listOf("identity", "detect", "setup", "pair"), calls)
+            assertEquals(listOf("identity", "setup", "pair") + if (ready) listOf("detect") else emptyList(), calls)
             assertEquals(if (ready) "RUNNING" else "NOT_RUNNING", result.reason)
         }
     }
 
-    @Test fun verifiedEvidenceRequestsDetectionBeforeSetupOrPairingFailure() {
+    @Test fun recoveredIdentityDoesNotChangeActivationBeforeSetupCompletes() {
         for (live in listOf(true, false)) {
             val calls = mutableListOf<String>()
             val expectedFailure = IllegalStateException("setup or pairing failed")
@@ -180,8 +180,8 @@ class UltraStartupWarmupTest {
                     retryDetection = { calls += "detect" })
             }.exceptionOrNull()
             assertTrue(failure === expectedFailure)
-            assertEquals(if (live) listOf("detect", "pair") else
-                listOf("identity", "detect", "setup"), calls)
+            assertEquals(if (live) listOf("pair") else
+                listOf("identity", "setup"), calls)
         }
     }
 

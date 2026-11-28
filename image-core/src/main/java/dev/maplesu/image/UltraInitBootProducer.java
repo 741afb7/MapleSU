@@ -328,6 +328,10 @@ public final class UltraInitBootProducer {
         try {
             if (!readOwned(image, work)) return null;
             byte[] record = deploymentNamespace(image);
+            if (record == null) {
+                byte[] encoded = component(image, requireInitBoot(image));
+                record = UltraInitRamdisk.readLegacyDeploymentNamespace(decode(encoded, ramdisk(encoded).compression));
+            }
             unchanged(image, layout.sha256);
             return record;
         } catch (IOException | RuntimeException | Error exception) { failure = exception; throw exception; }

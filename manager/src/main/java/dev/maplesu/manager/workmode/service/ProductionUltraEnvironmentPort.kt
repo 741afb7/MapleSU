@@ -28,6 +28,20 @@ class AndroidUltraEnvironmentPort(
 
     override fun kernelRootVerified(): Boolean = UltraEnvironmentProbe.currentSnapshot(appContext).kernelRootVerified
 
+    override fun componentFailure(): HookResult? {
+        val snapshot = UltraEnvironmentProbe.currentSnapshot(appContext)
+        val identified = snapshot.managerOwnerIdentity != null || snapshot.kernelRootVerified ||
+            snapshot.state == UltraEnvironmentProbe.State.Running || snapshot.state == UltraEnvironmentProbe.State.Fault
+        if (!identified) return null
+        val code = when {
+            snapshot.state == UltraEnvironmentProbe.State.Fault -> UltraSwitchCodes.ULTRA_ENV_FAULT
+            snapshot.state != UltraEnvironmentProbe.State.Running && !snapshot.kernelRootVerified ->
+                UltraSwitchCodes.ULTRA_ENV_RUNTIME_UNAVAILABLE
+            else -> return null
+        }
+        return HookResult.failed(code, snapshot.detail.orEmpty())
+    }
+
     private fun map(state: UltraEnvironmentProbe.State): UltraState = when (state) {
         UltraEnvironmentProbe.State.Running -> UltraState.RUNNING
         UltraEnvironmentProbe.State.NotInstalled -> UltraState.NOT_INSTALLED

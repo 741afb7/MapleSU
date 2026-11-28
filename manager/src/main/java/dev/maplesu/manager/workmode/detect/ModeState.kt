@@ -24,7 +24,7 @@ enum class ModeState {
     /** 已确认外来 Root。 */
     FOREIGN_SU,
 
-    /** 无任何证据。 */
+    /** 充分证据确认未安装。 */
     NOT_INSTALLED,
 
     /** 有痕迹但不可确认 / 读不到。 */

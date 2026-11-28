@@ -24,10 +24,12 @@ int msu_manager_claim_permissions(const struct msu_manager_claim_anchor *a,
     msu_permissions executable = (msu_permissions)(image + a->set_x_offset);
     unsigned int i, j;
     int error;
-    s = (const void *)(h + 1);
+    if (!msu_loader_header_bytes(h)) return -22;
+    s = (const void *)((const msu_loader_u8 *)h + msu_loader_header_bytes(h));
     {
         const struct msu_resident_binding *resident;
-        if (a->version == MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION) {
+        if (a->version == MSU_CLAIM_DEPLOYMENT_ANCHOR_VERSION ||
+            a->version == MSU_CLAIM_SOURCE_ANCHOR_VERSION) {
             const struct msu_resident_deployment_binding *binding =
                 (const void *)(image + a->reserved[0]);
             resident = &binding->resident;

@@ -19,8 +19,8 @@ import java.io.File
  * Startup re-identifies the current signed installation before entering this setup.
  * A fresh SDK NotInstalled observation permits one durable helper submission per boot.
  * Only a confirmed pre-submission failure permits retry in the same boot.
- * Running is reused. Unknown requires separate evidence of a never-started helper;
- * Unknown/Fault never substitute for evidence of absence.
+ * Running is reused. Unknown can recover a verified idle helper or install through
+ * the current verified kernel Root channel; Unknown alone never permits installation.
  */
 object UltraEnvironmentAutoSetup {
 
@@ -32,7 +32,9 @@ object UltraEnvironmentAutoSetup {
     @Volatile
     private var processBootId: String? = null
 
-    data class Result(val attempted: Boolean, val installed: Boolean, val reason: String)
+    data class Result(val attempted: Boolean, val installed: Boolean, val reason: String) {
+        val installationFailed: Boolean get() = UltraEnvironmentUpgrade.isPreparationFailure(reason)
+    }
 
     /** Startup and foreground requests reconcile the current environment; idempotent. */
     fun ensure(context: Context): Result = ensure(context) { true }
@@ -51,7 +53,8 @@ object UltraEnvironmentAutoSetup {
         }
         return if (current()) result else result.copy(
             installed = false,
-            reason = if (result.reason == "AUTHORIZATION_SYNC_PENDING") result.reason
+            reason = if (result.installationFailed) "${result.reason};scope=SDK_IDENTITY_SCOPE_CHANGED"
+                else if (result.reason == "AUTHORIZATION_SYNC_PENDING") result.reason
                 else "SDK_IDENTITY_SCOPE_CHANGED",
         )
     }
@@ -85,6 +88,9 @@ object UltraEnvironmentAutoSetup {
             if (!bootstrap.bound) return Result(bootstrap.submitted, false, bootstrap.reason)
         }
         if (!current()) return Result(false, false, "SDK_IDENTITY_SCOPE_CHANGED")
+        resumedInstallResult(UltraEnvironmentUpgrade.resumeFullInstall(appContext),
+            UltraEnvironmentUpgrade.fullInstallPendingThisBoot(appContext),
+            UltraEnvironmentUpgrade.failedPreparationThisBoot(appContext))?.let { return it }
         val session = UltraSdkSession.current(appContext)
         if (session != null) {
             val result = UltraSdkSession.ensure(appContext, session, current)
@@ -119,10 +125,12 @@ object UltraEnvironmentAutoSetup {
                     else -> UltraEnvironmentAutoSetup.blockedReason(appContext)
                 }
                 override fun state() = UltraEnvironmentProbe.refresh(appContext)
+                override fun kernelRootVerified() = scopeCurrent() &&
+                    UltraEnvironmentProbe.hasCurrentRootProof(appContext) && scopeCurrent()
                 override fun recordAttempt() {
                     if (current()) prefs.edit().putString(KEY_LAST_BOOT, bootId).apply()
                 }
-                override fun alreadySubmitted() = prefs.getString(KEY_SUBMITTED_BOOT, null) == bootId
+                override fun alreadySubmitted() = prefs.all[KEY_SUBMITTED_BOOT] == bootId
                 override fun markSubmitted() = scopeCurrent() &&
                     prefs.edit().putString(KEY_SUBMITTED_BOOT, bootId).commit()
                 override fun clearUnsubmitted() {
@@ -135,13 +143,18 @@ object UltraEnvironmentAutoSetup {
                     }
                     return UltraEnvironmentInstaller.install(appContext, client,
                         UltraEnvironmentInstaller.Intent.InstallToBundledBuild)
-                        .also { Log.i(TAG, "环境自动安装 ${it.summary}") }
+                        .also {
+                            if (scopeCurrent() && !it.ok && it.sdkError == "POLICY_BACKEND_PREPARATION_FAILED")
+                                UltraEnvironmentUpgrade.recordPreparationFailure(appContext, it)
+                            Log.i(TAG, "环境自动安装 ${it.summary}")
+                        }
                 }
                 override fun refresh() { if (scopeCurrent()) UltraEnvironmentProbe.refresh(appContext) }
             }, recoverIdle = { UltraIdleEnvironmentRecovery.ensure(appContext, bootId, ::scopeCurrent) })
         return if (scopeCurrent()) result else result.copy(
             attempted = result.attempted && !installSkipped,
-            reason = "SDK_IDENTITY_SCOPE_CHANGED",
+            reason = if (result.installationFailed) "${result.reason};scope=SDK_IDENTITY_SCOPE_CHANGED"
+                else "SDK_IDENTITY_SCOPE_CHANGED",
         )
     }
 
@@ -150,6 +163,14 @@ object UltraEnvironmentAutoSetup {
         UltraEnvironmentProbe.currentSnapshot(context).let {
             it.managerOwnerIdentity != null || it.legacyCredentialFingerprint != null
         }
+
+    internal fun resumedInstallResult(resumed: UltraEnvironmentUpgrade.Result?, pendingThisBoot: Boolean,
+                                     preparationFailure: String? = null): Result? = when {
+        resumed == UltraEnvironmentUpgrade.Result.SUBMITTED -> Result(true, true, "SDK_UPGRADE_SUBMITTED")
+        pendingThisBoot -> Result(false, false, "SDK_UPGRADE_PENDING")
+        preparationFailure != null -> Result(resumed != null, false, preparationFailure)
+        else -> null
+    }
 
     internal fun blockedReason(
         context: Context,

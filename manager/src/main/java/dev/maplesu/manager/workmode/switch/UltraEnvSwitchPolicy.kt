@@ -60,6 +60,7 @@ object UltraSwitchCodes {
     const val ULTRA_ENV_STATE_UNKNOWN = "ULTRA_ENV_STATE_UNKNOWN"
     const val ULTRA_ENV_NO_KEY = "ULTRA_ENV_NO_KEY"
     const val ULTRA_ENV_FAULT = "ULTRA_ENV_FAULT"
+    const val ULTRA_ENV_RUNTIME_UNAVAILABLE = "ULTRA_ENV_RUNTIME_UNAVAILABLE"
     const val ULTRA_SUSPEND_FAILED = "ULTRA_SUSPEND_FAILED"
     const val ULTRA_RESTORE_FAILED = "ULTRA_RESTORE_FAILED"
     const val ULTRA_RESTORE_UNSUPPORTED = "ULTRA_RESTORE_UNSUPPORTED"
@@ -123,6 +124,9 @@ interface UltraEnvironmentPort {
 
     /** Current boot and live credential proof; cached ownership alone is insufficient. */
     fun kernelRootVerified(): Boolean = false
+
+    /** Confirmed component failure from one scoped observation; unresolved identity stays unknown. */
+    fun componentFailure(): HookResult? = null
 
     /** A→B 前暂停/停用 Ultra 环境（含写者静默）；不可用 → 返回明确错误。 */
     fun suspend(): HookResult
@@ -194,8 +198,8 @@ class UltraEnvSwitchCoordinator(
      *   facade 会给 `Incomplete` 而不是 `RECOVERY_REQUIRED`）。
      * - `toMode == LITE`（B→A，Normal→Ultra）：当前安装身份的根通道已确认即通过；
      *   `RUNNING` 或 `UNKNOWN`/`NOT_INSTALLED` + 本 boot 的 UID0 实测 → `OK`。
-     *   helper 就绪仍单独判断；`FAULT`/`NO_KEY`/未验证通道 → 失败（`ULTRA_ENV_STATE_UNKNOWN` +
-     *   `recoveryRequired = true`：Ultra 实际没起来，需要人工恢复 Ultra 环境）。
+     *   helper 就绪仍单独判断；`FAULT`/`NO_KEY`/未验证通道 → 失败，已确认的组件保留原因，
+     *   身份未确认则为 `ULTRA_ENV_STATE_UNKNOWN`；`recoveryRequired = true`。
      *
      * 探针新鲜度：见构造参数 [freshProbe]。缓存值不可信 —— `UNKNOWN` 正是
      * `UltraEnvironmentProbe` 的缓存默认值（`UltraEnvironmentProbe.kt:45-46`）。
@@ -216,9 +220,10 @@ class UltraEnvSwitchCoordinator(
                     runCatching { port.kernelRootVerified() }.getOrDefault(false))) {
                 UltraSwitchResult.OK
             } else {
+                val componentFailure = runCatching { port.componentFailure() }.getOrNull()
                 UltraSwitchResult.failed(
-                    UltraSwitchCodes.ULTRA_ENV_STATE_UNKNOWN,
-                    "ultra=$state after switch: Ultra environment is unavailable",
+                    componentFailure?.code ?: UltraSwitchCodes.ULTRA_ENV_STATE_UNKNOWN,
+                    componentFailure?.detail ?: "ultra=$state after switch: Ultra environment is unavailable",
                     recoveryRequired = true,
                 )
             }

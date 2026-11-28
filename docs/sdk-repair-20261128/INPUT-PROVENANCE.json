@@ -1,0 +1,167 @@
+{
+  "schema": "maplesu-portable-development-inputs/1",
+  "date": "2026-11-28",
+  "normalization": "Full documents retained. Local execution paths, tool names and executor identities normalized; hashes bind original bytes and exported copies. Historical evidence links may require original archives and are not execution prerequisites.",
+  "inputs": [
+    {
+      "path": "docs/sdk-repair-20261128/inputs/SDK-REFACTOR-REQUIREMENTS.md",
+      "originalBytes": 218872,
+      "originalSha256": "adc0f7e551b6c7d6b3f707a99370b366518528767aa38bd836bd4a05282b3d19",
+      "exportedBytes": 218872,
+      "exportedSha256": "adc0f7e551b6c7d6b3f707a99370b366518528767aa38bd836bd4a05282b3d19",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/SDK-REFACTOR-PROGRESS.md",
+      "originalBytes": 263375,
+      "originalSha256": "7273ac48b460951bbc92266f05758ff54a20e5f0948d74050f1f2ec2e52eddcc",
+      "exportedBytes": 262970,
+      "exportedSha256": "cf7536515103e28cc22570faf78d01dd7f6f11faf31cdff02374bedacb6c7a3a",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/DEVELOPMENT-MATRIX.json",
+      "originalBytes": 1114655,
+      "originalSha256": "e2065caa4d8990783a779676f489830a9bab3db0edd4a463e6a86f82c478bc45",
+      "exportedBytes": 1114639,
+      "exportedSha256": "5d15d3c940fae47aa6fb46cd09a315a4131604396edd441597b14c82a4414cb2",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/KEYLESS-DEVELOPMENT.md",
+      "originalBytes": 46257,
+      "originalSha256": "1007f62523400d49db85a4715d5a3b6ed160f3b7a12c14612d7881304b8acbe1",
+      "exportedBytes": 45878,
+      "exportedSha256": "54a552436b4cdbf580ba61b44d8f11af5a9db86b40035b36e32d1a37c672a3f0",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/ACCEPTANCE.csv",
+      "originalBytes": 30828,
+      "originalSha256": "43c5822dbae0bb576b9b31794ef5b6b8f1f6dedd39408994746190273045ff36",
+      "exportedBytes": 30780,
+      "exportedSha256": "99cdab0d871bea92a5fd6541e9e7d28d0bba38964cee1b6b3d2499c26145635d",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FEEDBACK-ISSUES.md",
+      "originalBytes": 63640,
+      "originalSha256": "c2fd95238902d8bf75b71ce17f2aba7b45225cf638fc4dbdb2310b211487ee7a",
+      "exportedBytes": 63640,
+      "exportedSha256": "c2fd95238902d8bf75b71ce17f2aba7b45225cf638fc4dbdb2310b211487ee7a",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FEEDBACK-ACTION.md",
+      "originalBytes": 18504,
+      "originalSha256": "8d1df8486253b168cc03f54328c2cbe8e75204c3a0144ba2befba04b80033397",
+      "exportedBytes": 18504,
+      "exportedSha256": "8d1df8486253b168cc03f54328c2cbe8e75204c3a0144ba2befba04b80033397",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/REQUIREMENTS-LEDGER.jsonl",
+      "originalBytes": 1093178,
+      "originalSha256": "8b20abc35418f591b3d22459edc2589cf2c91dd9634e8d5c6aa44029257f7a50",
+      "exportedBytes": 1093082,
+      "exportedSha256": "fceb181c514eeeb296560f4c9df5825ef202a6785eadbe60784f7e97d6228aad",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/ORIGINAL-ID-CHECKS.json",
+      "originalBytes": 18801,
+      "originalSha256": "3fd46e35ad179ea034f76b0c2ddb62bf831cc87caff2e71106b2f4a5b6a1fae2",
+      "exportedBytes": 18801,
+      "exportedSha256": "3fd46e35ad179ea034f76b0c2ddb62bf831cc87caff2e71106b2f4a5b6a1fae2",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/ORIGINAL-HASH-COVERAGE.json",
+      "originalBytes": 24401,
+      "originalSha256": "c936642c7b25522ea2c39ec5bd3312f017830d9b96de3e9a2e52db10157bbd4e",
+      "exportedBytes": 24401,
+      "exportedSha256": "c936642c7b25522ea2c39ec5bd3312f017830d9b96de3e9a2e52db10157bbd4e",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/ORIGINAL-ID-SCOPE-MAP.json",
+      "originalBytes": 9890,
+      "originalSha256": "1053f9e3798053ba7ba3d9e4b3328cf4a7c1408aa3a2c8e0af9dad9723eff189",
+      "exportedBytes": 9890,
+      "exportedSha256": "1053f9e3798053ba7ba3d9e4b3328cf4a7c1408aa3a2c8e0af9dad9723eff189",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/CONTINUOUS-CONDITIONS.json",
+      "originalBytes": 82503,
+      "originalSha256": "a4a3ed5cd917262cb209553252ed2f4d8fe0a80270494a3b03a7c5cd6158c7c6",
+      "exportedBytes": 82503,
+      "exportedSha256": "a4a3ed5cd917262cb209553252ed2f4d8fe0a80270494a3b03a7c5cd6158c7c6",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FEEDBACK-ORIGINAL.json",
+      "originalBytes": 29454,
+      "originalSha256": "e8325983fd7b35daee2b7805c46cfd34cb690787c432d199dda7f6128d0c5530",
+      "exportedBytes": 29454,
+      "exportedSha256": "e8325983fd7b35daee2b7805c46cfd34cb690787c432d199dda7f6128d0c5530",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/KPATCH-NEXT-FUNCTION-MATRIX.json",
+      "originalBytes": 56417,
+      "originalSha256": "9399d8c97b19e6e8280797f2bf36d781921161daea7112774337b9c28c884145",
+      "exportedBytes": 56417,
+      "exportedSha256": "9399d8c97b19e6e8280797f2bf36d781921161daea7112774337b9c28c884145",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/REQUIREMENT-SOURCE-AUDIT.json",
+      "originalBytes": 1248855,
+      "originalSha256": "4747afac2e2d36b48111bd4f362bf65a77a78db94091ab82d96f1a1bb93a9774",
+      "exportedBytes": 1248592,
+      "exportedSha256": "ebcd80cbc755008719e368636d833f7209f0f7032f6d65d1af8cc18265bc6f0c",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FINAL-REQUIREMENTS-REVIEW.md",
+      "originalBytes": 7760,
+      "originalSha256": "3651cb95eeec9bef34c7337e66c65f651f52e0e6ccb525a2f9d997e61614efab",
+      "exportedBytes": 7760,
+      "exportedSha256": "3651cb95eeec9bef34c7337e66c65f651f52e0e6ccb525a2f9d997e61614efab",
+      "normalizedMetadata": false
+    },
+    {
+      "path": "docs/sdk-repair-20261128/inputs/FINAL-REQUIREMENTS-REVIEW.json",
+      "originalBytes": 133754,
+      "originalSha256": "fed05ad340b89682c2f0f0298b4a99ceb3aff16399592d87a2e334503873b9a2",
+      "exportedBytes": 129161,
+      "exportedSha256": "3b248060de1918c049ac536a0c71c9ea1cc432db82e600644a4e988f10770662",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/evidence/manager-junit.txt",
+      "originalBytes": 16362,
+      "originalSha256": "e75e64e74df7ffdc2a9de1263096ee7d54bcf575cfa97b394cb39e9824c76fc3",
+      "exportedBytes": 16362,
+      "exportedSha256": "e75e64e74df7ffdc2a9de1263096ee7d54bcf575cfa97b394cb39e9824c76fc3",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/evidence/manager-k2.txt",
+      "originalBytes": 5107,
+      "originalSha256": "523e9d9d8401acd17477236345032f827ed6a8eb17d35eab503d99ced6e54f3b",
+      "exportedBytes": 4899,
+      "exportedSha256": "5e04f2c815a25db96cc944012e3f0e692d419b54e9715b2f422cf08d7e1e7d5b",
+      "normalizedMetadata": true
+    },
+    {
+      "path": "docs/sdk-repair-20261128/evidence/root-return-diagnostic.txt",
+      "originalBytes": 7079,
+      "originalSha256": "352998391c56c35c9fbdd2b039e7be873a66426c52fb7dc5e41fd847a2221382",
+      "exportedBytes": 7079,
+      "exportedSha256": "352998391c56c35c9fbdd2b039e7be873a66426c52fb7dc5e41fd847a2221382",
+      "normalizedMetadata": true
+    }
+  ]
+}

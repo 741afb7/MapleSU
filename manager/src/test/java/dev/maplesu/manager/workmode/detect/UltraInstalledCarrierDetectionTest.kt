@@ -1,7 +1,6 @@
 package dev.maplesu.manager.workmode.detect
 
 import dev.maplesu.manager.workmode.detect.probes.UltraEnvironmentAdapter
-import dev.maplesu.manager.runtime.ultra.UltraEnvironmentProbe
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -57,13 +56,13 @@ class UltraInstalledCarrierDetectionTest {
         assertEquals(ModeState.FOREIGN_SU, result.state)
     }
 
-    @Test fun adapterReadsOnlyTheScopedCacheDuringStartup() {
+    @Test fun adapterReadsOnlyTheVerifiedCarrierWhenStartupQueriesAreDisabled() {
         var cacheReads = 0
         val adapter = UltraEnvironmentAdapter(
-            readSnapshot = { UltraEnvironmentProbe.Snapshot() },
+            readSnapshot = { error("Startup does not adopt a retained owner or Root proof") },
             refreshSnapshot = { error("Startup cannot submit a Root probe") },
             hookActive = { false },
-            readManagerOwnerBound = { error("Owner query was not requested") },
+            readManagerOwnerIdentity = { error("Owner query was not requested") },
             readInstalledCarrier = { cacheReads++; true },
         )
         val result = adapter.observe(allowRefresh = false, allowOwnerQuery = false)

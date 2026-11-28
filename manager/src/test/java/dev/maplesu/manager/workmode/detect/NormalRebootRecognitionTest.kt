@@ -10,7 +10,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Host audit: real resolver -> projection -> bootstrap; native/boot/prefs ports are fixtures. */
+/** Host audit: real resolver -> detector/projection -> bootstrap; native/boot/prefs ports are fixtures. */
 class NormalRebootRecognitionTest {
     private class Probes(val su: Boolean, val ultra: String? = null, val ksu: Boolean? = true) : EnvironmentProbes {
         val calls = mutableListOf<String>()
@@ -43,22 +43,35 @@ class NormalRebootRecognitionTest {
     private fun store(initial: EnvironmentSnapshot? = null) =
         EnvironmentStateStore(InMemoryEnvironmentStatePersistence(initial))
 
-    private suspend fun check(store: EnvironmentStateStore, probes: Probes, boot: String = "same-boot") =
+    private suspend fun check(store: EnvironmentStateStore, probes: EnvironmentProbes, boot: String = "same-boot") =
         EnvironmentCheckRunner(EnvironmentResolver(probes, store), store, bootIdSource = { boot }).check()
 
-    private suspend fun start(check: EnvironmentCheckOutcome): Runtime {
+    private suspend fun start(
+        check: EnvironmentCheckOutcome,
+        currentKernel: KsuFacts?,
+        expectedPhaseOne: ModeState,
+        expectedPhaseTwo: ModeState? = null,
+    ): Runtime {
         val runtime = Runtime()
+        var overrideReads = 0
+        var rootReads = 0
+        var handshakeReads = 0
         val pipeline = ModeBootstrapPipeline(
-            detector = object : ModeDetector {
-                override suspend fun detect(request: DetectionRequest): DetectionResult =
-                    error("terminal precheck must bypass the root-dependent detector")
-            },
+            detector = DefaultModeDetector(
+                ksuProbe = KsuKernelProbe { currentKernel ?: error("Current native observation is unreadable") },
+                liteHandshakeProbe = LiteHandshakeProbe { handshakeReads++; false },
+                rootEvidenceReader = object : RootEvidenceReader {
+                    override fun open(channel: RootChannelKind): RootEvidenceSession? { rootReads++; return null }
+                },
+                bootIdSource = BootIdSource { check.bootId },
+            ),
             runtime = runtime,
-            environmentOverride = { EnvironmentDetectionProjection.override(check) },
+            environmentOverride = { overrideReads++; EnvironmentDetectionProjection.override(check) },
         )
         val coordinator = ModeBootstrapCoordinator({ pipeline }, { runtime.active != null })
         val result = coordinator.runPhaseOne()
-        if (check.mode == WorkMode.KSU) {
+        assertEquals("Startup skips the slow environment precheck", 0, overrideReads)
+        if (expectedPhaseOne == ModeState.MODE_B_KERNEL_ONLY) {
             assertTrue(result is BootstrapOutcome.Activated)
             assertEquals(WorkMode.KSU, runtime.active)
             assertEquals(check.bootId, runtime.boot)
@@ -66,10 +79,20 @@ class NormalRebootRecognitionTest {
             assertNull("Normal must skip phase-two root detection", coordinator.runPhaseTwo())
         } else {
             assertTrue(result is BootstrapOutcome.Unresolved)
-            assertEquals(ModeState.NOT_INSTALLED, (result as BootstrapOutcome.Unresolved).state)
+            assertEquals(expectedPhaseOne, (result as BootstrapOutcome.Unresolved).state)
             assertNull(runtime.active)
-            assertEquals(listOf("record:NOT_INSTALLED", "complete"), runtime.calls)
+            assertEquals(listOf("record:$expectedPhaseOne", "complete"), runtime.calls)
         }
+        if (expectedPhaseTwo != null) {
+            val confirmed = coordinator.runPhaseTwo()
+            assertTrue(confirmed is BootstrapOutcome.Unresolved)
+            assertEquals(expectedPhaseTwo, (confirmed as BootstrapOutcome.Unresolved).state)
+            assertEquals(1, overrideReads)
+            assertNull(runtime.active)
+            assertEquals(listOf("record:$expectedPhaseOne", "complete", "record:$expectedPhaseTwo", "complete"), runtime.calls)
+        }
+        assertEquals("Neither phase needs a Root session", 0, rootReads)
+        assertEquals("Neither phase needs a credential handshake", 0, handshakeReads)
         return runtime
     }
 
@@ -78,9 +101,10 @@ class NormalRebootRecognitionTest {
         val probes = Probes(su = true)
         val check = check(store, probes)
         assertEquals(EnvironmentVerdict.KSU_NORMAL, check.verdict)
-        assertEquals(listOf("su", "ultra", "ksu"), probes.calls)
+        assertEquals(listOf("ksu"), probes.calls)
         assertEquals(WorkMode.KSU, store.snapshot()?.mode)
-        start(check)
+        assertFalse("Current identity alone does not grant SU", store.snapshot()!!.suAvailable)
+        start(check, KsuFacts(true, 100, 7, true), ModeState.MODE_B_KERNEL_ONLY)
         Unit
     }
 
@@ -89,17 +113,18 @@ class NormalRebootRecognitionTest {
         val check = check(store, Probes(su = true))
         assertEquals(EnvironmentCheckTrigger.NOT_INSTALLED, check.trigger)
         assertEquals(EnvironmentVerdict.KSU_NORMAL, check.verdict)
-        start(check)
+        start(check, KsuFacts(true, 100, 7, true), ModeState.MODE_B_KERNEL_ONLY)
         Unit
     }
 
-    @Test fun knownNormalSoftRebootInheritsAndSkipsResidualUltraRecords() = runBlocking {
+    @Test fun knownNormalSoftRebootRevalidatesAndSkipsResidualUltraRecords() = runBlocking {
         val store = store(normal())
         val probes = Probes(su = true, ultra = "ultra:paired")
         val check = check(store, probes)
-        assertEquals(EnvironmentVerdict.INHERITED, check.verdict)
-        assertEquals(listOf("su", "ksu"), probes.calls)
-        start(check)
+        assertEquals(EnvironmentVerdict.KSU_NORMAL, check.verdict)
+        assertEquals(listOf("ksu"), probes.calls)
+        assertFalse("The previous SU capability is not inherited", store.snapshot()!!.suAvailable)
+        start(check, KsuFacts(true, 100, 7, true), ModeState.MODE_B_KERNEL_ONLY)
         Unit
     }
 
@@ -109,7 +134,7 @@ class NormalRebootRecognitionTest {
         assertEquals(EnvironmentCheckTrigger.BOOT_CHANGED, check.trigger)
         assertEquals(EnvironmentVerdict.KSU_NORMAL, check.verdict)
         assertEquals("new-boot", store.snapshot()?.bootId)
-        start(check)
+        start(check, KsuFacts(true, 100, 7, true), ModeState.MODE_B_KERNEL_ONLY)
         Unit
     }
 
@@ -118,7 +143,7 @@ class NormalRebootRecognitionTest {
         val check = check(store, Probes(su = false, ksu = false), boot = "new-boot")
         assertEquals(EnvironmentVerdict.NOT_INSTALLED, check.verdict)
         assertNull(store.snapshot()?.mode)
-        start(check)
+        start(check, KsuFacts(), ModeState.INDETERMINATE, ModeState.NOT_INSTALLED)
         Unit
     }
 
@@ -130,6 +155,27 @@ class NormalRebootRecognitionTest {
         assertEquals(previous, store.snapshot())
         assertEquals(WorkMode.KSU, check.mode)
         assertNull(EnvironmentDetectionProjection.override(check))
+        start(check, null, ModeState.INDETERMINATE, ModeState.INDETERMINATE)
+        assertEquals(previous, store.snapshot())
+    }
+
+    @Test fun historicalNormalOutcomesNeverOverrideNegativeCurrentKernelInPhaseOne() = runBlocking {
+        for (inherited in listOf(false, true)) {
+            val previous = normal()
+            val store = store(previous)
+            var nativeReads = 0
+            val probes = object : EnvironmentProbes {
+                override fun suPresent(): Boolean = true
+                override fun ultraFingerprint(): String? = null
+                override fun ksuNormal(): Boolean? = if (inherited) ++nativeReads > 1 else null
+                override fun rootShellAvailable(): Boolean = error("Root shell must not run")
+            }
+            val check = check(store, probes)
+            assertEquals(if (inherited) EnvironmentVerdict.INHERITED else EnvironmentVerdict.UNKNOWN, check.verdict)
+            assertEquals(WorkMode.KSU, check.mode)
+            start(check, KsuFacts(), ModeState.INDETERMINATE)
+            assertEquals(previous, store.snapshot())
+        }
     }
 
     @Test fun dirtyNormalAfterJailbreakIsRevalidatedWithoutRoot() = runBlocking {
@@ -139,7 +185,7 @@ class NormalRebootRecognitionTest {
         assertEquals(EnvironmentCheckTrigger.DIRTY, check.trigger)
         assertEquals(EnvironmentVerdict.KSU_NORMAL, check.verdict)
         assertFalse(store.isDirty())
-        start(check)
+        start(check, KsuFacts(true, 100, 7, true), ModeState.MODE_B_KERNEL_ONLY)
         Unit
     }
 
@@ -150,8 +196,9 @@ class NormalRebootRecognitionTest {
             val outcome = check(store, probes)
             assertEquals(fingerprint, EnvironmentVerdict.KSU_NORMAL, outcome.verdict)
             assertEquals(WorkMode.KSU, store.snapshot()?.mode)
-            assertEquals(listOf("su", "ultra", "ksu"), probes.calls)
-            start(outcome)
+            assertEquals(listOf("ksu"), probes.calls)
+            assertFalse("Historical credentials do not grant SU", store.snapshot()!!.suAvailable)
+            start(outcome, KsuFacts(true, 100, 7, true), ModeState.MODE_B_KERNEL_ONLY)
         }
     }
 

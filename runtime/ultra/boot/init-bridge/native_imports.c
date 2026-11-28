@@ -44,6 +44,7 @@ IMPORT_RETURN(struct filename *, getname_kernel, (const char *name), (name))
 IMPORT_RETURN(struct group_info *, groups_alloc, (int count), (count))
 IMPORT_VOID(groups_sort, (struct group_info *groups), (groups))
 IMPORT_RETURN(bool, is_subdir, (struct dentry *child, struct dentry *parent), (child, parent))
+IMPORT_RETURN(struct cred *, prepare_kernel_cred, (struct task_struct *daemon), (daemon))
 IMPORT_VOID(putname, (struct filename *name), (name))
 IMPORT_RETURN(int, schedule_on_each_cpu, (work_func_t function), (function))
 IMPORT_VOID(security_cred_getsecid, (const struct cred *cred, u32 *secid), (cred, secid))
@@ -257,6 +258,7 @@ int msu_init_bridge_imports_init(void)
     IMPORT(groups_alloc);
     IMPORT(groups_sort);
     IMPORT(is_subdir);
+    IMPORT(prepare_kernel_cred);
     IMPORT(putname);
     IMPORT(schedule_on_each_cpu);
     IMPORT(security_cred_getsecid);
@@ -450,6 +452,7 @@ static const char msu_direct_calls[] __used __section(".msu_direct_calls") =
     "msu_direct_target_path_umount\0path_umount\0"
 #endif
     "msu_direct_target_prepare_creds\0prepare_creds\0"
+    "msu_direct_target_prepare_kernel_cred\0prepare_kernel_cred\0"
     "msu_direct_target_putname\0putname\0"
     "msu_direct_target_revert_creds\0revert_creds\0"
     "msu_direct_target_schedule_on_each_cpu\0schedule_on_each_cpu\0"

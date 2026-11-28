@@ -22,14 +22,14 @@ fun RecoveryScreenMiuix(state: RecoveryUiState, actions: RecoveryActions) {
     ) {
         WorkModeSectionMiuix {
             when {
-                state.loading -> {
+                state.loading || state.actionRunning -> {
                     Text(fontSize = 18.sp, color = colorScheme.onSurface, text = stringResource(R.string.recovery_loading))
                     InfiniteProgressIndicator(size = 24.dp)
                 }
                 state.unavailable -> Text(fontSize = 14.sp, color = colorScheme.onSurfaceVariantSummary, text = stringResource(R.string.recovery_unavailable))
                 else -> {
                     Text(fontSize = 18.sp, color = colorScheme.onSurface, text = stringResource(RecoveryStrings.action(state.action)))
-                    Text(fontSize = 14.sp, color = colorScheme.onSurfaceVariantSummary, text = stringResource(RecoveryStrings.next(state.decision?.nextStepKey)))
+                    Text(fontSize = 14.sp, color = colorScheme.onSurfaceVariantSummary, text = stringResource(RecoveryStrings.next(state.nextStepKey)))
                     state.baselineState?.let { Text(fontSize = 14.sp, color = colorScheme.onSurfaceVariantSummary, text = stringResource(RecoveryStrings.baseline(it))) }
                     if (state.diagnosticOnly) Text(fontSize = 14.sp, color = colorScheme.onSurfaceVariantSummary, text = stringResource(R.string.recovery_diagnostic_only))
                     if (state.decision?.allowed?.any { it in setOf(
@@ -65,10 +65,16 @@ fun RecoveryScreenMiuix(state: RecoveryUiState, actions: RecoveryActions) {
         }
         WorkModeSectionMiuix {
             TextButton(text = stringResource(R.string.recovery_open_diagnosis), onClick = actions.onOpenDiagnosis, enabled = true, modifier = Modifier.fillMaxWidth())
+            TextButton(text = stringResource(R.string.settings), onClick = actions.onOpenEnvironmentSettings, enabled = !state.blocksBack, modifier = Modifier.fillMaxWidth())
             if (actions.exportAvailable) { TextButton(text = stringResource(R.string.recovery_export_diagnostics), onClick = actions.onExportDiagnostics, enabled = true, modifier = Modifier.fillMaxWidth()) }
-            TextButton(text = stringResource(R.string.recovery_refresh), onClick = actions.onRefresh, enabled = !state.loading, modifier = Modifier.fillMaxWidth())
+            TextButton(text = stringResource(R.string.recovery_refresh), onClick = actions.onRefresh, enabled = !state.loading && !state.actionRunning, modifier = Modifier.fillMaxWidth())
         }
         val technical = buildList {
+            state.status?.let {
+                add("switch.id=${state.switchId}; state=${it.stateWire}; stage=${it.stage}; step=${it.step}")
+                if (it.code.isNotBlank()) add("error=${it.code}")
+                if (it.detail.isNotBlank()) add(it.detail)
+            }
             state.decision?.let { decision ->
                 add("switch.id=${state.switchId}")
                 add("recovery.action=${decision.action.wire}")

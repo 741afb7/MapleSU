@@ -70,6 +70,7 @@ extern typeof(&getname_kernel) msu_native_getname_kernel;
 extern typeof(&groups_alloc) msu_native_groups_alloc;
 extern typeof(&groups_sort) msu_native_groups_sort;
 extern typeof(&is_subdir) msu_native_is_subdir;
+extern typeof(&prepare_kernel_cred) msu_native_prepare_kernel_cred;
 extern typeof(&putname) msu_native_putname;
 extern typeof(&schedule_on_each_cpu) msu_native_schedule_on_each_cpu;
 extern typeof(&security_cred_getsecid) msu_native_security_cred_getsecid;
@@ -175,6 +176,7 @@ static inline void msu_init_bridge_put_nsproxy(struct nsproxy *ns)
 #define groups_alloc (*msu_native_groups_alloc)
 #define groups_sort (*msu_native_groups_sort)
 #define is_subdir (*msu_native_is_subdir)
+#define prepare_kernel_cred (*msu_native_prepare_kernel_cred)
 #define putname (*msu_native_putname)
 #define schedule_on_each_cpu (*msu_native_schedule_on_each_cpu)
 #define security_cred_getsecid (*msu_native_security_cred_getsecid)

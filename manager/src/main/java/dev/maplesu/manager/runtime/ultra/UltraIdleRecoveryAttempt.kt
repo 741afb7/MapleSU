@@ -1,5 +1,7 @@
 package dev.maplesu.manager.runtime.ultra
 
+import java.util.concurrent.CancellationException
+
 /** A never-started installation is distinct from a failed or initializing Unknown boot. */
 internal object UltraIdleRecoveryAttempt {
     interface Port {
@@ -39,6 +41,8 @@ internal object UltraIdleRecoveryAttempt {
             if (blocked() || !port.functionalityVerified() || blocked())
                 return result("IDLE_FUNCTIONALITY_UNCONFIRMED")
             return result("IDLE_RECOVERED", ready = true)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
             if (error is InterruptedException) Thread.currentThread().interrupt()
             return result("IDLE_EXCEPTION:${error.javaClass.simpleName}")

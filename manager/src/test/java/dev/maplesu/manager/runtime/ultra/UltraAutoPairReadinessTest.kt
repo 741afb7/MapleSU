@@ -43,6 +43,21 @@ class UltraAutoPairReadinessTest {
         assertEquals("SDK_ROOT_UNVERIFIED", result.reason)
     }
 
+    @Test fun anOwnerWithoutRootRetainsTheActualProbeFailureBeforeAuthorization() {
+        val detail = "{\"sdkError\":\"ERR_READ_CHILD_ERRCODE\",\"sdkErrorCode\":-19914," +
+            "\"rootCommand\":{\"phase\":11,\"childStatus\":256,\"receiptComplete\":false}}"
+        val result = UltraAutoPair.complete(
+            UltraEnvironmentProbe.Snapshot(UltraEnvironmentProbe.State.Running, rootProbeDetail = detail),
+            current = { fail("Root is unverified before authorization capture"); false },
+            verifyManagerSu = { fail("Root failure must not enumerate SU"); false }, maintain = { fail() })
+        assertFalse(result.paired)
+        assertTrue(result.reason.startsWith("SDK_ROOT_UNVERIFIED:"))
+        assertTrue(result.reason.contains("ERR_READ_CHILD_ERRCODE"))
+        assertTrue(result.reason.contains("-19914"))
+        assertTrue(result.reason.contains("256"))
+        assertFalse(result.reason.contains("SDK_IDENTITY_SCOPE_CHANGED"))
+    }
+
     @Test fun managerSuFailureDoesNotPublishReadinessOrRunMaintenance() {
         val result = UltraAutoPair.complete(
             UltraEnvironmentProbe.Snapshot(UltraEnvironmentProbe.State.Running, kernelRootVerified = true),

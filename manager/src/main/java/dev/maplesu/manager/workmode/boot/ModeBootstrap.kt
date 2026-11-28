@@ -14,6 +14,7 @@ import dev.maplesu.manager.workmode.EnvironmentProbeRunner
 import dev.maplesu.manager.workmode.detect.DefaultModeDetector
 import dev.maplesu.manager.workmode.detect.DetectionResult
 import dev.maplesu.manager.workmode.detect.EnvironmentDetectionProjection
+import dev.maplesu.manager.workmode.detect.LocalFacts
 import dev.maplesu.manager.workmode.detect.probes.AndroidRootShellOpener
 import dev.maplesu.manager.workmode.detect.probes.BootIdSourceAdapter
 import dev.maplesu.manager.workmode.detect.probes.EnvironmentCheckProduction
@@ -28,6 +29,8 @@ import dev.maplesu.manager.workmode.gating.ModeGateFormat
 import dev.maplesu.manager.workmode.service.ModeSwitchRuntime
 import dev.maplesu.manager.workmode.switch.SwitchStateNames
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -159,21 +162,36 @@ object ModeBootstrap {
     }
 
     /** A visible retry reuses the same detector and bounded startup attempts. */
-    fun retryEnvironmentDetection() {
-        if (!started.get() || !managerProcess || ModeRuntime.active != null) return
-        if (secondPhaseRetry.requestRetry()) schedulePhaseTwo(0)
+    fun retryEnvironmentDetection(): Deferred<Unit>? {
+        if (!started.get() || !managerProcess || ModeRuntime.active != null) return null
+        val request = secondPhaseRetry.requestRetry()
+        if (request.scheduleNow) schedulePhaseTwo(0)
+        return request.completion
     }
 
+    fun pendingEnvironmentDetection(): Deferred<Unit>? = secondPhaseRetry.pendingCompletion()
+
     private fun schedulePhaseTwo(delayMillis: Long) {
+        schedulePhaseTwo(delayMillis) { task, delay ->
+            Handler(Looper.getMainLooper()).postDelayed(task, delay)
+        }
+    }
+
+    internal fun schedulePhaseTwo(delayMillis: Long, post: (Runnable, Long) -> Boolean) {
         if (!secondPhaseScheduled.compareAndSet(false, true)) return
         runCatching {
-            Handler(Looper.getMainLooper()).postDelayed({
+            check(post(Runnable {
                 secondPhaseScheduled.set(false)
                 executePhaseTwo()
-            }, delayMillis.coerceAtLeast(0L))
+            }, delayMillis.coerceAtLeast(0L))) { "MODE_PHASE_TWO_SCHEDULE_REJECTED" }
         }.onFailure {
             // 调度失败不得影响启动；阶段二缺失时宁可保持未判定（不得默认 LITE）。
             secondPhaseScheduled.set(false)
+            if (secondPhaseRetry.tryStart() != null) {
+                recordGate(BootstrapPhase.AFTER_ROOT_GRANTED, BootstrapOutcome.Failed(
+                    "MODE_PHASE_TWO_SCHEDULE_FAILED", it.message.orEmpty()))
+                secondPhaseRetry.finish(resolved = ModeRuntime.active != null, retryAllowed = false)
+            }
             Log.w(TAG, "mode phase-two scheduling failed (stay unresolved)", it)
         }
     }
@@ -263,6 +281,8 @@ object ModeBootstrap {
                 // Reboot convergence also runs once when phase one already resolved Normal.
                 convergePendingModeSwitch()
             } catch (error: Throwable) {
+                recordGate(BootstrapPhase.AFTER_ROOT_GRANTED, BootstrapOutcome.Failed(
+                    "MODE_PHASE_TWO_FAILED", error.message.orEmpty()))
                 Log.w(TAG, "mode phase-two attempt failed (stay unresolved)", error)
             } finally {
                 secondPhaseRetry.finish(resolved = ModeRuntime.active != null)?.let(::schedulePhaseTwo)
@@ -283,6 +303,10 @@ object ModeBootstrap {
                 jailbreakLease = JailbreakLeaseAdapter(context),
                 bootIdSource = BootIdSourceAdapter,
                 rootEvidenceReader = RootEvidenceReaderAdapter(AndroidRootShellOpener(context)),
+                localFactsProvider = { bootId ->
+                    if (managerProcess) EnvironmentCheckProduction.store(context).localInstallationFacts(bootId)
+                    else LocalFacts(bootId, Long.MAX_VALUE)
+                },
             ),
             runtime = ProductionModeRuntimePort,
             probeRunner = detectionProbeRunner,
@@ -301,9 +325,11 @@ object ModeBootstrap {
      */
     private suspend fun environmentOverride(context: Context): DetectionResult? {
         val startedAt = SystemClock.elapsedRealtime()
-        val outcome = runCatching {
+        val outcome = try {
             EnvironmentCheckProduction.runner(context.applicationContext).check()
-        }.getOrElse { error ->
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
             Log.w(TAG, "environment precheck failed (fall through to full detection)", error)
             return null
         }

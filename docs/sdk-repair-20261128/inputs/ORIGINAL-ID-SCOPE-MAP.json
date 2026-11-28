@@ -1,0 +1,189 @@
+{
+  "utc": "2026-11-27T19:11:45.929265+00:00",
+  "testSource": {
+    "path": "manager/src/test/java/com/maplesu/core/ui/viewmodel/HomeRecoveryRefreshContractTest.kt",
+    "bytes": 5086,
+    "sha256": "21b0acff4888e3bb7de065d5b4b283f1c63cfae2d51c45114452547089677184",
+    "snapshot": "inputs/HomeRecoveryRefreshContractTest.kt",
+    "purpose": "Observed source contract; no test execution"
+  },
+  "observedTestCount": 6,
+  "tests": [
+    {
+      "name": "aClaimedRefreshRequestsRecoveryBeforeCheckingEnvironmentPresence",
+      "line": 12
+    },
+    {
+      "name": "aRefreshQueuesBehindPublicationInsteadOfReturningWhenItIsLocked",
+      "line": 22
+    },
+    {
+      "name": "aPageReturnRefreshesAfterTheFirstVisibleEntry",
+      "line": 41
+    },
+    {
+      "name": "manualRetryAwaitsTheWholeSeriesAndKeepsItsOwnProgressUntilJobCompletion",
+      "line": 52
+    },
+    {
+      "name": "resumeAndPageEntryKeepIndependentFirstRunGuards",
+      "line": 66
+    },
+    {
+      "name": "aHiddenTransactionInvalidatesTheDisplayWithoutWaitingForOtherHiddenFacts",
+      "line": 76
+    }
+  ],
+  "testKind": "SOURCE_STRING_AND_ORDER_CONTRACT",
+  "testRunsByThisBranch": 0,
+  "productionSourcesAtObservation": [
+    {
+      "path": "manager/src/main/java/com/maplesu/core/ui/viewmodel/HomeViewModel.kt",
+      "bytes": 46721,
+      "sha256": "469f15197ba378b857f93d1fdf080003e7f700873e642017a6bc8490e9ba11c0",
+      "snapshot": "inputs/HomeViewModel-observed.kt",
+      "purpose": "Observed application source for scope only; other owner may subsequently change it"
+    },
+    {
+      "path": "manager/src/main/java/com/maplesu/core/ui/screen/home/HomeScreen.kt",
+      "bytes": 9803,
+      "sha256": "64a46d9ba17035853069322855d99d0afe4f43837a854d47a94aeb8c7c62c11b",
+      "snapshot": "inputs/HomeScreen-observed.kt",
+      "purpose": "Observed Compose wiring for scope only; no Android execution"
+    }
+  ],
+  "manualPreLaunchCancellation": {
+    "state": "OWNER_VALIDATION_PENDING_NO_PASS_CLAIM",
+    "observation": "Observed flag=true before viewModelScope.launch; job.invokeOnCompletion clears it and an outer catch clears it when launch throws. The contract checks this source registration, not cancellation/rejection behavior before block entry.",
+    "observedViewModelSha256": "469f15197ba378b857f93d1fdf080003e7f700873e642017a6bc8490e9ba11c0",
+    "snapshotObservationCorrectedUtc": "2026-11-27T19:13:03.897854+00:00"
+  },
+  "performanceOriginalActions": [
+    "对照冻结owner测量所用的相同输入、入口和观测方法，记录SDK热路径及页面readFacts的调用次数、阶段耗时、并发/Busy和首错；无新增缺陷的测量结果原样保留。",
+    "页面初次进入、同revision结果返回、真实readbackRevision变化、显式刷新、离页回页和重建分别执行；读取完成自身不持续触发同一轮全readFacts，无cache场景也单独检查。",
+    "身份/fullUID、授权、寄生attempt/lease或设备实际状态变化后读回新值；减少重复工作不复用过期身份，不省略原有失败、取消和撤销语义。",
+    "主页SELinux/身份、模块列表/策略与寄生/SU准备分别关联同次SDK调用轨迹；页面300ms与显式维护预算分开记录，耗时超界保留最早失败分类。",
+    "主机fixture调用次数和时序只归fixture栏；同代APK实机分别记录两主题首屏/回页、原Busy复现输入、真实授权和寄生阶段，按已冻结测量口径比较。"
+  ],
+  "performanceRequiredObservations": [
+    "页面同一事实读取结果不形成自激重复全量读取；真实状态变化仍可见，取消/迟到回调不污染新任务。",
+    "SDK热点结论有原始计时/计数、输入身份、线程/入口和重复次数；不由静态源码或单次fixture推断设备时延已通过，不自加固定KSU基线以外的产品前置。"
+  ],
+  "rows": [
+    {
+      "id": "CASE-10a",
+      "originalText": "权威状态以实际内核/运行时/持久授权为准，处理管理器包身份、SDK/Helper代际、重装和恢复；稳定后实施独立签名绑定。关联TRUST/SU/IPC。",
+      "originalSource": {
+        "path": "docs/SDK-REFACTOR-REQUIREMENTS.md",
+        "exists": true,
+        "bytes": 218872,
+        "sha256": "adc0f7e551b6c7d6b3f707a99370b366518528767aa38bd836bd4a05282b3d19"
+      },
+      "originalSourceLine": 477,
+      "relevantSourceContractBranches": [
+        "恢复请求先于环境存在检查的源码顺序",
+        "页面返回与前台恢复的静默刷新入口",
+        "等待整个刷新系列的手动入口接线"
+      ],
+      "remainingOriginalBranches": [
+        "实际内核/运行时/持久授权与包身份、SDK/helper同代恢复",
+        "重装、签名轮换、多用户与真实Root/撤销",
+        "无Manager冷启与真实安装态；源码合同不验证这些结果"
+      ],
+      "sourceReviewState": "SOURCE_MAPPING_ONLY_TESTS_NOT_EXECUTED",
+      "originalItemState": "NOT_RUN",
+      "qualifiesFullOriginalItem": false
+    },
+    {
+      "id": "CASE-10f",
+      "originalText": "设备内核安装态/授权态与Manager本地数据清除分开识别，重装能恢复真实状态；明确旧授权保留/撤销的实际契约，测试升级、重装与恢复。关联TRUST/SU/API-02。",
+      "originalSource": {
+        "path": "docs/SDK-REFACTOR-REQUIREMENTS.md",
+        "exists": true,
+        "bytes": 218872,
+        "sha256": "adc0f7e551b6c7d6b3f707a99370b366518528767aa38bd836bd4a05282b3d19"
+      },
+      "originalSourceLine": 482,
+      "relevantSourceContractBranches": [
+        "共享刷新和页面返回入口可关联重装后的显示恢复；本合同没有直接构造卸载/重装或授权状态"
+      ],
+      "remainingOriginalBranches": [
+        "真实卸载/重装后旧授权保留或撤销合同和fullUID/安装身份",
+        "新Manager恢复真实安装态及Root",
+        "升级、签名轮换、多用户与失败恢复"
+      ],
+      "sourceReviewState": "SOURCE_MAPPING_ONLY_TESTS_NOT_EXECUTED",
+      "originalItemState": "NOT_RUN",
+      "qualifiesFullOriginalItem": false
+    },
+    {
+      "id": "FB-84",
+      "originalText": "| #84 | Liu Ai @wangouguair | 一加 PLQ110，Android 16，内核 6.6.118，Manager 5.2.1 | 环境检查未完成，点重试也没用 | `code=ENV_UNKNOWN_TIMEOUT detail=PROBE_FAILED:ULTRA_RECOVERY_PROBE_UNKNOWN`（三次，elapsedMs 848/529/648）；`recovery=RECOVERY_ROOT_NOT_VERIFIED`；`result=NOT_OBSERVED` |  |",
+      "originalSource": {
+        "path": "docs/development/ultra-keyless-20261124/issue-regression-20261126/feedback-all-issues-regression.md",
+        "exists": true,
+        "bytes": 63640,
+        "sha256": "c2fd95238902d8bf75b71ce17f2aba7b45225cf638fc4dbdb2310b211487ee7a"
+      },
+      "originalSourceLine": 162,
+      "relevantSourceContractBranches": [
+        "FB-84.03：首页返回/静默刷新入口的源码接线",
+        "FB-84.04：手动等待当前系列及任务完成/launch抛错清进度的源码合同"
+      ],
+      "remainingOriginalBranches": [
+        "FB-84.01/.02：原PLQ110组合的首错、Unknown/Timeout及真实安装事实",
+        "FB-84.04：launch块尚未进入即取消/拒绝时的进度清理由home owner验证，当前合同未覆盖",
+        "FB-84.05/.06/.07：native线程/准备取消/未知提交边界",
+        "FB-84.08：同代实际恢复及Root；页面卡死原根因与整条反馈保持待验"
+      ],
+      "sourceReviewState": "SOURCE_MAPPING_ONLY_TESTS_NOT_EXECUTED",
+      "originalItemState": "NOT_RUN",
+      "qualifiesFullOriginalItem": false
+    },
+    {
+      "id": "OWN-03",
+      "originalText": "减少重复检查、虚假未就绪、空泛提示；将正常/重试/不支持/失败清晰区分，禁止把非零一律当成功。",
+      "originalSource": {
+        "path": "docs/SDK-REFACTOR-REQUIREMENTS.md",
+        "exists": true,
+        "bytes": 218872,
+        "sha256": "adc0f7e551b6c7d6b3f707a99370b366518528767aa38bd836bd4a05282b3d19"
+      },
+      "originalSourceLine": 416,
+      "relevantSourceContractBranches": [
+        "dirty/detectionRevision条件触发前台刷新、共享flight入口及避免通用checking清页的源码合同"
+      ],
+      "remainingOriginalBranches": [
+        "实际正常/重试/不支持/失败及原错误码分类",
+        "完整入口的前检、提示与跨层真实运行",
+        "去重/排队/取消的行为回放和Android生命周期"
+      ],
+      "sourceReviewState": "SOURCE_MAPPING_ONLY_TESTS_NOT_EXECUTED",
+      "originalItemState": "NOT_RUN",
+      "qualifiesFullOriginalItem": false
+    },
+    {
+      "id": "ADD-SDK-PAGE-PERFORMANCE-01",
+      "originalText": "同次关联请求追JNI admission/fork/SDK/child/cleanup；冷暖并发页面、授权/安装卸载、迟到结果/重建、SDK_BUSY原cause和滚动状态。",
+      "originalSource": {
+        "path": ".tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/functional-closure/CASE-SOURCE-MAP.json",
+        "jsonPointer": "/rows/39"
+      },
+      "originalSourceLine": null,
+      "relevantSourceContractBranches": [
+        "页面返回/前台刷新去重条件、共享刷新入口和保持页面的源码合同"
+      ],
+      "remainingOriginalBranches": [
+        "同次JNI admission/fork/SDK/child/cleanup轨迹与计数",
+        "冷暖并发、授权/安装卸载、重建/迟到结果、SDK_BUSY原cause和滚动状态",
+        "300ms页面与显式维护预算、同代APK两主题/首屏/回页的Android实机计时；无静态源码推升"
+      ],
+      "sourceReviewState": "SOURCE_MAPPING_ONLY_TESTS_NOT_EXECUTED",
+      "originalItemState": "NOT_RUN",
+      "qualifiesFullOriginalItem": false
+    }
+  ],
+  "androidDeviceRuns": 0,
+  "pageHangOriginalCauseEstablished": false,
+  "fb84Complete": false
+}

@@ -23,7 +23,7 @@ internal object UltraIdleEnvironmentRecovery {
 
     internal fun submittedThisBoot(context: Context): Boolean {
         val bootId = UltraEnvironmentAutoSetup.currentBootId() ?: return false
-        return context.ultraPreferences(PREFS, Context.MODE_PRIVATE).getString(SUBMITTED, null) == bootId
+        return context.ultraPreferences(PREFS, Context.MODE_PRIVATE).all[SUBMITTED] == bootId
     }
 
     private fun ensureExclusive(context: Context, bootId: String,
@@ -42,11 +42,11 @@ internal object UltraIdleEnvironmentRecovery {
                 !allowed() -> "SCOPE_CHANGED"
                 else -> null
             }
-            override fun alreadySubmitted() = prefs.getString(SUBMITTED, null) == bootId ||
+            override fun alreadySubmitted() = prefs.all[SUBMITTED] == bootId ||
                 context.ultraPreferences("ultra-auto-setup", Context.MODE_PRIVATE)
-                    .getString("submittedBootId", null) == bootId ||
+                    .all["submittedBootId"] == bootId ||
                 context.ultraPreferences("ultra-env-upgrade", Context.MODE_PRIVATE)
-                    .getString("submittedBootId", null) == bootId
+                    .all["submittedBootId"] == bootId
             override fun idleVerified(): Boolean {
                 val receipt = client.runRootCommand(evidenceScript(helper, bootId))
                 return allowed() && receipt.succeeded && client.decodeText(receipt.string("result"))?.trim() ==

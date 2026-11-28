@@ -23,10 +23,10 @@ class HomeActivationRefreshTest {
 
     @Test fun activationSurvivesAnInterruptedFirstRootRead() {
         for (mode in WorkMode.entries) {
-            val refreshed = state().afterEnvironmentProbeFailure(state(mode))
+            val refreshed = state().afterEnvironmentProbeFailure(state(mode), knownUltra = false, failureDetail = null)
             assertEquals(mode, refreshed.environmentMode)
             assertTrue(refreshed.showInstalledStatus)
-            assertFalse(refreshed.environmentChecking)
+            assertTrue(refreshed.environmentChecking)
             assertFalse(refreshed.isRootAvailable)
             assertFalse(refreshed.isManager)
             assertNull(refreshed.rootReadiness)
@@ -34,24 +34,24 @@ class HomeActivationRefreshTest {
     }
 
     @Test fun anUnresolvedOrMissingEnvironmentDoesNotBecomeActivated() {
-        val refreshed = state().afterEnvironmentProbeFailure(state())
+        val refreshed = state().afterEnvironmentProbeFailure(state(), knownUltra = false, failureDetail = null)
         assertNull(refreshed.environmentMode)
         assertFalse(refreshed.showInstalledStatus)
         assertFalse(refreshed.isRootAvailable)
         assertEquals(HomeEnvironmentFailure.FAILED, refreshed.environmentFailure)
-        assertTrue(refreshed.showEnvironmentStatusCard)
+        assertFalse(refreshed.showEnvironmentStatusCard)
     }
 
     @Test fun aFailedObservationRetainsInstallationWithoutReusingAnOldRootVerdict() {
         val previous = state(WorkMode.LITE).copy(isRootAvailable = true,
             rootReadiness = SuReadiness.USABLE)
-        val refreshed = previous.afterEnvironmentProbeFailure(state(WorkMode.LITE))
+        val refreshed = previous.afterEnvironmentProbeFailure(state(WorkMode.LITE), knownUltra = false, failureDetail = null)
         assertTrue(refreshed.showInstalledStatus)
         assertFalse(refreshed.isRootAvailable)
         assertNull(refreshed.rootReadiness)
         assertEquals(HomeEnvironmentFailure.FAILED, refreshed.environmentFailure)
         for (mode in listOf(null, WorkMode.KSU)) {
-            val changed = previous.afterEnvironmentProbeFailure(state(mode))
+            val changed = previous.afterEnvironmentProbeFailure(state(mode), knownUltra = false, failureDetail = null)
             assertFalse(changed.isRootAvailable)
             assertNull(changed.rootReadiness)
         }
@@ -59,7 +59,7 @@ class HomeActivationRefreshTest {
 
     @Test fun currentHiddenFactsKeepPriorityAfterActivation() {
         val local = state(WorkMode.LITE).copy(hiddenConfirming = true)
-        val refreshed = state().afterEnvironmentProbeFailure(local)
+        val refreshed = state().afterEnvironmentProbeFailure(local, knownUltra = false, failureDetail = null)
         assertTrue(refreshed.hiddenConfirming)
         assertFalse(refreshed.showInstalledStatus)
         assertFalse(refreshed.withHiddenFacts(HomeHiddenFacts(true, false)).showInstalledStatus)

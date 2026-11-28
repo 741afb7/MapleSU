@@ -2,8 +2,6 @@ package dev.maplesu.manager.installer
 
 import dev.maplesu.manager.runtime.ultra.UltraEnvUpgrade
 import dev.maplesu.manager.runtime.ultra.UltraEnvFacts
-import dev.maplesu.manager.runtime.ultra.UltraEnvUpgradePolicy
-import dev.maplesu.manager.runtime.ultra.UltraInstalledIdentityProbe
 import dev.maplesu.manager.workmode.WorkMode
 
 /** Only an ordinary, same-mode direct install can update the running environment. */
@@ -30,33 +28,22 @@ internal object UltraDirectInstallPolicy {
 
     /** A rejected or interrupted environment update must never fall through to boot patching. */
     fun <T> dispatch(request: UltraDirectInstallRequest, facts: () -> UltraEnvFacts,
-                     upgrade: () -> T, unavailable: (UltraEnvUpgrade) -> T, patchBoot: () -> T,
-                     requiresKernelUpdate: () -> Boolean = { false }): T {
+                     upgrade: () -> T, unavailable: (UltraEnvUpgrade) -> T, patchBoot: () -> T): T {
         if (eligible(request)) {
-            val current = facts()
-            if ((current.running || current.installedVersion != null ||
-                    current.freshKernelInstall && !current.readUnknown) &&
-                !current.suspended && !current.quiescing && !current.submittedThisBoot &&
-                requiresKernelUpdate()) return patchBoot()
-            when (val decision = UltraEnvUpgradePolicy.decide(current)) {
-                is UltraEnvUpgrade.Available, is UltraEnvUpgrade.Unverified -> return upgrade()
-                is UltraEnvUpgrade.Rebooting -> return unavailable(decision)
-                UltraEnvUpgrade.None -> {
-                    if (current.suspended || current.quiescing) return unavailable(decision)
-                    if (current.freshKernelInstall) {
-                        if (current.readUnknown || current.submittedThisBoot) return unavailable(decision)
-                        return upgrade()
-                    }
-                    // The installer performs a fresh channel/boot/identity check before repairing
-                    // an idle helper. Never reinterpret Unknown as Running or patch over it.
-                    if (!current.running && current.installedVersion != null &&
-                        UltraInstalledIdentityProbe.normalizeSha(current.installedHelperSha256) != null) return upgrade()
-                    if (!current.running && (request.environmentWasRunning || current.installedVersion != null)) {
-                        return unavailable(decision)
-                    }
-                    if (current.readUnknown) return unavailable(decision)
+            val current = try { facts() } catch (error: Exception) {
+                if (error is java.util.concurrent.CancellationException) throw error
+                if (error is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw error
                 }
+                UltraEnvFacts(readUnknown = true)
             }
+            if (current.suspended || current.quiescing) return unavailable(UltraEnvUpgrade.None)
+            if (current.submittedThisBoot) return unavailable(UltraEnvUpgrade.Rebooting(
+                current.bundledVersion ?: current.installedVersion ?: ""))
+            // Explicit installation reaches the installer even when old metadata is absent.
+            // The installer owns live authentication, carrier replacement and readback.
+            return upgrade()
         }
         return patchBoot()
     }

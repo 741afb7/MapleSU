@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.maplesu.core.R
 import com.maplesu.core.ui.component.dialog.rememberConfirmDialog
@@ -67,17 +68,101 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card as MiuixCard
 import top.yukonga.miuix.kmp.basic.Icon as MiuixIcon
 import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
+import top.yukonga.miuix.kmp.basic.Text as MiuixText
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 
 private const val TAG = "MapleSUUltraEnvUi"
+
+internal val ultraComponentDiagnosticObservations get() = UltraEnvironmentProbe.observations
+
+/** Current installation facts only; this never starts an SDK, Root or version read. */
+internal fun currentUltraComponentDiagnosticSnapshot(context: Context): UltraEnvironmentProbe.Snapshot? = runCatching {
+    if (ModeRuntime.active != null) return@runCatching null
+    val observation = UltraEnvironmentProbe.currentSnapshot(context)
+    val owner = observation.managerOwnerIdentity ?: return@runCatching null
+    if (owner.fullUid != android.os.Process.myUid() ||
+        com.maplesu.core.ui.security.HiddenStartupConfirm.masks(
+            com.maplesu.core.ui.security.LiteHiddenRuntime.currentState(),
+            com.maplesu.core.ui.security.LiteHiddenRuntime.lastKnownOn(), ModeRuntime.active) ||
+        com.maplesu.core.ui.security.HiddenStartupConfirm.isPending(context) ||
+        dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.pending ||
+        dev.maplesu.manager.workmode.superuser.LiteImplantQuiesceGate.isBlocked() ||
+        UltraRootKeyStore.isSuspended(context)) return@runCatching null
+    observation.takeIf { ModeRuntime.active == null && it.modeActivation === ModeRuntime.activation &&
+        it == UltraEnvironmentProbe.currentSnapshot(context) }
+}.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+
+/** Read-only diagnostics retain the original component result and identify historical install failures. */
+internal fun environmentDiagnosticDetail(
+    rootProbeDetail: String?,
+    detail: String? = null,
+    persistedFailure: String? = null,
+): String? = listOf(rootProbeDetail, detail,
+    persistedFailure?.takeIf(String::isNotBlank)?.let { "lastFailure=$it" })
+    .filterNotNull().filter(String::isNotBlank).distinct().joinToString("\n").takeIf(String::isNotBlank)
+
+/** History is a read-only result; no owner or runtime capability is inferred from it. */
+internal fun savedUltraInstallFailureDiagnostic(
+    enabled: Boolean,
+    mode: WorkMode?,
+    hidden: Boolean,
+    pending: Boolean,
+    readFailure: () -> String?,
+): String? {
+    if (!enabled || mode != null || hidden || pending) return null
+    return environmentDiagnosticDetail(null, persistedFailure = readFailure())
+}
+
+@Composable
+internal fun rememberSavedUltraInstallFailureDiagnostic(enabled: Boolean): String? {
+    if (!enabled) return null
+    val context = LocalContext.current.applicationContext
+    val hiddenRevision by com.maplesu.core.ui.security.HiddenFactsSignal.revision.collectAsStateWithLifecycle()
+    val switching by dev.maplesu.manager.workmode.ui.WorkModeSwitchSession.pendingFlow.collectAsStateWithLifecycle()
+    val mode = ModeRuntime.active
+    val hidden = com.maplesu.core.ui.security.HiddenStartupConfirm.masks(
+        com.maplesu.core.ui.security.LiteHiddenRuntime.currentState(),
+        com.maplesu.core.ui.security.LiteHiddenRuntime.lastKnownOn(), mode)
+    val pending = switching || com.maplesu.core.ui.security.HiddenStartupConfirm.isPending(context) ||
+        dev.maplesu.manager.workmode.superuser.LiteImplantQuiesceGate.isBlocked() || UltraRootKeyStore.isSuspended(context)
+    val diagnosticKey = listOf(mode, hidden, pending, hiddenRevision)
+    var detail by remember(context, diagnosticKey) { mutableStateOf(
+        savedUltraInstallFailureDiagnostic(enabled, mode, hidden, pending) { UltraEnvironmentUpgrade.persistedFailure(context) }) }
+    LifecycleResumeEffect(context, diagnosticKey) {
+        detail = savedUltraInstallFailureDiagnostic(enabled, mode, hidden, pending) { UltraEnvironmentUpgrade.persistedFailure(context) }
+        onPauseOrDispose { }
+    }
+    return detail
+}
+
+@Composable
+internal fun SavedUltraInstallFailureDiagnosticMiuix(detail: String) {
+    Column {
+        BasicComponent(title = stringResource(R.string.ultra_sdk_install_title),
+            summary = stringResource(R.string.ui_d_env_install_failed))
+        MiuixText(detail, color = colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+    }
+}
+
+@Composable
+internal fun SavedUltraInstallFailureDiagnosticMaterial(detail: String) {
+    SegmentedListItem(
+        headlineContent = { MaterialText(stringResource(R.string.ultra_sdk_install_title)) },
+        supportingContent = {
+            Column {
+                MaterialText(stringResource(R.string.ui_d_env_install_failed))
+                MaterialText(detail)
+            }
+        },
+    )
+}
 
 private data class InstalledUltraUpgradeAction(val busy: Boolean, val onClick: () -> Unit)
 
@@ -160,10 +245,17 @@ class UltraEnvironmentPanel internal constructor(
     private val context: Context,
     private val scope: CoroutineScope,
     initialSnapshot: UltraEnvironmentProbe.Snapshot,
+    internal val diagnosticsOnly: Boolean = false,
 ) {
-    private val seed = lastFacts?.takeIf { it.current() }
+    private val seed = if (diagnosticsOnly) null else lastFacts?.takeIf { it.current() }
+    private val diagnosticScope = initialSnapshot.takeIf { diagnosticsOnly }
 
     var state by mutableStateOf(seed?.state ?: initialSnapshot.state)
+        private set
+    var detail by mutableStateOf(environmentDiagnosticDetail(
+        if (seed != null) seed.detail else environmentDiagnosticDetail(initialSnapshot.rootProbeDetail, initialSnapshot.detail),
+        persistedFailure = UltraEnvironmentUpgrade.persistedFailure(context),
+    ))
         private set
     var kernelRootVerified by mutableStateOf(seed?.kernelRootVerified ?: initialSnapshot.kernelRootVerified)
         private set
@@ -177,7 +269,7 @@ class UltraEnvironmentPanel internal constructor(
         private set
 
     fun loadInitialState() {
-        if (busy) return
+        if (diagnosticsOnly || busy) return
         busy = true
         scope.launch {
             try {
@@ -194,11 +286,15 @@ class UltraEnvironmentPanel internal constructor(
 
     /** 静默刷新：界面直接反映新状态，不弹 Toast。 */
     fun refresh() = runAction {
-        applyFacts(readFacts(force = true))
+        if (diagnosticsOnly) {
+            withContext(Dispatchers.IO) { currentDiagnosticObservation() }
+                ?.let(UltraComponentDiagnosticRequests::retry)
+        } else applyFacts(readFacts(force = true))
         ""
     }
 
     fun repairEnvironment() = runAction {
+        if (diagnosticsOnly) return@runAction ""
         val result = withContext(Dispatchers.IO) { UltraEnvironmentUpgrade.repairEnvironment(context) }
         applyFacts(readFacts(force = true))
         when (result) {
@@ -215,6 +311,7 @@ class UltraEnvironmentPanel internal constructor(
     fun suspendLocal() = uninstall(permanent = false)
 
     private fun uninstall(permanent: Boolean) = runAction {
+        if (diagnosticsOnly) return@runAction ""
         val result = withContext(Dispatchers.IO) { UltraEnvironmentUninstaller.uninstall(context, permanent) }
         if (!result.ok) {
             Log.w(TAG, UltraSdkLogging.redact(
@@ -224,6 +321,22 @@ class UltraEnvironmentPanel internal constructor(
             applyFacts(readFacts(force = true))
             context.getString(R.string.ui_d_env_remove_done)
         }
+    }
+
+    private fun currentDiagnosticObservation(): UltraEnvironmentProbe.Snapshot? =
+        currentUltraComponentDiagnosticSnapshot(context)?.takeIf {
+            it.modeActivation === diagnosticScope?.modeActivation &&
+                it.managerOwnerIdentity == diagnosticScope?.managerOwnerIdentity
+        }
+
+    internal suspend fun observeDiagnostic() {
+        if (!diagnosticsOnly) return
+        val observation = withContext(Dispatchers.IO) { currentDiagnosticObservation() } ?: return
+        state = observation.state
+        detail = environmentDiagnosticDetail(observation.rootProbeDetail, observation.detail,
+            UltraEnvironmentUpgrade.persistedFailure(context))
+        kernelRootVerified = observation.kernelRootVerified
+        observedAtWallClockMs = observation.observedAtWallClockMs
     }
 
     private fun captureObservation(): () -> Boolean {
@@ -252,6 +365,7 @@ class UltraEnvironmentPanel internal constructor(
             )
         }
         val nextState = runCatching { UltraEnvironmentProbe.refresh(context, force = force) }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             .getOrDefault(UltraEnvironmentProbe.State.Unknown)
         val current = captureObservation()
         val observation = UltraEnvironmentProbe.currentSnapshot(context)
@@ -260,6 +374,8 @@ class UltraEnvironmentPanel internal constructor(
             version = if (current()) readVersion(current) else null,
             observedAt = observation.observedAtWallClockMs,
             kernelRootVerified = observation.state == nextState && observation.kernelRootVerified,
+            detail = environmentDiagnosticDetail(observation.rootProbeDetail, observation.detail)
+                .takeIf { observation.state == nextState },
             current = current,
         )
     }
@@ -272,9 +388,10 @@ class UltraEnvironmentPanel internal constructor(
             ?.string("version")
         if (raw != null) return@runCatching UltraEnvironmentVersion.displayOf(raw)
         // Version fallback only: do not start a root hash read when the SDK answered.
-        val buildId = runCatching { UltraInstalledIdentityProbe.read(context, client).buildId }.getOrNull()
+        val buildId = runCatching { UltraInstalledIdentityProbe.read(context, client).buildId }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
         UltraEnvironmentVersion.displayOf(raw, buildId)
-    }.getOrNull()
+    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
 
     private fun applyFacts(facts: Facts) {
         if (!facts.current()) return
@@ -288,6 +405,8 @@ class UltraEnvironmentPanel internal constructor(
         }
         lastFacts = merged
         state = merged.state
+        detail = environmentDiagnosticDetail(merged.detail,
+            persistedFailure = UltraEnvironmentUpgrade.persistedFailure(context))
         kernelRootVerified = merged.kernelRootVerified
         version = merged.version
         observedAtWallClockMs = merged.observedAt
@@ -321,6 +440,7 @@ class UltraEnvironmentPanel internal constructor(
         val observedAt: Long,
         val hookEnvironment: Boolean = false,
         val kernelRootVerified: Boolean = false,
+        val detail: String? = null,
         val current: () -> Boolean,
     )
 
@@ -353,7 +473,20 @@ fun rememberUltraEnvironmentPanel(enabled: Boolean): UltraEnvironmentPanel? {
     val observation by UltraEnvironmentProbe.observations.collectAsStateWithLifecycle(
         initialValue = UltraEnvironmentProbe.currentSnapshot(context.applicationContext))
     LaunchedEffect(panel, observation.state, observation.kernelRootVerified,
-        observation.managerOwnerIdentity, observation.sdkChannelAvailable) { panel.loadInitialState() }
+        observation.managerOwnerIdentity, observation.sdkChannelAvailable, observation.detail) { panel.loadInitialState() }
+    return panel
+}
+
+/** Rendering consumes current observations; explicit retries belong to the shared check session. */
+@Composable
+internal fun rememberUltraComponentDiagnosticsPanel(observation: UltraEnvironmentProbe.Snapshot?): UltraEnvironmentPanel? {
+    if (observation == null || ModeRuntime.active != null || observation.modeActivation !== ModeRuntime.activation) return null
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    val panel = remember(observation.modeActivation, observation.managerOwnerIdentity) {
+        UltraEnvironmentPanel(context, scope, observation, diagnosticsOnly = true)
+    }
+    LaunchedEffect(panel, observation) { panel.observeDiagnostic() }
     return panel
 }
 
@@ -370,6 +503,7 @@ private fun envStateLabelRes(panel: UltraEnvironmentPanel): Int = when {
 /** 版本 + 检查时间，一行写完；只有数值在变，行高不变。 */
 @Composable
 private fun envSummary(panel: UltraEnvironmentPanel): String {
+    if (panel.diagnosticsOnly) return stringResource(R.string.ui_d_env_refresh)
     val checkedAt = panel.observedAtWallClockMs.takeIf { it > 0 }?.let { at ->
         remember(at) { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(at)) }
     }
@@ -434,9 +568,10 @@ fun UltraEnvironmentSectionMiuix(panel: UltraEnvironmentPanel, showInstalledKern
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     StatusTag(label = stringResource(envStateLabelRes(panel)), backgroundColor = bg, contentColor = fg)
+                    if (panel.diagnosticsOnly) MiuixText(stringResource(R.string.network_retry))
                     MiuixIcon(
                         Icons.Rounded.Refresh,
-                        contentDescription = stringResource(R.string.ui_d_env_refresh),
+                        contentDescription = stringResource(if (panel.diagnosticsOnly) R.string.network_retry else R.string.ui_d_env_refresh),
                         modifier = Modifier
                             .size(18.dp)
                             .graphicsLayer { alpha = if (panel.busy) 0.38f else 1f },
@@ -446,6 +581,10 @@ fun UltraEnvironmentSectionMiuix(panel: UltraEnvironmentPanel, showInstalledKern
             },
             onClick = panel::refresh,
         )
+        panel.detail?.takeIf(String::isNotBlank)?.let { detail ->
+            MiuixText(text = detail, color = colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        }
         if (showInstalledKernelUpdate) InstalledUltraUpgradeRowMiuix()
         if (panel.canShowRepair) {
             BasicComponent(
@@ -510,6 +649,7 @@ fun UltraEnvironmentRowMaterial(panel: UltraEnvironmentPanel) {
         supportingContent = {
             Column {
                 MaterialText(envSummary(panel))
+                panel.detail?.takeIf(String::isNotBlank)?.let { MaterialText(it) }
             }
         },
         leadingContent = { MaterialIcon(Icons.Rounded.Security, contentDescription = title) },
@@ -520,9 +660,10 @@ fun UltraEnvironmentRowMaterial(panel: UltraEnvironmentPanel) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 StatusTag(label = stringResource(envStateLabelRes(panel)), backgroundColor = bg, contentColor = fg)
+                if (panel.diagnosticsOnly) MaterialText(stringResource(R.string.network_retry))
                 MaterialIcon(
                     Icons.Rounded.Refresh,
-                    contentDescription = stringResource(R.string.ui_d_env_refresh),
+                    contentDescription = stringResource(if (panel.diagnosticsOnly) R.string.network_retry else R.string.ui_d_env_refresh),
                     modifier = Modifier
                         .size(18.dp)
                         .graphicsLayer { alpha = if (panel.busy) 0.38f else 1f },
@@ -556,7 +697,7 @@ private fun rememberFaultRepairAction(panel: UltraEnvironmentPanel): () -> Unit 
 }
 
 private val UltraEnvironmentPanel.canShowRepair: Boolean
-    get() = !hookEnvironment && (state == UltraEnvironmentProbe.State.Fault ||
+    get() = !diagnosticsOnly && !hookEnvironment && (state == UltraEnvironmentProbe.State.Fault ||
         state == UltraEnvironmentProbe.State.Unknown ||
         state == UltraEnvironmentProbe.State.NotInstalled && kernelRootVerified)
 
@@ -602,75 +743,75 @@ class UltraEnvironmentInstallPanel internal constructor(
         private set
     var message by mutableStateOf<String?>(null)
         private set
+    var detail by mutableStateOf<String?>(null)
+        private set
     var readiness by mutableStateOf(UltraEnvironmentInstallReadiness.NotChecked)
         private set
+    var needsConfirmation by mutableStateOf(true)
+        private set
+    private var homeMode: WorkMode? = null
+    private var homeConfirmedAbsent = false
     private var refreshJob: Job? = null
 
-    private fun eligible(mode: WorkMode? = ModeRuntime.active): Boolean =
-        mode == WorkMode.LITE && ModeRuntime.active == WorkMode.LITE &&
-            !HookRootExecutor.production(context).available()
+    private fun eligible(mode: WorkMode? = homeMode): Boolean =
+        environmentInstallEligible(mode, ModeRuntime.active,
+            com.maplesu.core.ui.security.HiddenStartupConfirm.masking(context),
+            com.maplesu.core.ui.security.HiddenStartupConfirm.isPending(context))
 
-    fun refresh(mode: WorkMode? = ModeRuntime.active) {
+    fun refresh(mode: WorkMode? = ModeRuntime.active, confirmedAbsent: Boolean = false) {
+        homeMode = mode
+        homeConfirmedAbsent = confirmedAbsent
+        needsConfirmation = environmentInstallNeedsConfirmation(mode, confirmedAbsent)
+        if (mode == WorkMode.KSU || ModeRuntime.active == WorkMode.KSU) visible = false
         if (busy) return
         refreshJob?.cancel()
         refreshJob = scope.launch {
             val eligible = withContext(Dispatchers.IO) { eligible(mode) }
             val observation = UltraEnvironmentProbe.currentSnapshot(context)
             visible = environmentInstallVisible(eligible, observation.state, observation.kernelChannelAbsent)
-            readiness = UltraEnvironmentInstallReadiness.NotChecked
-            message = null
+            if (visible && message == null) {
+                (UltraEnvironmentUpgrade.lastFailureReason ?: UltraEnvironmentUpgrade.persistedFailure(context))
+                    ?.takeIf(String::isNotBlank)?.let { reason ->
+                        readiness = UltraEnvironmentInstallReadiness.Unavailable
+                        message = context.getString(R.string.ui_d_env_install_failed)
+                        detail = reason
+                    }
+            }
         }
     }
 
-    fun act(onInstallImage: () -> Unit) {
-        if (busy) return
-        if (readiness.needsImage) onInstallImage() else install()
-    }
-
     fun install() {
-        if (busy) return
+        if (busy || !eligible()) return
         refreshJob?.cancel()
-        val modeBeforeInstall = ModeRuntime.active
-        if (!eligible()) return
-        val current = UltraSdkCredentials.captureOwnerMarker(context)
-        val stateBeforeInstall = UltraEnvironmentProbe.currentSnapshot(context).state
         busy = true
+        message = null
+        detail = null
+        readiness = UltraEnvironmentInstallReadiness.NotChecked
         scope.launch {
             try {
-                val outcome = withContext(Dispatchers.IO) {
-                    currentCoroutineContext().ensureActive()
-                    if (ModeRuntime.active != modeBeforeInstall || !current()) {
-                        UltraEnvironmentInstaller.Outcome(false, "INSTALL_CONTEXT_CHANGED")
-                    } else {
-                        UltraRootKeyStore.allowEnvironmentInstall(context)
-                        UltraEnvironmentInstaller.install(
-                            context, UltraSdkCredentials.client(context, current),
-                            UltraEnvironmentInstaller.Intent.InstallToBundledBuild,
-                        )
-                    }
+                val (result, failureReason) = withContext(Dispatchers.IO + NonCancellable) {
+                    val result = UltraEnvironmentUpgrade.installBundled(context)
+                    result to UltraEnvironmentUpgrade.lastFailureReason
                 }
-                message = if (outcome.ok && outcome.verified) {
-                    visible = false
-                    context.getString(R.string.ui_d_env_install_done)
-                } else {
-                    Log.w(TAG, UltraSdkLogging.redact(
-                        "install failed sdkError=${outcome.sdkError} code=${outcome.sdkErrorCode}"))
-                    readiness = when (outcome.sdkError) {
-                        "ERR_MODULE_NO_BOOT" -> UltraEnvironmentInstallReadiness.NeedsImage
-                        else -> UltraEnvironmentInstallReadiness.Unavailable
-                    }
-                    environmentInstallFailure(context, outcome.sdkError)
-                }
-                message?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
-            } catch (error: kotlinx.coroutines.CancellationException) {
-                throw error
+                val summary = context.getString(when (result) {
+                    UltraEnvironmentUpgrade.Result.SUBMITTED -> R.string.ultra_sdk_install_submitted
+                    UltraEnvironmentUpgrade.Result.FAILED -> R.string.ui_d_env_install_failed
+                    UltraEnvironmentUpgrade.Result.REFUSED -> R.string.ultra_env_update_refused
+                })
+                readiness = if (result == UltraEnvironmentUpgrade.Result.SUBMITTED)
+                    UltraEnvironmentInstallReadiness.NotChecked else UltraEnvironmentInstallReadiness.Unavailable
+                message = summary
+                detail = failureReason.takeUnless { result == UltraEnvironmentUpgrade.Result.SUBMITTED }
+                Toast.makeText(context, summary, Toast.LENGTH_LONG).show()
             } catch (error: Exception) {
-                Log.w(TAG, "install failed", error)
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                Log.w(TAG, "SDK installation failed", error)
+                readiness = UltraEnvironmentInstallReadiness.Unavailable
                 message = context.getString(R.string.ui_d_env_install_failed)
+                detail = error.message ?: error.javaClass.simpleName
             } finally {
                 busy = false
-                if (ModeRuntime.active != modeBeforeInstall ||
-                    UltraEnvironmentProbe.currentSnapshot(context).state != stateBeforeInstall) refresh()
+                refresh(homeMode, homeConfirmedAbsent)
             }
         }
     }
@@ -680,10 +821,10 @@ internal fun environmentInstallVisible(
     eligible: Boolean,
     state: UltraEnvironmentProbe.State,
     kernelChannelAbsent: Boolean,
-): Boolean = eligible && (state == UltraEnvironmentProbe.State.NotInstalled || kernelChannelAbsent)
+): Boolean = eligible
 
 internal fun environmentReadinessSummaryResId(readiness: UltraEnvironmentInstallReadiness): Int = when (readiness) {
-    UltraEnvironmentInstallReadiness.NotChecked, UltraEnvironmentInstallReadiness.Ready -> R.string.ui_d_env_install_summary
+    UltraEnvironmentInstallReadiness.NotChecked, UltraEnvironmentInstallReadiness.Ready -> R.string.ultra_sdk_install_summary
     UltraEnvironmentInstallReadiness.NeedsImage -> R.string.ui_d_env_install_kernel_channel
     UltraEnvironmentInstallReadiness.Unavailable -> R.string.ui_d_env_install_failed
 }
@@ -698,31 +839,42 @@ private fun environmentInstallFailure(context: Context, sdkError: String): Strin
     context.getString(environmentInstallFailureResId(sdkError))
 
 @Composable
-fun rememberUltraEnvironmentInstallPanel(mode: WorkMode? = ModeRuntime.active): UltraEnvironmentInstallPanel {
+fun rememberUltraEnvironmentInstallPanel(
+    mode: WorkMode? = ModeRuntime.active,
+    confirmedAbsent: Boolean = false,
+): UltraEnvironmentInstallPanel {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val appContext = context.applicationContext
     val panel = remember { UltraEnvironmentInstallPanel(appContext, scope) }
     val observation by UltraEnvironmentProbe.observations.collectAsStateWithLifecycle(
         initialValue = UltraEnvironmentProbe.currentSnapshot(appContext))
-    LaunchedEffect(panel, mode, observation.state, observation.kernelChannelAbsent) { panel.refresh(mode) }
+    val hiddenRevision by com.maplesu.core.ui.security.HiddenFactsSignal.revision.collectAsStateWithLifecycle()
+    LaunchedEffect(panel, mode, confirmedAbsent, observation.state, observation.kernelChannelAbsent, hiddenRevision) {
+        panel.refresh(mode, confirmedAbsent)
+    }
     return panel
 }
 
 @Composable
 private fun installSummary(panel: UltraEnvironmentInstallPanel): String =
-    panel.message ?: stringResource(if (panel.busy) R.string.ui_d_env_install_busy else environmentReadinessSummaryResId(panel.readiness))
+    panel.message ?: when {
+        panel.busy -> stringResource(R.string.ui_d_env_install_busy)
+        panel.needsConfirmation -> stringResource(R.string.home_environment_confirmation_summary) + "\n" +
+            stringResource(R.string.ultra_sdk_install_summary)
+        else -> stringResource(environmentReadinessSummaryResId(panel.readiness))
+    }
 
 @Composable
 private fun installActionLabel(panel: UltraEnvironmentInstallPanel): String = stringResource(when {
-    panel.readiness.needsImage -> R.string.ui_d_env_install_image_action
-    else -> R.string.ui_d_env_install_action
+    panel.readiness == UltraEnvironmentInstallReadiness.Unavailable -> R.string.network_retry
+    else -> R.string.ultra_sdk_install_action
 })
 
 @Composable
-fun UltraEnvironmentInstallCardMiuix(panel: UltraEnvironmentInstallPanel, onInstallImage: () -> Unit) {
+fun UltraEnvironmentInstallCardMiuix(panel: UltraEnvironmentInstallPanel, onOpenDiagnostics: () -> Unit) {
     if (!panel.visible) return
-    val title = stringResource(R.string.ui_d_env_install_title)
+    val title = stringResource(R.string.ultra_sdk_install_title)
     MiuixCard(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
         BasicComponent(
             title = title,
@@ -742,9 +894,12 @@ fun UltraEnvironmentInstallCardMiuix(panel: UltraEnvironmentInstallPanel, onInst
                 .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.End,
         ) {
+            if (!panel.detail.isNullOrBlank()) {
+                MiuixTextButton(text = stringResource(R.string.work_mode_open_diagnosis), onClick = onOpenDiagnostics)
+            }
             MiuixTextButton(
                 text = installActionLabel(panel),
-                onClick = { panel.act(onInstallImage) },
+                onClick = { panel.install() },
                 enabled = !panel.busy,
             )
         }
@@ -752,17 +907,22 @@ fun UltraEnvironmentInstallCardMiuix(panel: UltraEnvironmentInstallPanel, onInst
 }
 
 @Composable
-fun UltraEnvironmentInstallCardMaterial(panel: UltraEnvironmentInstallPanel, onInstallImage: () -> Unit) {
+fun UltraEnvironmentInstallCardMaterial(panel: UltraEnvironmentInstallPanel, onOpenDiagnostics: () -> Unit) {
     if (!panel.visible) return
     MaterialCard(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
-            MaterialText(stringResource(R.string.ui_d_env_install_title))
+            MaterialText(stringResource(R.string.ultra_sdk_install_title))
             MaterialText(
                 installSummary(panel),
                 modifier = Modifier.padding(top = 2.dp),
             )
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                MaterialTextButton(onClick = { panel.act(onInstallImage) }, enabled = !panel.busy) {
+                if (!panel.detail.isNullOrBlank()) {
+                    MaterialTextButton(onClick = onOpenDiagnostics) {
+                        MaterialText(stringResource(R.string.work_mode_open_diagnosis))
+                    }
+                }
+                MaterialTextButton(onClick = { panel.install() }, enabled = !panel.busy) {
                     MaterialText(installActionLabel(panel))
                 }
             }

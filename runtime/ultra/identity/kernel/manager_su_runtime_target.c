@@ -172,7 +172,6 @@ static int msu_su_btf_value(u32 id, u32 kind, u32 bytes, const char *name)
         (!name || (type.name && !strcmp(type.name, name))) ? 0 : -EPROTO;
 }
 
-#if !MSU_INIT_BRIDGE_CFI_KCFI
 static int msu_su_btf_pointer(u32 id, const char *name)
 {
     struct msu_runtime_btf_type type;
@@ -183,7 +182,6 @@ static int msu_su_btf_pointer(u32 id, const char *name)
     if (error) return error;
     return type.kind == 4 && type.name && !strcmp(type.name, name) ? 0 : -EPROTO;
 }
-#endif
 
 #if MSU_INIT_BRIDGE_CFI_KCFI
 static noinline int msu_su_exec_reference(int fd, struct filename *filename,
@@ -196,15 +194,19 @@ static noinline int msu_su_exec_reference(int fd, struct filename *filename,
 
 static int msu_su_runtime_prototype(const char *name, bool exec)
 {
+    struct msu_runtime_btf_function function;
+    int error;
 #if MSU_INIT_BRIDGE_CFI_KCFI
     unsigned long address;
     /* The real compiler type word can bind function types without BTF.
      * Aggregate member/size checks below remain independent ABI requirements. */
-    return msu_init_bridge_resolve_cfi(name, exec ? (const void *)msu_su_exec_reference :
+    error = msu_init_bridge_resolve_cfi(name, exec ? (const void *)msu_su_exec_reference :
         (const void *)msu_su_syscall_reference, &address);
-#else
-    struct msu_runtime_btf_function function;
-    int error = msu_runtime_btf_function(name, &function);
+    if (!exec || !error) return error;
+    /* The native exec entry is a patch site, never an indirect call target.
+     * Its BTF signature also qualifies entries without a callable type word. */
+#endif
+    error = msu_runtime_btf_function(name, &function);
     if (error) return error;
     if (function.variadic || function.argument_count != (exec ? 5 : 1)) return -EPROTO;
     error = msu_su_btf_value(function.return_type, 1, exec ? sizeof(int) : sizeof(long), NULL);
@@ -218,7 +220,6 @@ static int msu_su_runtime_prototype(const char *name, bool exec)
         sizeof(struct user_arg_ptr), "user_arg_ptr");
     if (!error) error = msu_su_btf_value(function.arguments[4], 1, sizeof(int), NULL);
     return error;
-#endif
 }
 
 static int msu_su_runtime_profiles_produce(unsigned long (*lookup)(const char *),
@@ -336,6 +337,8 @@ static const struct msu_su_compat_target msu_su_compat_targets[] = {
     {397, MSU_SU_STAT, 1, 4, "__arm64_sys_statx"},
     {439, MSU_SU_ACCESS, 1, 0, "__arm64_sys_faccessat2"},
 };
+_Static_assert(ARRAY_SIZE(msu_su_target_profiles) + ARRAY_SIZE(msu_su_compat_targets) + 3 <=
+    MSU_SU_RUNTIME_MAX_HOOKS, "SU target capacity includes compat, UID and KSU discovery hooks");
 static int msu_su_bind_compat(unsigned long (*lookup)(const char *),
     int (*resolve_cfi)(const char *, const void *, unsigned long *),
     struct msu_su_runtime_hook *targets, u32 *count)

@@ -113,9 +113,9 @@ class HomeUiStateLiteStatusTest {
     // ── 2026-10-30：冷启动闪烁（判定中 loading 占位）在 UiState 层的判据 ──
 
     @Test
-    fun pendingStateDrawsLoadingAndNoFailureLine() {
+    fun pendingStateKeepsBackgroundDetectionSilent() {
         val s = state(litePending = true, liteRootFailure = true)
-        assertTrue("判定中 → 画 loading 占位", s.showLiteChecking)
+        assertFalse("后台判定不替换主页内容", s.showLiteChecking)
         assertFalse("loading 期不许画「未安装」的那套失败行", s.showLiteRootFailure)
     }
 

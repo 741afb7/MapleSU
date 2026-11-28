@@ -141,6 +141,17 @@ class EnvironmentStateStore(private val persistence: EnvironmentStatePersistence
 
     fun snapshot(): EnvironmentSnapshot? = runCatching { persistence.read() }.getOrNull()
 
+    /** Retained Ultra installation only; it is never a current owner or Root proof. */
+    fun localInstallationFacts(currentBootId: String): LocalFacts {
+        val previous = snapshot()?.takeIf { it.mode == WorkMode.LITE }
+        return LocalFacts(
+            bootId = currentBootId,
+            managerFirstInstallAgeMs = Long.MAX_VALUE,
+            lastKnownMode = previous?.mode?.suffix,
+            lastKnownBootId = previous?.bootId,
+        )
+    }
+
     fun isDirty(): Boolean = snapshot()?.dirty == true
 
     /**

@@ -1,0 +1,2616 @@
+{
+  "schema": "maplesu-final-spec-source-review/1",
+  "recordedUtc": "2026-11-24T13:52:02.691295+00:00",
+  "owner": "implementation",
+  "readOnlyProduction": true,
+  "formalBuild": false,
+  "gradle": false,
+  "adb": false,
+  "scope": "119-requirement cross-index plus 29 CASE atoms and 12 additions, current owner deliveries; source, artifact and device evidence kept separate.",
+  "requirementCounts": {
+    "authoritativeUniqueIds": 119,
+    "inheritedCheckedIds": 3,
+    "nonCaseIdsNotExplicitRowsInFunctionalCaseMap": 90,
+    "originalCaseAtoms": 29,
+    "additionalCaseItems": 12,
+    "caseRows": 41,
+    "persistentConstraints": 20,
+    "originalProblemGroups": 10,
+    "imageAndFinalConditions": 10,
+    "newCompleteRequirements": 0,
+    "newDeviceAccepted": 0,
+    "productionChanges": 0,
+    "gradleRuns": 0,
+    "formalBuilds": 0,
+    "deviceOperations": 0
+  },
+  "requirementIds": [
+    "SDK-01",
+    "SDK-02",
+    "SDK-03",
+    "SDK-04",
+    "SDK-05",
+    "SDK-06",
+    "SDK-07",
+    "SDK-08",
+    "SDK-09",
+    "SDK-10",
+    "SDK-11",
+    "LAY-01",
+    "LAY-02",
+    "LAY-03",
+    "LAY-04",
+    "LAY-05",
+    "LAY-06",
+    "LAY-07",
+    "LAY-08",
+    "IMG-01",
+    "IMG-02",
+    "IMG-03",
+    "IMG-04",
+    "IMG-05",
+    "IMG-06",
+    "IMG-07",
+    "IMG-08",
+    "IMG-09",
+    "IMG-10",
+    "IPC-01",
+    "IPC-02",
+    "IPC-03",
+    "CRED-01",
+    "CRED-02",
+    "CRED-03",
+    "HOOK-01",
+    "HOOK-02",
+    "HOOK-03",
+    "RELOC-01",
+    "INIT-01",
+    "SDK-12",
+    "SU-01",
+    "SU-02",
+    "SU-03",
+    "SU-04",
+    "SU-05",
+    "SU-06",
+    "TRUST-01",
+    "TRUST-02",
+    "OWN-01",
+    "OWN-02",
+    "OWN-03",
+    "OWN-04",
+    "MOD-01",
+    "MOD-02",
+    "MOD-03",
+    "MOD-04",
+    "MOD-05",
+    "MOD-06",
+    "MOD-07",
+    "MOD-08",
+    "MOD-09",
+    "MOD-10",
+    "JB-01",
+    "JB-02",
+    "JB-03",
+    "API-01",
+    "API-02",
+    "API-03",
+    "API-04",
+    "API-05",
+    "QA-01",
+    "QA-02",
+    "QA-03",
+    "QA-04",
+    "QA-05",
+    "QA-06",
+    "QA-07",
+    "QA-08",
+    "QA-09",
+    "QA-10",
+    "CASE-01",
+    "CASE-02",
+    "CASE-03",
+    "CASE-04",
+    "CASE-05",
+    "CASE-06a",
+    "CASE-06b",
+    "CASE-06c",
+    "CASE-07a",
+    "CASE-07b",
+    "CASE-08",
+    "CASE-09",
+    "CASE-10a",
+    "CASE-10b",
+    "CASE-10c",
+    "CASE-10d",
+    "CASE-10e",
+    "CASE-10f",
+    "CASE-10g",
+    "CASE-11",
+    "CASE-12",
+    "CASE-13",
+    "CASE-14",
+    "CASE-15",
+    "CASE-16",
+    "CASE-17",
+    "CASE-18",
+    "CASE-19",
+    "CASE-20",
+    "FINAL-01",
+    "FINAL-02",
+    "FINAL-03",
+    "FINAL-04",
+    "FINAL-05",
+    "FINAL-06",
+    "FINAL-07",
+    "FINAL-08",
+    "FINAL-09"
+  ],
+  "caseCount": 29,
+  "additionalCount": 12,
+  "rows": [
+    {
+      "id": "CASE-01",
+      "title": "Y700四代Ultra未知崩溃重启，多次重启后才恢复",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel/UltraKernelShellcode.kt"
+      ],
+      "productionChain": "printfn发布页权限→stage-1 TLBI→BLR取指",
+      "confirmedGap": "Panic专项已有实机A/B和源码交付；本轮未覆写该实现。",
+      "acceptanceExit": "同代APK/boot真实安装器、su与长期稳定窗口；Y700原设备另验。",
+      "integrationOwner": "root + panic delivery",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel/UltraKernelShellcode.kt",
+          "bytes": 224524,
+          "sha256": "230c116cb4c7450af03176a0e269e19f5c9a810ac6f6568ddba459acd4e36b50"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-02",
+      "title": "Y700四代Ultra隐藏模式启动失败",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenModeBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenEnv.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+        "manager/src/main/java/dev/maplesu/manager/liteweb/daemon/DaemonParasiteUnhide.kt"
+      ],
+      "productionChain": "宿主选择→precheck同一路Root→准备boot恢复→backup/注入→受保护handover→撤除/清理checkpoint→再次激活",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 已有precheck真实超时分类及撤除清理修复；本轮无新增猜测补丁。",
+      "acceptanceExit": "DeepSeek激活/真实宿主网页和交互/撤除/再激活至少三轮，核包签名来源、backup/handover与阶段耗时；维护预算与普通页面预算分别记录。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenModeBackend.kt",
+          "bytes": 63167,
+          "sha256": "25940d5a7d4aeac5ab7cc704767f46ef8655ad40f87e23c140e2b6bd3ffb6a51"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenEnv.kt",
+          "bytes": 21565,
+          "sha256": "802ec7ba51c4d0437ae6dfceb5a146cce0d61a8fb426f248f31d5a2035589688"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+          "bytes": 22577,
+          "sha256": "cd17f64d3d726aaef18ce820953ebedae76510be408fe2b47f44f7a780fcb76c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+          "bytes": 30289,
+          "sha256": "d1e13ed3e9fa0990ff5ae3e99292ad6fd8983977fc7d310d505dcf62818477e2"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/daemon/DaemonParasiteUnhide.kt",
+          "bytes": 24055,
+          "sha256": "83c214329d3d26668524aa260b4ca018124334cae3cb528e92ae4d4ed885a5b7"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-03",
+      "title": "隐藏模式端口修复失败，默认18427",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebProxyBase.kt",
+        "manager/src/main/java/dev/maplesu/manager/liteweb"
+      ],
+      "productionChain": "唯一持久配置→daemon或RootService listener.rebind→真实访问与配置读回",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "18427/自定义/冲突/同口/重启/重新启用实际监听与恢复。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebProxyBase.kt",
+          "bytes": 661,
+          "sha256": "31d0d5d1c354a2438d791829e400c36fcd3035cbb4d1089e4601d00c4c6c5cee"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-04",
+      "title": "首装超级用户列表加载失败，多次重启后才恢复",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/SuperuserStartupLoader.kt",
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/SuperuserViewModel.kt",
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/SuperuserSourcePolicy.kt"
+      ],
+      "productionChain": "awaitPageMode检测终态→按模式唯一仓库→身份/activation绑定列表缓存→真实授权与入口状态",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "首装无授权/已有授权/未就绪/失败/Manager重建/升级；完成unresolved检测须结束spinner，后续有效检测可重读。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/SuperuserStartupLoader.kt",
+          "bytes": 667,
+          "sha256": "5d7702f0e456d4c818c26deb05b86389f5d4f9ea6f2ff5745cf553eb06a0c1fb"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/SuperuserViewModel.kt",
+          "bytes": 33846,
+          "sha256": "b7bd653ea9e3b006663e61bb7bad741d592164c91a0d6334f0cef87b6b1a2ee1"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/SuperuserSourcePolicy.kt",
+          "bytes": 2482,
+          "sha256": "7eb575eaade39e07206c01343b3b50d0bbb6b95bb1a9b9774ffc337bdbf276d4"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-05",
+      "title": "部分应用获取或识别不到SU权限",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraAuthorization.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/authorization/DirectPolicy.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+        "runtime/src/su_bootstrap.cpp"
+      ],
+      "productionChain": "授权fullUID/签名身份→当前SDK或Hook唯一通道→真实su入口与credential→撤权/更新定向退休",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 运行时task profile与动态布局新增实现归对应owner。",
+      "acceptanceExit": "首次/共享UID/多用户/32与64位普通App真实su-c及交互、授权/撤权、更新、Manager死亡与未打开冷启；普通未授权基线分账。",
+      "integrationOwner": "functional + task_profiles_impl + ultra_kmi_runtime_audit",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraAuthorization.kt",
+          "bytes": 13335,
+          "sha256": "52e8d782864cb6d894cfcf2b12c2fbc95bede12bf38c206f11895b8e647ac4ec"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/authorization/DirectPolicy.kt",
+          "bytes": 3981,
+          "sha256": "bd35baaf91f9d0c5535183ac65ec041102ba9c14cc3f175076c355dc55062d53"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+          "bytes": 7130,
+          "sha256": "64d05ad3e8b16cb3f921878aaae7c9388b97c0119cdb44d8e35bf041b33232f9"
+        },
+        {
+          "path": "WORKSPACE/runtime/src/su_bootstrap.cpp",
+          "bytes": 471,
+          "sha256": "3ac39ad404fbda277e21287bc570e419aa02ff4cbf3ce0b0aa4af86040c15c72"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-06a",
+      "title": "刷写被无必要条件阻拦",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-06b",
+      "title": "安装事务连接失败",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-06c",
+      "title": "补丁集生成失败",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-07a",
+      "title": "Normal离线修补与KSU实际实现不等价",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-07b",
+      "title": "Ultra对工作区镜像的布局/模拟修补覆盖不足",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-08",
+      "title": "玩机兼容模式未与KSU完全等价",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleModeRouter.kt",
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/SuperuserSourcePolicy.kt",
+        "manager/src/main/java/dev/maplesu/manager/workmode/ModeRuntime.kt"
+      ],
+      "productionChain": "检测唯一active mode→模块/SU门面显式路由→持久切换事务→AwaitingReboot→重启激活目标模式",
+      "confirmedGap": "进程内activate一次；跨mode冲突保留。切换提交与回滚由mode owner审查。",
+      "acceptanceExit": "Normal/Ultra与受保护工作模式迁移，模块/SU/镜像/恢复全链；不把待重启提交当新mode已生效。",
+      "integrationOwner": "functional + backup_init_review",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleModeRouter.kt",
+          "bytes": 6736,
+          "sha256": "f78ff85dcc988db21fa2c88acb09c1a423ef4ebcba8ea19a41d6ab80d481a65c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/SuperuserSourcePolicy.kt",
+          "bytes": 2482,
+          "sha256": "7eb575eaade39e07206c01343b3b50d0bbb6b95bb1a9b9774ffc337bdbf276d4"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/workmode/ModeRuntime.kt",
+          "bytes": 11287,
+          "sha256": "7a9c24c73b2f62c5e11cd6ef3e91e906122fb41d48f45410cd160fb625e37e99"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-09",
+      "title": "多设备Ultra环境安装失败",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+        "manager/src/main/java/com/maplesu/core/ui/screen/settings/UltraEnvironmentSettings.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentUpgrade.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentAutoSetup.kt"
+      ],
+      "productionChain": "真实boot阶段producer→helper环境回执→Probe五态/身份scope→Fault显示→显式repairEnvironment→真实安装修复与回读",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 boot producer与KMI启动适配由root和runtime owner同步生成。",
+      "acceptanceExit": "零模块、未开Manager首冷启/连续启动/升级中断；Fault、Unknown、NotInstalled分别触发真实按钮；保护负例保留原错误及持久标志。",
+      "integrationOwner": "functional + root + ultra_kmi_runtime_audit",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+          "bytes": 41099,
+          "sha256": "331384f95342820b1a84bd59ffd252c23763a50c2950ed0bb246c1aa37d34276"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "bytes": 28956,
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/screen/settings/UltraEnvironmentSettings.kt",
+          "bytes": 32094,
+          "sha256": "74c535ba112e0240369c74a6a8ba811a0b2e748ae77944296ebf26b0ca7a850e"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentUpgrade.kt",
+          "bytes": 31766,
+          "sha256": "b80b13561db0d1894e592a501365bad4a53260dec5313c7c5f34c7d3e10e08d7"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentAutoSetup.kt",
+          "bytes": 11483,
+          "sha256": "ff22eaf126389cd527dc97cadeeee3a7bd164dac802abe23b2663ce7ece0dc43"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-10a",
+      "title": "SDK与MapleSU身份/安装状态脱节",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityResolution.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraBootAuthorizationRestore.kt"
+      ],
+      "productionChain": "当前内核owner/boot/revision→受保护安装身份→SDK会话与持久授权→重装恢复",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "新Manager重装/签名更新/多用户/旧Key迁移、无Manager首启；真实owner回执与Root一致。",
+      "integrationOwner": "functional + ultra_kmi_runtime_audit",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraIdentityResolution.kt",
+          "bytes": 5478,
+          "sha256": "f9119c479d7849cd593af83640f2a58534d119cebad6fa9ff9be3452d1f34bc1"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+          "bytes": 22577,
+          "sha256": "cd17f64d3d726aaef18ce820953ebedae76510be408fe2b47f44f7a780fcb76c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraBootAuthorizationRestore.kt",
+          "bytes": 8261,
+          "sha256": "018b56c67fcba353a5bb10830b168b6fcfbec201e37ca36397b442f96a2ca503"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-10b",
+      "title": "Ultra频繁SU授权失败",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraAuthorization.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/authorization/DirectPolicy.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+        "runtime/src/su_bootstrap.cpp"
+      ],
+      "productionChain": "授权fullUID/签名身份→当前SDK或Hook唯一通道→真实su入口与credential→撤权/更新定向退休",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 运行时task profile与动态布局新增实现归对应owner。",
+      "acceptanceExit": "首次/共享UID/多用户/32与64位普通App真实su-c及交互、授权/撤权、更新、Manager死亡与未打开冷启；普通未授权基线分账。",
+      "integrationOwner": "functional + task_profiles_impl + ultra_kmi_runtime_audit",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraAuthorization.kt",
+          "bytes": 13335,
+          "sha256": "52e8d782864cb6d894cfcf2b12c2fbc95bede12bf38c206f11895b8e647ac4ec"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/authorization/DirectPolicy.kt",
+          "bytes": 3981,
+          "sha256": "bd35baaf91f9d0c5535183ac65ec041102ba9c14cc3f175076c355dc55062d53"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+          "bytes": 7130,
+          "sha256": "64d05ad3e8b16cb3f921878aaae7c9388b97c0119cdb44d8e35bf041b33232f9"
+        },
+        {
+          "path": "WORKSPACE/runtime/src/su_bootstrap.cpp",
+          "bytes": 471,
+          "sha256": "3ac39ad404fbda277e21287bc570e419aa02ff4cbf3ce0b0aa4af86040c15c72"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-10c",
+      "title": "寄生路径复杂脆弱并增加环境暴露",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenModeBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenEnv.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+        "manager/src/main/java/dev/maplesu/manager/liteweb/daemon/DaemonParasiteUnhide.kt"
+      ],
+      "productionChain": "宿主选择→precheck同一路Root→准备boot恢复→backup/注入→受保护handover→撤除/清理checkpoint→再次激活",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 已有precheck真实超时分类及撤除清理修复；本轮无新增猜测补丁。",
+      "acceptanceExit": "DeepSeek激活/真实宿主网页和交互/撤除/再激活至少三轮，核包签名来源、backup/handover与阶段耗时；维护预算与普通页面预算分别记录。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenModeBackend.kt",
+          "bytes": 63167,
+          "sha256": "25940d5a7d4aeac5ab7cc704767f46ef8655ad40f87e23c140e2b6bd3ffb6a51"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenEnv.kt",
+          "bytes": 21565,
+          "sha256": "802ec7ba51c4d0437ae6dfceb5a146cce0d61a8fb426f248f31d5a2035589688"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+          "bytes": 22577,
+          "sha256": "cd17f64d3d726aaef18ce820953ebedae76510be408fe2b47f44f7a780fcb76c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+          "bytes": 30289,
+          "sha256": "d1e13ed3e9fa0990ff5ae3e99292ad6fd8983977fc7d310d505dcf62818477e2"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/daemon/DaemonParasiteUnhide.kt",
+          "bytes": 24055,
+          "sha256": "83c214329d3d26668524aa260b4ca018124334cae3cb528e92ae4d4ed885a5b7"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-10d",
+      "title": "SELinux隐藏加载失败、策略读取失败",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra",
+        "runtime/src",
+        "runtime/maplesu-sdk"
+      ],
+      "productionChain": "真实策略loader→授权后worker→目标策略解析应用→原始错误/实际状态",
+      "confirmedGap": "既有owner-selinux/ksu-compat源码修复；SDK内部写集不由本子任务扩大。",
+      "acceptanceExit": "nsfs存在/缺失、validation_failed首因、加载/读取/隐藏作用、普通未授权环境基线及跨boot真实回执。",
+      "integrationOwner": "root + task_profiles_impl + SDK/policy deliveries",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/runtime/src",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/runtime/maplesu-sdk",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-10e",
+      "title": "主页SELinux状态经常缺失或确认缓慢",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt"
+      ],
+      "productionChain": "页面共享观察→current身份/boot scope→SDK事实→缓存/未知/BUSY如实发布",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "首页冷暖状态与耗时分布、同时读取/变更、scope失效与旧值退休。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "bytes": 28956,
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+          "bytes": 22577,
+          "sha256": "cd17f64d3d726aaef18ce820953ebedae76510be408fe2b47f44f7a780fcb76c"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-10f",
+      "title": "管理器卸载重装显示未安装，但旧授权应用仍有Root",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraAuthorization.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/authorization/DirectPolicy.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+        "runtime/src/su_bootstrap.cpp"
+      ],
+      "productionChain": "授权fullUID/签名身份→当前SDK或Hook唯一通道→真实su入口与credential→撤权/更新定向退休",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 运行时task profile与动态布局新增实现归对应owner。",
+      "acceptanceExit": "首次/共享UID/多用户/32与64位普通App真实su-c及交互、授权/撤权、更新、Manager死亡与未打开冷启；普通未授权基线分账。",
+      "integrationOwner": "functional + task_profiles_impl + ultra_kmi_runtime_audit",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraAuthorization.kt",
+          "bytes": 13335,
+          "sha256": "52e8d782864cb6d894cfcf2b12c2fbc95bede12bf38c206f11895b8e647ac4ec"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/authorization/DirectPolicy.kt",
+          "bytes": 3981,
+          "sha256": "bd35baaf91f9d0c5535183ac65ec041102ba9c14cc3f175076c355dc55062d53"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+          "bytes": 7130,
+          "sha256": "64d05ad3e8b16cb3f921878aaae7c9388b97c0119cdb44d8e35bf041b33232f9"
+        },
+        {
+          "path": "WORKSPACE/runtime/src/su_bootstrap.cpp",
+          "bytes": 471,
+          "sha256": "3ac39ad404fbda277e21287bc570e419aa02ff4cbf3ce0b0aa4af86040c15c72"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-10g",
+      "title": "越狱持续SU入口未就绪",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/jailbreak",
+        "manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+        "runtime/src/su_bootstrap.cpp"
+      ],
+      "productionChain": "provider→authenticated gate/lease/carrier→SDK credential→真实uid/SU入口与模块",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "iQOO15首进/冷启/Manager关闭重建/lease失效；真实32/64su、授权撤权及模块效果。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/jailbreak",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+          "bytes": 7130,
+          "sha256": "64d05ad3e8b16cb3f921878aaae7c9388b97c0119cdb44d8e35bf041b33232f9"
+        },
+        {
+          "path": "WORKSPACE/runtime/src/su_bootstrap.cpp",
+          "bytes": 471,
+          "sha256": "3ac39ad404fbda277e21287bc570e419aa02ff4cbf3ce0b0aa4af86040c15c72"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-11",
+      "title": "KSU模块长期显示“将在下次重启时卸载”，部分模块重启后仍残留",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleModeRouter.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/MapleSuModuleBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+        "manager/src/main/assets/maplesu/modules/boot.sh",
+        "manager/src/main/assets/maplesu/modules/run.sh"
+      ],
+      "productionChain": "当前模式后端→受串行化操作与真实结果约束的安装/更新/卸载→owner/pending收据→真实启动阶段收尾→只读列表归并",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "固定原包首次/更新后立即卸载、撤销、重建/重启/Manager未打开；脚本/callback首错、目录和运行状态与列表一致。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+          "bytes": 41099,
+          "sha256": "331384f95342820b1a84bd59ffd252c23763a50c2950ed0bb246c1aa37d34276"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleModeRouter.kt",
+          "bytes": 6736,
+          "sha256": "f78ff85dcc988db21fa2c88acb09c1a423ef4ebcba8ea19a41d6ab80d481a65c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+          "bytes": 89160,
+          "sha256": "cc8cc42e5390eebf6f9053290df1fac0dcbbeb0741724c0db5a9d40172984734"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/MapleSuModuleBackend.kt",
+          "bytes": 37457,
+          "sha256": "bcdba1c7e6cc42297ae326f824f972229e28b781b9cad43185b5b9e25a742c57"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+          "bytes": 4241,
+          "sha256": "a2a4f3be7659c75cd20f9583803b42812039b45a541a321bc9f36e37b5131d63"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/assets/maplesu/modules/boot.sh",
+          "bytes": 33980,
+          "sha256": "551691761eaa25d32886bde9d62f87d359cc85ad010dc8d4bd199fcf41f77e45"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/assets/maplesu/modules/run.sh",
+          "bytes": 18274,
+          "sha256": "65b8add13111d6cc5ed140c48be7eb9299f9cd862a08711fa9eacb1401109a08"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-12",
+      "title": "部分Ultra原生模块总是卸载失败",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleModeRouter.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/MapleSuModuleBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+        "manager/src/main/assets/maplesu/modules/boot.sh",
+        "manager/src/main/assets/maplesu/modules/run.sh"
+      ],
+      "productionChain": "当前模式后端→受串行化操作与真实结果约束的安装/更新/卸载→owner/pending收据→真实启动阶段收尾→只读列表归并",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "固定原包首次/更新后立即卸载、撤销、重建/重启/Manager未打开；脚本/callback首错、目录和运行状态与列表一致。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+          "bytes": 41099,
+          "sha256": "331384f95342820b1a84bd59ffd252c23763a50c2950ed0bb246c1aa37d34276"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleModeRouter.kt",
+          "bytes": 6736,
+          "sha256": "f78ff85dcc988db21fa2c88acb09c1a423ef4ebcba8ea19a41d6ab80d481a65c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+          "bytes": 89160,
+          "sha256": "cc8cc42e5390eebf6f9053290df1fac0dcbbeb0741724c0db5a9d40172984734"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/MapleSuModuleBackend.kt",
+          "bytes": 37457,
+          "sha256": "bcdba1c7e6cc42297ae326f824f972229e28b781b9cad43185b5b9e25a742c57"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+          "bytes": 4241,
+          "sha256": "a2a4f3be7659c75cd20f9583803b42812039b45a541a321bc9f36e37b5131d63"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/assets/maplesu/modules/boot.sh",
+          "bytes": 33980,
+          "sha256": "551691761eaa25d32886bde9d62f87d359cc85ad010dc8d4bd199fcf41f77e45"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/assets/maplesu/modules/run.sh",
+          "bytes": 18274,
+          "sha256": "65b8add13111d6cc5ed140c48be7eb9299f9cd862a08711fa9eacb1401109a08"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-13",
+      "title": "Ultra环境下部分脚本模块或原生模块WebUI打不开",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/screen/module/ModuleScreen.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleWebUiLauncher.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIActivity.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/ModuleWebUIActivity.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIBridge.kt"
+      ],
+      "productionChain": "模块列表/快捷方式/网页显式打开→脚本AssetLoader或native SDK HTTP→对应WebView与受生命周期约束的命令/文件/下载桥",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 旧BRIDGE-SURFACE跨root别名缺口为类边界误读，本次纠正。",
+      "acceptanceExit": "原月虹两包/官方Next；两主题、真实资源SHA、root命令与包选择、返回/旋转/重建、更新卸载后旧能力退休；HTTP探活不单算通过。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/screen/module/ModuleScreen.kt",
+          "bytes": 13323,
+          "sha256": "1ab07c79a5b96a6879d04deef03080a9f3fc9a58a2781f9a8bfb37978388843f"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleWebUiLauncher.kt",
+          "bytes": 27875,
+          "sha256": "5c824dce6399452fd74b68d58ba0138785854ea1a456158a538fffd9d9ce2a10"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUIActivity.kt",
+          "bytes": 7198,
+          "sha256": "c6b53c7bac3538886db9f3b63f122521c4bad2c99b6cbd0bfa5163dffd4fecbc"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/ModuleWebUIActivity.kt",
+          "bytes": 36606,
+          "sha256": "7b2e99f58d991c663f9664165b09383505e44c3777f2453426ad8bc489e9eb3a"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUIBridge.kt",
+          "bytes": 4543,
+          "sha256": "57cb53e1b1ebead409b74dab647fd33eacb6933203ae633488ab5abd78a66017"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-14",
+      "title": "部分iQOO/VIVO设备安装环境失败或启用后未取得权限",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-15",
+      "title": "Ultra模块列表偶发加载失败、策略设置读取不可靠、SDK频繁Busy",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationTasks.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt"
+      ],
+      "productionChain": "页面→共享只读scope/变更代际→单归属worker→JNI/SDK真实回执→保留旧行和真实错误→无spinner的后台归并",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 已确认旧ModuleLifecycleRegressionTest仅匹配getModules()导致守卫误红，现兼容实际trailing-lambda调用。",
+      "acceptanceExit": "同次关联请求追JNI admission/fork/SDK/child/cleanup；冷暖并发页面、授权/安装卸载、迟到结果/重建、SDK_BUSY原cause和滚动状态。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+          "bytes": 41099,
+          "sha256": "331384f95342820b1a84bd59ffd252c23763a50c2950ed0bb246c1aa37d34276"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationTasks.kt",
+          "bytes": 1822,
+          "sha256": "cf17cbd7f5d875c2c42bfd387cfae9b24c05bae28427a1b58cbf74c67c5efcba"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+          "bytes": 4241,
+          "sha256": "a2a4f3be7659c75cd20f9583803b42812039b45a541a321bc9f36e37b5131d63"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+          "bytes": 22577,
+          "sha256": "cd17f64d3d726aaef18ce820953ebedae76510be408fe2b47f44f7a780fcb76c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+          "bytes": 30289,
+          "sha256": "d1e13ed3e9fa0990ff5ae3e99292ad6fd8983977fc7d310d505dcf62818477e2"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-16",
+      "title": "Ultra无故显示或进入安全模式",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+        "manager/src/main/java/com/maplesu/core/ui/screen/settings/UltraEnvironmentSettings.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentUpgrade.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentAutoSetup.kt"
+      ],
+      "productionChain": "真实boot阶段producer→helper环境回执→Probe五态/身份scope→Fault显示→显式repairEnvironment→真实安装修复与回读",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 boot producer与KMI启动适配由root和runtime owner同步生成。",
+      "acceptanceExit": "零模块、未开Manager首冷启/连续启动/升级中断；Fault、Unknown、NotInstalled分别触发真实按钮；保护负例保留原错误及持久标志。",
+      "integrationOwner": "functional + root + ultra_kmi_runtime_audit",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+          "bytes": 41099,
+          "sha256": "331384f95342820b1a84bd59ffd252c23763a50c2950ed0bb246c1aa37d34276"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentProbe.kt",
+          "bytes": 28956,
+          "sha256": "dbb718edcd0de09ed59586dabbe369baad40bea58a0729d7514742e34ad1d1a4"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/screen/settings/UltraEnvironmentSettings.kt",
+          "bytes": 32094,
+          "sha256": "74c535ba112e0240369c74a6a8ba811a0b2e748ae77944296ebf26b0ca7a850e"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentUpgrade.kt",
+          "bytes": 31766,
+          "sha256": "b80b13561db0d1894e592a501365bad4a53260dec5313c7c5f34c7d3e10e08d7"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraEnvironmentAutoSetup.kt",
+          "bytes": 11483,
+          "sha256": "ff22eaf126389cd527dc97cadeeee3a7bd164dac802abe23b2663ce7ece0dc43"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-17",
+      "title": "指定KSU模块安装/运行/卸载失败，Zygisk-Next安装遇nsfs策略错误",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+        "runtime/src/module_task_environment.h",
+        "runtime/ultra/identity/kernel"
+      ],
+      "productionChain": "原包脚本安装→固定KSU环境与真实GET_INFO/UAPI→nsfs策略实际应用→开机daemon/禁用/卸载",
+      "confirmedGap": "已有官方Next1.5.3 ABI源码与窄验证；KMI task layout/CFI和真实包全流程验收由主线完成。",
+      "acceptanceExit": "七原包+官方Next1.5.3身份、原始nsfs/validation_failed首错、137终止原因、daemon与WebUI真实效果；更新卸载冷启。",
+      "integrationOwner": "functional + root + task_profiles_impl",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+          "bytes": 89160,
+          "sha256": "cc8cc42e5390eebf6f9053290df1fac0dcbbeb0741724c0db5a9d40172984734"
+        },
+        {
+          "path": "WORKSPACE/runtime/src/module_task_environment.h",
+          "bytes": 3168,
+          "sha256": "4523bf853d0f69f66e7b478a0edeaff29e3d65ce264d34c7aef0b572732d74c9"
+        },
+        {
+          "path": "WORKSPACE/runtime/ultra/identity/kernel",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-18",
+      "title": "月虹等模块在Ultra打开WebUI闪退，部分设备兼容性差",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/screen/module/ModuleScreen.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleWebUiLauncher.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIActivity.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/ModuleWebUIActivity.kt",
+        "manager/src/main/java/com/maplesu/core/ui/webui/WebUIBridge.kt"
+      ],
+      "productionChain": "模块列表/快捷方式/网页显式打开→脚本AssetLoader或native SDK HTTP→对应WebView与受生命周期约束的命令/文件/下载桥",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 旧BRIDGE-SURFACE跨root别名缺口为类边界误读，本次纠正。",
+      "acceptanceExit": "原月虹两包/官方Next；两主题、真实资源SHA、root命令与包选择、返回/旋转/重建、更新卸载后旧能力退休；HTTP探活不单算通过。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/screen/module/ModuleScreen.kt",
+          "bytes": 13323,
+          "sha256": "1ab07c79a5b96a6879d04deef03080a9f3fc9a58a2781f9a8bfb37978388843f"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleWebUiLauncher.kt",
+          "bytes": 27875,
+          "sha256": "5c824dce6399452fd74b68d58ba0138785854ea1a456158a538fffd9d9ce2a10"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUIActivity.kt",
+          "bytes": 7198,
+          "sha256": "c6b53c7bac3538886db9f3b63f122521c4bad2c99b6cbd0bfa5163dffd4fecbc"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/ModuleWebUIActivity.kt",
+          "bytes": 36606,
+          "sha256": "7b2e99f58d991c663f9664165b09383505e44c3777f2453426ad8bc489e9eb3a"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUIBridge.kt",
+          "bytes": 4543,
+          "sha256": "57cb53e1b1ebead409b74dab647fd33eacb6933203ae633488ab5abd78a66017"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-19",
+      "title": "iQOO 15越狱模式SU入口未就绪，需验证根因修复能扩展至其他设备",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraAuthorization.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/authorization/DirectPolicy.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+        "runtime/src/su_bootstrap.cpp"
+      ],
+      "productionChain": "授权fullUID/签名身份→当前SDK或Hook唯一通道→真实su入口与credential→撤权/更新定向退休",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 运行时task profile与动态布局新增实现归对应owner。",
+      "acceptanceExit": "首次/共享UID/多用户/32与64位普通App真实su-c及交互、授权/撤权、更新、Manager死亡与未打开冷启；普通未授权基线分账。",
+      "integrationOwner": "functional + task_profiles_impl + ultra_kmi_runtime_audit",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraAuthorization.kt",
+          "bytes": 13335,
+          "sha256": "52e8d782864cb6d894cfcf2b12c2fbc95bede12bf38c206f11895b8e647ac4ec"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/authorization/DirectPolicy.kt",
+          "bytes": 3981,
+          "sha256": "bd35baaf91f9d0c5535183ac65ec041102ba9c14cc3f175076c355dc55062d53"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/HookSuCompatibility.kt",
+          "bytes": 7130,
+          "sha256": "64d05ad3e8b16cb3f921878aaae7c9388b97c0119cdb44d8e35bf041b33232f9"
+        },
+        {
+          "path": "WORKSPACE/runtime/src/su_bootstrap.cpp",
+          "bytes": 471,
+          "sha256": "3ac39ad404fbda277e21287bc570e419aa02ff4cbf3ce0b0aa4af86040c15c72"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "CASE-20",
+      "title": "Tenc🎮 游戏优化助手-C版_Log测试版在Ultra模式完全不生效",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleToolDeployment.kt",
+        "manager/src/main/assets/maplesu/modules/boot.sh",
+        "manager/src/main/assets/maplesu/modules/run.sh",
+        "runtime/src/module_task_environment.h"
+      ],
+      "productionChain": "真实发布器→init阶段→persistent dispatcher→boot.sh owner/active筛选→run.sh真实环境→原Tenc hook",
+      "confirmedGap": "历史窄重放仅到原hook执行边界；原DEX/ELF及各配置效果尚未在同代设备验收。",
+      "acceptanceExit": "固定SHA d60a337b…原包，postfs权限/service解锁查询/主ELF/每配置/多用户，设置持久化、更新禁卸、无Manager冷启。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleToolDeployment.kt",
+          "bytes": 21471,
+          "sha256": "49eb8dcd1e8ebafc45c60e6662d235861dcec98b7251921b92871fb8fb7a0758"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/assets/maplesu/modules/boot.sh",
+          "bytes": 33980,
+          "sha256": "551691761eaa25d32886bde9d62f87d359cc85ad010dc8d4bd199fcf41f77e45"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/assets/maplesu/modules/run.sh",
+          "bytes": 18274,
+          "sha256": "65b8add13111d6cc5ed140c48be7eb9299f9cd862a08711fa9eacb1401109a08"
+        },
+        {
+          "path": "WORKSPACE/runtime/src/module_task_environment.h",
+          "bytes": 3168,
+          "sha256": "4523bf853d0f69f66e7b478a0edeaff29e3d65ce264d34c7aef0b572732d74c9"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-MOD-UPDATE-UNINSTALL-01",
+      "title": "模块列表显示更新入口更新后直接卸载偶发失败",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleModeRouter.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/MapleSuModuleBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+        "manager/src/main/assets/maplesu/modules/boot.sh",
+        "manager/src/main/assets/maplesu/modules/run.sh"
+      ],
+      "productionChain": "当前模式后端→受串行化操作与真实结果约束的安装/更新/卸载→owner/pending收据→真实启动阶段收尾→只读列表归并",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "固定原包首次/更新后立即卸载、撤销、重建/重启/Manager未打开；脚本/callback首错、目录和运行状态与列表一致。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+          "bytes": 41099,
+          "sha256": "331384f95342820b1a84bd59ffd252c23763a50c2950ed0bb246c1aa37d34276"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleModeRouter.kt",
+          "bytes": 6736,
+          "sha256": "f78ff85dcc988db21fa2c88acb09c1a423ef4ebcba8ea19a41d6ab80d481a65c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/LiteScriptModuleBackend.kt",
+          "bytes": 89160,
+          "sha256": "cc8cc42e5390eebf6f9053290df1fac0dcbbeb0741724c0db5a9d40172984734"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/MapleSuModuleBackend.kt",
+          "bytes": 37457,
+          "sha256": "bcdba1c7e6cc42297ae326f824f972229e28b781b9cad43185b5b9e25a742c57"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+          "bytes": 4241,
+          "sha256": "a2a4f3be7659c75cd20f9583803b42812039b45a541a321bc9f36e37b5131d63"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/assets/maplesu/modules/boot.sh",
+          "bytes": 33980,
+          "sha256": "551691761eaa25d32886bde9d62f87d359cc85ad010dc8d4bd199fcf41f77e45"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/assets/maplesu/modules/run.sh",
+          "bytes": 18274,
+          "sha256": "65b8add13111d6cc5ed140c48be7eb9299f9cd862a08711fa9eacb1401109a08"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-DIRECT-INSTALL-01",
+      "title": "新增专项：直接安装准备、提交与目标镜像",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-CARRIER-MIGRATION-01",
+      "title": "新增专项：boot↔init_boot双向载体迁移与原像恢复",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-INSTALLER-RECOVERY-01",
+      "title": "新增专项：安装失败、断连与结果未知的原任务恢复",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-MODULE-BACKGROUND-REFRESH-01",
+      "title": "模块全部动作结束后后台更新列表，保留滚动、搜索和错误状态",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationTasks.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt"
+      ],
+      "productionChain": "页面→共享只读scope/变更代际→单归属worker→JNI/SDK真实回执→保留旧行和真实错误→无spinner的后台归并",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 已确认旧ModuleLifecycleRegressionTest仅匹配getModules()导致守卫误红，现兼容实际trailing-lambda调用。",
+      "acceptanceExit": "同次关联请求追JNI admission/fork/SDK/child/cleanup；冷暖并发页面、授权/安装卸载、迟到结果/重建、SDK_BUSY原cause和滚动状态。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+          "bytes": 41099,
+          "sha256": "331384f95342820b1a84bd59ffd252c23763a50c2950ed0bb246c1aa37d34276"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationTasks.kt",
+          "bytes": 1822,
+          "sha256": "cf17cbd7f5d875c2c42bfd387cfae9b24c05bae28427a1b58cbf74c67c5efcba"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+          "bytes": 4241,
+          "sha256": "a2a4f3be7659c75cd20f9583803b42812039b45a541a321bc9f36e37b5131d63"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+          "bytes": 22577,
+          "sha256": "cd17f64d3d726aaef18ce820953ebedae76510be408fe2b47f44f7a780fcb76c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+          "bytes": 30289,
+          "sha256": "d1e13ed3e9fa0990ff5ae3e99292ad6fd8983977fc7d310d505dcf62818477e2"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-DEEPSEEK-REIMPLANT-01",
+      "title": "DeepSeek撤除后再次寄生循环与维护预检超时分类",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenModeBackend.kt",
+        "manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenEnv.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+        "manager/src/main/java/dev/maplesu/manager/liteweb/daemon/DaemonParasiteUnhide.kt"
+      ],
+      "productionChain": "宿主选择→precheck同一路Root→准备boot恢复→backup/注入→受保护handover→撤除/清理checkpoint→再次激活",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 已有precheck真实超时分类及撤除清理修复；本轮无新增猜测补丁。",
+      "acceptanceExit": "DeepSeek激活/真实宿主网页和交互/撤除/再激活至少三轮，核包签名来源、backup/handover与阶段耗时；维护预算与普通页面预算分别记录。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenModeBackend.kt",
+          "bytes": 63167,
+          "sha256": "25940d5a7d4aeac5ab7cc704767f46ef8655ad40f87e23c140e2b6bd3ffb6a51"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/litehidden/ProductionHiddenEnv.kt",
+          "bytes": 21565,
+          "sha256": "802ec7ba51c4d0437ae6dfceb5a146cce0d61a8fb426f248f31d5a2035589688"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+          "bytes": 22577,
+          "sha256": "cd17f64d3d726aaef18ce820953ebedae76510be408fe2b47f44f7a780fcb76c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+          "bytes": 30289,
+          "sha256": "d1e13ed3e9fa0990ff5ae3e99292ad6fd8983977fc7d310d505dcf62818477e2"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/daemon/DaemonParasiteUnhide.kt",
+          "bytes": 24055,
+          "sha256": "83c214329d3d26668524aa260b4ca018124334cae3cb528e92ae4d4ed885a5b7"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-HOST-SELECTOR-SEARCH-01",
+      "title": "寄生宿主选择器搜索、过滤与空结果交互",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/screen/host/HostPickerUiState.kt",
+        "manager/src/main/java/com/maplesu/core/ui/screen/host/HostPickerScreen.kt",
+        "manager/src/main/java/dev/maplesu/manager/workmode/ui/LiteHiddenViewModel.kt"
+      ],
+      "productionChain": "完整候选列表→包名/名称搜索投影→保留已选宿主→真实寄生调用",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。",
+      "acceptanceExit": "两主题名称/包名/中文/空白/清空/无结果，选择保留，运行阶段锁定搜索。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/screen/host/HostPickerUiState.kt",
+          "bytes": 11051,
+          "sha256": "58a4558e52482aeeda47309f0f4475a1a68ce2d3d40ca3af94b5f243b089c55c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/screen/host/HostPickerScreen.kt",
+          "bytes": 9016,
+          "sha256": "291ed7cfaefeb5d0cd2c46fef297e8b2bbc5b0878288cb3364becf3082154a95"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/workmode/ui/LiteHiddenViewModel.kt",
+          "bytes": 32904,
+          "sha256": "16b536d635635272ba870fca319cb06d1cbccae3e0b87d941900ddd855d706bf"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-INSTALL-STAGE-SPINNER-01",
+      "title": "寄生与安装阶段spinner、阶段文案及终态恢复",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/screen/host/HostPickerUiState.kt",
+        "manager/src/main/java/com/maplesu/core/ui/screen/host/HostPickerScreen.kt",
+        "manager/src/main/java/dev/maplesu/manager/workmode/ui/LiteHiddenViewModel.kt"
+      ],
+      "productionChain": "真实操作边界→monotonic起点→现有主题spinner/耗时→真实终态",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 安装页面阶段归installer owner。",
+      "acceptanceExit": "首次无虚构估时；同类实际完成样本估时、旋转不重置、失败重试与取消/迟到结果；不虚构SDK内部进度。",
+      "integrationOwner": "functional + backup_init_review",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/screen/host/HostPickerUiState.kt",
+          "bytes": 11051,
+          "sha256": "58a4558e52482aeeda47309f0f4475a1a68ce2d3d40ca3af94b5f243b089c55c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/screen/host/HostPickerScreen.kt",
+          "bytes": 9016,
+          "sha256": "291ed7cfaefeb5d0cd2c46fef297e8b2bbc5b0878288cb3364becf3082154a95"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/workmode/ui/LiteHiddenViewModel.kt",
+          "bytes": 32904,
+          "sha256": "16b536d635635272ba870fca319cb06d1cbccae3e0b87d941900ddd855d706bf"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-RAW-KERNEL-MEMORY-01",
+      "title": "真实RAW内核安装修补内存与流式输出完整性",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-OPTIONAL-VBMETA-01",
+      "title": "普通载体迁移缺vbmeta输入与严格分路保护",
+      "productionPaths": [
+        "manager/src/main/java/dev/maplesu/manager/installer",
+        "manager/src/main/java/dev/maplesu/manager/ultrakernel",
+        "image-core"
+      ],
+      "productionChain": "真实安装UI→文件/直接安装任务→目标boot或init_boot producer→回读/提交/恢复",
+      "confirmedGap": "本子任务未修改安装或镜像代码；KMI/无Root单init_boot/切换由安装与镜像owner实施。",
+      "acceptanceExit": "同代正式APK入口、原图与修补图字节、单文件init_boot无配对boot输入、安装/重补/恢复、断连未知结果与槽位冷启。",
+      "integrationOwner": "backup_init_finish + backup_init_review + root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/ultrakernel",
+          "directory": true,
+          "exists": true
+        },
+        {
+          "path": "WORKSPACE/image-core",
+          "directory": true,
+          "exists": true
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-SDK-PAGE-PERFORMANCE-01",
+      "title": "SDK热点与页面事实读取的调用次数、预算和真实状态更新",
+      "productionPaths": [
+        "manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationTasks.kt",
+        "manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+        "manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt"
+      ],
+      "productionChain": "页面→共享只读scope/变更代际→单归属worker→JNI/SDK真实回执→保留旧行和真实错误→无spinner的后台归并",
+      "confirmedGap": "既有生产接线及专项窄验证已存在；当前同代Release和原设备效果尚未验收。 已确认旧ModuleLifecycleRegressionTest仅匹配getModules()导致守卫误红，现兼容实际trailing-lambda调用。",
+      "acceptanceExit": "同次关联请求追JNI admission/fork/SDK/child/cleanup；冷暖并发页面、授权/安装卸载、迟到结果/重建、SDK_BUSY原cause和滚动状态。",
+      "integrationOwner": "functional/current-runtime",
+      "reviewState": "CURRENT_SOURCE_REVIEW_NO_NEW_PRODUCTION_DEFECT",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/viewmodel/ModuleViewModel.kt",
+          "bytes": 41099,
+          "sha256": "331384f95342820b1a84bd59ffd252c23763a50c2950ed0bb246c1aa37d34276"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationTasks.kt",
+          "bytes": 1822,
+          "sha256": "cf17cbd7f5d875c2c42bfd387cfae9b24c05bae28427a1b58cbf74c67c5efcba"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/modules/ModuleOperationService.kt",
+          "bytes": 4241,
+          "sha256": "a2a4f3be7659c75cd20f9583803b42812039b45a541a321bc9f36e37b5131d63"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraSdkSession.kt",
+          "bytes": 22577,
+          "sha256": "cd17f64d3d726aaef18ce820953ebedae76510be408fe2b47f44f7a780fcb76c"
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/runtime/ultra/UltraRuntimeClient.kt",
+          "bytes": 30289,
+          "sha256": "d1e13ed3e9fa0990ff5ae3e99292ad6fd8983977fc7d310d505dcf62818477e2"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    },
+    {
+      "id": "ADD-CLAIM-ASSET-VERSION-01",
+      "title": "独立资产版本验收：最终APK manifest.json、claim.so及4raw+2module同代一致性",
+      "productionPaths": [
+        "manager/build.gradle.kts",
+        "scripts/build-ultra-manager-claim.py",
+        "scripts/verify-release-apk.py"
+      ],
+      "productionChain": "当前源码/SDK组件→发布器schema2/5.2.1/50201→Gradle实际资产→最终签名ZIP核验",
+      "confirmedGap": "正式Release APK尚未由本子任务构建；版本和六family产物归root。",
+      "acceptanceExit": "最终APK ZIP原字节/manifest/schema/version/signature、4raw+2module/统一代际；设备真实加载target family另验。",
+      "integrationOwner": "root",
+      "reviewState": "OTHER_OWNER_REQUIRED",
+      "pathsExist": true,
+      "currentGenerationDeviceRunsByThisAgent": 0,
+      "deviceAccepted": false,
+      "fullCaseAccepted": false,
+      "currentProductionPathIdentities": [
+        {
+          "path": "WORKSPACE/manager/build.gradle.kts",
+          "bytes": 68320,
+          "sha256": "226e67eb52f689f174129ddd911ac444cc2bbcd2c7773a623d2af2afc5e5f267"
+        },
+        {
+          "path": "WORKSPACE/scripts/build-ultra-manager-claim.py",
+          "bytes": 542022,
+          "sha256": "9f1b181d9539e624577ef91c343b29d8d772a6804fbc01c5295dc0022c0325c0"
+        },
+        {
+          "path": "WORKSPACE/scripts/verify-release-apk.py",
+          "bytes": 27963,
+          "sha256": "bde11ba2c52a1f426ea8c2603b81202252e74ef5c3c8bed293986bcdd74fa3dd"
+        }
+      ],
+      "thisReviewSourcePathPresenceOnly": true,
+      "thisReviewDeviceAccepted": false,
+      "thisReviewFullCaseAccepted": false
+    }
+  ],
+  "inputs": [
+    {
+      "path": "WORKSPACE/docs/SDK-REFACTOR-REQUIREMENTS.md",
+      "bytes": 213737,
+      "sha256": "09e83cf26d3a5397dd839daebade6ec792da43922288d0e0e6e065af8517dd6e"
+    },
+    {
+      "path": "WORKSPACE/docs/ULTRA-INIT-BOOT-KMI-ASSESSMENT-2026-11-24.md",
+      "bytes": 38677,
+      "sha256": "914375c4035944c1be3474ef04a3c150ea592b709cd92a09f82ca54f84c7d434"
+    },
+    {
+      "path": "WORKSPACE/runtime/ultra/identity/kernel/manager_task_profile_runtime.c",
+      "bytes": 19946,
+      "sha256": "09c08447ab0d0328416bcf81dc657b9d041b7ef68d42fabed1b939c13ce8344b"
+    },
+    {
+      "path": "WORKSPACE/runtime/ultra/identity/kernel/manager_task_state.c",
+      "bytes": 38684,
+      "sha256": "537cc61e32f9c762875fbcd6868aea1b0bccc1ff19181d65bd5a664edbcbb60e"
+    },
+    {
+      "path": "WORKSPACE/runtime/ultra/boot/init-bridge/bridge.c",
+      "bytes": 8548,
+      "sha256": "aa13d2358b7ed15c30e2be2bfdda06c71e1ae5780969fb19d07ffc98d49e1dc7"
+    },
+    {
+      "path": "WORKSPACE/runtime/ultra/boot/init-bridge/build_target.py",
+      "bytes": 23154,
+      "sha256": "61f44d978bbf30832224826a6baffef14aee4891e29f648b31dd85c56490937e"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/cross-review/requirements/REVIEW.json",
+      "bytes": 232145,
+      "sha256": "a8483a09ba793585b55e18e12930c3d729512a83e6e06a954df3ec56b2dae97e"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/functional-closure/CASE-SOURCE-MAP.json",
+      "bytes": 49453,
+      "sha256": "d7c5fa5638fe01c94abb3f52569190810c83e9cfc79152f89a18670ff9742e2d"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/functional-closure/REPORT.md",
+      "bytes": 19976,
+      "sha256": "7bbeb868a810e22200d47de705ffd29e5260e5c0c448fbc4ede38d0e5029e2f5"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/cross-review/modules-ui/REPORT.md",
+      "bytes": 10306,
+      "sha256": "d9552a45568ac8ea3b82a9235aed1d296a05e9dcbbe42da06c8803481bf1d2aa"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/functional-closure/external-webui/REPORT.md",
+      "bytes": 9403,
+      "sha256": "4a8ad57656c06162815ea3b8dab4c7152dc94e384762faf9b9e7aa57ffa8660a"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/functional-closure/external-webui/DELIVERY.json",
+      "bytes": 2319,
+      "sha256": "cc6ecf168fc653700911279f89aba3ea78d3b848f808dcd20e6f6cf7efb26c6e"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/final-installer-fix/REPORT.md",
+      "bytes": 4946,
+      "sha256": "fac2f6ab988c694c7fd41a8dd53d519248211e4086490ce539ebe091a048aaa5"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/issue4-allocator-key-fix/RESULTS.json",
+      "bytes": 4722,
+      "sha256": "f61661a8181433663dacfdf772b34a46e036df1a55e79ce3b8468aff4e18b710"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/issue4-endtoend/SOURCE-READY.json",
+      "bytes": 1262,
+      "sha256": "12acca0e2bedc5e56018d75d87317595af0537a454aa685881437d72340fd6b7"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/issue6-environment-facts/RESULTS.json",
+      "bytes": 2091,
+      "sha256": "e84a160f50a06dc1652e71e46e075f6dd1fb266cd4755b177513795628ce5b06"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/root-release-backend-fix/REPORT.md",
+      "bytes": 1176,
+      "sha256": "a05cc2145e827861072e819dd8ae26a2a54a6b0b70a90ce192b3340884799147"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/root-strip-debug-fix/REPORT.md",
+      "bytes": 1777,
+      "sha256": "fdc9b663700ca665ec1239f0631017415dd9dea00b2e77821f216a3fdc2c3b2b"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/runtime-layout/native-api-cleanup/REPORT.md",
+      "bytes": 2879,
+      "sha256": "6e05cfc41e341528ab2a6631b4ccd75119c5f21d7116223441700bd9beef0688"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/cold-boot-producer/REPORT.md",
+      "bytes": 8057,
+      "sha256": "7c267a134befda9ad35613ee02480e66a485eb00dfa3b551ec3ce8f565049dbc"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/task-profiles/native-api-no-extra-gates/REPORT.md",
+      "bytes": 4123,
+      "sha256": "1755e78fc3a6102c64d82f96b2274e9a9d65237168dc728888f3f1578f648b76"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/task-profiles/ksu-native-contract-next-r1/REPORT.md",
+      "bytes": 6554,
+      "sha256": "ed9f0cd228c820019f51335ea593f080ab93f34b9b3689e91384a301fe2f8aac"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/task-profiles/ksu-native-contract-next-r1/CALLBACK-TYPE-RESULTS.json",
+      "bytes": 12263,
+      "sha256": "b31b5811ac7176773eef9db5210cfeba1c4a1e908e268e83d345b3581d61c807"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/cross-review/github-issues/REPORT.md",
+      "bytes": 9243,
+      "sha256": "9f5e7d7cd4b646c1f46201c9d67e5b3c14213a66857a4a1afcfb26781e63def5"
+    },
+    {
+      "path": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/final-source-preparation/REPORT.md",
+      "bytes": 4267,
+      "sha256": "95cf6f0507e3ee5816fca51109bc3c818682a1f198845c1237ca603ca199502d"
+    }
+  ],
+  "manifestChecks": [
+    {
+      "manifest": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/functional-closure/external-webui/FILES.json",
+      "rows": 43,
+      "allCurrent": true,
+      "rowsChecked": [
+        {
+          "path": "WORKSPACE/manager/src/main/assets/liteweb/a/modbridge.js",
+          "expectedSha256": "eac6772021c8e2eb8fe707fb0f73e3feaa896521698ac5aee406e5b70642dfb6",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/assets/liteweb/a/modbridge.js",
+            "bytes": 10330,
+            "sha256": "eac6772021c8e2eb8fe707fb0f73e3feaa896521698ac5aee406e5b70642dfb6"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/ExternalWebUiBridge.kt",
+          "expectedSha256": "e7ffceff2db2a421329930e7f189e881b2b588dc0293a9b821780603501e913e",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/ExternalWebUiBridge.kt",
+            "bytes": 12287,
+            "sha256": "e7ffceff2db2a421329930e7f189e881b2b588dc0293a9b821780603501e913e"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/HttpWebUiBridge.kt",
+          "expectedSha256": "0d85300478eefd192a8b5802e02624e7ff3da0bc8c0e0ba0ff93c933c395449f",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/HttpWebUiBridge.kt",
+            "bytes": 4655,
+            "sha256": "0d85300478eefd192a8b5802e02624e7ff3da0bc8c0e0ba0ff93c933c395449f"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/RootWebUiApps.kt",
+          "expectedSha256": "215a364b83c1d8b55b8c43e955653957f430097d5f099199f77c0dee4204ec19",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/RootWebUiApps.kt",
+            "bytes": 1517,
+            "sha256": "215a364b83c1d8b55b8c43e955653957f430097d5f099199f77c0dee4204ec19"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUIDownloadInterface.kt",
+          "expectedSha256": "ddd62ec7690e13d47ea4169d767331d9f6aa4bdd7eb8706cd64d4c119d0ef60d",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUIDownloadInterface.kt",
+            "bytes": 13147,
+            "sha256": "ddd62ec7690e13d47ea4169d767331d9f6aa4bdd7eb8706cd64d4c119d0ef60d"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUiBridgeDispatcher.kt",
+          "expectedSha256": "767398592c52889dfad1d9297d5c3a3db0cbf18a19da2b3fef7643466504c99e",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUiBridgeDispatcher.kt",
+            "bytes": 5190,
+            "sha256": "767398592c52889dfad1d9297d5c3a3db0cbf18a19da2b3fef7643466504c99e"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUiSessionHost.kt",
+          "expectedSha256": "4036ca5f40740523fcf686747102954677871f54b679b868ebf6491fa896ceb1",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebUiSessionHost.kt",
+            "bytes": 720,
+            "sha256": "4036ca5f40740523fcf686747102954677871f54b679b868ebf6491fa896ceb1"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt",
+          "expectedSha256": "3c166aeba34991911560fe4ef61a5b2c3d9e9046b606860fbc745e8e797ef37b",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/WebViewInterface.kt",
+            "bytes": 20178,
+            "sha256": "3c166aeba34991911560fe4ef61a5b2c3d9e9046b606860fbc745e8e797ef37b"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/pm/KsuPm.kt",
+          "expectedSha256": "2f5488506facef06468962f83ffcacd7c0ca1c81df24ec41dfa24a997022fb92",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/webui/pm/KsuPm.kt",
+            "bytes": 3326,
+            "sha256": "2f5488506facef06468962f83ffcacd7c0ca1c81df24ec41dfa24a997022fb92"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebAdminService.kt",
+          "expectedSha256": "a86d5967d373f05aa71f2fdebd692b5cb90c388848c0c60aefbccc08787f88be",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebAdminService.kt",
+            "bytes": 18645,
+            "sha256": "a86d5967d373f05aa71f2fdebd692b5cb90c388848c0c60aefbccc08787f88be"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebCore.kt",
+          "expectedSha256": "c94971fb23999664109fab71a1a0201fc356457379a8c4e755be88304ca9d9c3",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebCore.kt",
+            "bytes": 34151,
+            "sha256": "c94971fb23999664109fab71a1a0201fc356457379a8c4e755be88304ca9d9c3"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebHandler.kt",
+          "expectedSha256": "d20b891fe3a517f2daaa964a74784bc293778d2e71e67633013c98efcd7cf9ff",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebHandler.kt",
+            "bytes": 40033,
+            "sha256": "d20b891fe3a517f2daaa964a74784bc293778d2e71e67633013c98efcd7cf9ff"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebModWeb.kt",
+          "expectedSha256": "09afd365eb75861b74c351d48206a27975d8263e8b44da9e2efcac84903b2550",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebModWeb.kt",
+            "bytes": 7036,
+            "sha256": "09afd365eb75861b74c351d48206a27975d8263e8b44da9e2efcac84903b2550"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebModuleBridge.kt",
+          "expectedSha256": "f654c2f036dfbbb9b29d1edade6b45887476034ccccfd36053a6d482cc31c9c3",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/LiteWebModuleBridge.kt",
+            "bytes": 2872,
+            "sha256": "f654c2f036dfbbb9b29d1edade6b45887476034ccccfd36053a6d482cc31c9c3"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/daemon/DaemonLiteWebBackend.kt",
+          "expectedSha256": "5e8cf08c40a923a0a94650dde2d2d59f8f13dec4898309f19f8b2ab30e8a8d62",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/daemon/DaemonLiteWebBackend.kt",
+            "bytes": 32395,
+            "sha256": "5e8cf08c40a923a0a94650dde2d2d59f8f13dec4898309f19f8b2ab30e8a8d62"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/daemon/LiteWebDaemonMain.kt",
+          "expectedSha256": "4c9b72245e0f1d4e514d9d99269aea6a6a86b8e208b932d80e8393c0cba026f1",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/liteweb/daemon/LiteWebDaemonMain.kt",
+            "bytes": 43876,
+            "sha256": "4c9b72245e0f1d4e514d9d99269aea6a6a86b8e208b932d80e8393c0cba026f1"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/java/dev/maplesu/manager/liteweb/LiteWebModuleBridgeTest.kt",
+          "expectedSha256": "27e2fbdd10b245a3235fceea05e97f47f652c1cd6ae996bdbdf9228f88a788ae",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/java/dev/maplesu/manager/liteweb/LiteWebModuleBridgeTest.kt",
+            "bytes": 1734,
+            "sha256": "27e2fbdd10b245a3235fceea05e97f47f652c1cd6ae996bdbdf9228f88a788ae"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/BrowserBridgeFixtureServer.kt",
+          "expectedSha256": "8a18be8c2e432021da57896e3fc91cd03da8719538e660b4f0898252c2a1192a",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/BrowserBridgeFixtureServer.kt",
+            "bytes": 4497,
+            "sha256": "8a18be8c2e432021da57896e3fc91cd03da8719538e660b4f0898252c2a1192a"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/ExternalWebUiBridgeLifecycleTest.kt",
+          "expectedSha256": "19b7fa8bbd3d319305609b4b6ce6d2ef628e046c9c3e04914ef859fb528f822f",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/ExternalWebUiBridgeLifecycleTest.kt",
+            "bytes": 5326,
+            "sha256": "19b7fa8bbd3d319305609b4b6ce6d2ef628e046c9c3e04914ef859fb528f822f"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/README.md",
+          "expectedSha256": "b22a0219c539ea1717a715086fc02144ce16233da62468fc43902805ca64b369",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/README.md",
+            "bytes": 3449,
+            "sha256": "b22a0219c539ea1717a715086fc02144ce16233da62468fc43902805ca64b369"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/RootWebUiAppsTest.kt",
+          "expectedSha256": "fab0ee583d07b168f8c81a69029cba989704ec0abfc2aa096973e5f614e297b6",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/RootWebUiAppsTest.kt",
+            "bytes": 1403,
+            "sha256": "fab0ee583d07b168f8c81a69029cba989704ec0abfc2aa096973e5f614e297b6"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/activity.kt",
+          "expectedSha256": "c1bac7da014d3b9c3c0b85c7113a0c6189b7057fa058e2d7a7d9b5bf96a2d692",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/activity.kt",
+            "bytes": 303,
+            "sha256": "c1bac7da014d3b9c3c0b85c7113a0c6189b7057fa058e2d7a7d9b5bf96a2d692"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_content.kt",
+          "expectedSha256": "6e1d76733945119c1036b3cc71bfb1c4cac66d8f84a32b0dc229e8944b96e033",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_content.kt",
+            "bytes": 273,
+            "sha256": "6e1d76733945119c1036b3cc71bfb1c4cac66d8f84a32b0dc229e8944b96e033"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_os.kt",
+          "expectedSha256": "dd680b7bf196bd9130021ff87a2716281d17559fe7fbbe8f73811a94c85d89b4",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_os.kt",
+            "bytes": 368,
+            "sha256": "dd680b7bf196bd9130021ff87a2716281d17559fe7fbbe8f73811a94c85d89b4"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_text.kt",
+          "expectedSha256": "b9392780facd36d411dcaeac51ba16b901cc54fd481ea62aec1d38770cba649a",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_text.kt",
+            "bytes": 95,
+            "sha256": "b9392780facd36d411dcaeac51ba16b901cc54fd481ea62aec1d38770cba649a"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_util.kt",
+          "expectedSha256": "404184218d323da3ec49ba67bd8d96565ffe22ee4249bb563a7301cae249d146",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_util.kt",
+            "bytes": 517,
+            "sha256": "404184218d323da3ec49ba67bd8d96565ffe22ee4249bb563a7301cae249d146"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_widget.kt",
+          "expectedSha256": "bba4e6fda2456dd8c277551ee49ae63e427fef6976d4584971924d9e059db528",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/android_widget.kt",
+            "bytes": 227,
+            "sha256": "bba4e6fda2456dd8c277551ee49ae63e427fef6976d4584971924d9e059db528"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/androidx_pm.kt",
+          "expectedSha256": "b8ab1ffe297050ee8cd0c709b4a911b489736a6acb1c33ae58f524252cace45e",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/androidx_pm.kt",
+            "bytes": 120,
+            "sha256": "b8ab1ffe297050ee8cd0c709b4a911b489736a6acb1c33ae58f524252cace45e"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/androidx_view.kt",
+          "expectedSha256": "853c6ca7ce0161ab6b7eea2950399d605f2d766f083b67c2b0a2a456530abeb8",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/androidx_view.kt",
+            "bytes": 283,
+            "sha256": "853c6ca7ce0161ab6b7eea2950399d605f2d766f083b67c2b0a2a456530abeb8"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/app_globals.kt",
+          "expectedSha256": "316f37ceba363fef4a43c79afd77d4a3248d1d2fc20449ecda3cae144d6dd9c1",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/app_globals.kt",
+            "bytes": 211,
+            "sha256": "316f37ceba363fef4a43c79afd77d4a3248d1d2fc20449ecda3cae144d6dd9c1"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/file.kt",
+          "expectedSha256": "57714318403ef7dc4b5b700d089619b6099689bbe2a22a71d3fc4aa082da7272",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/file.kt",
+            "bytes": 1183,
+            "sha256": "57714318403ef7dc4b5b700d089619b6099689bbe2a22a71d3fc4aa082da7272"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/libsu.kt",
+          "expectedSha256": "0a613187611bace091441751abfb2cffe4ad431734ad06618b753539b4f4af84",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/libsu.kt",
+            "bytes": 2102,
+            "sha256": "0a613187611bace091441751abfb2cffe4ad431734ad06618b753539b4f4af84"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/mode.kt",
+          "expectedSha256": "c497e1f20d27865c3000aeba6f2791a768dc3503b19119863e691443400c5b3a",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/mode.kt",
+            "bytes": 155,
+            "sha256": "c497e1f20d27865c3000aeba6f2791a768dc3503b19119863e691443400c5b3a"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/model.kt",
+          "expectedSha256": "961dd1bd52073da4d52be1081a8b66eb46a138bf5ce3d41f0f8951759d7a211f",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/model.kt",
+            "bytes": 286,
+            "sha256": "961dd1bd52073da4d52be1081a8b66eb46a138bf5ce3d41f0f8951759d7a211f"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/platform.kt",
+          "expectedSha256": "da08f9ce8ad77f352dc4f8651e48faee12e9c5a1d7809347ed3e2356d7de2b5c",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/platform.kt",
+            "bytes": 1305,
+            "sha256": "da08f9ce8ad77f352dc4f8651e48faee12e9c5a1d7809347ed3e2356d7de2b5c"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/state.kt",
+          "expectedSha256": "be8327b7995db3a4bcd42cd3bfdcfa9b465496a787c6a01f192840aa1ed0b990",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/state.kt",
+            "bytes": 484,
+            "sha256": "be8327b7995db3a4bcd42cd3bfdcfa9b465496a787c6a01f192840aa1ed0b990"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/uri.kt",
+          "expectedSha256": "7dddeb7379f3cb2dd7ab2926e7b990b94045a788d9ac026309ea0cc106c3c066",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/uri.kt",
+            "bytes": 455,
+            "sha256": "7dddeb7379f3cb2dd7ab2926e7b990b94045a788d9ac026309ea0cc106c3c066"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/util.kt",
+          "expectedSha256": "1b12237495af42884f2175ff4883e66d02b68fab177a3381077e3c5b038a98ad",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/util.kt",
+            "bytes": 413,
+            "sha256": "1b12237495af42884f2175ff4883e66d02b68fab177a3381077e3c5b038a98ad"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/view.kt",
+          "expectedSha256": "32d7c1f32000d211a6593735714173dccc143379b55ff7e77138662ae00e0913",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/view.kt",
+            "bytes": 106,
+            "sha256": "32d7c1f32000d211a6593735714173dccc143379b55ff7e77138662ae00e0913"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/webkit.kt",
+          "expectedSha256": "d5b3e6a63a292cf77836e7e916b2a214251242bfb4f99cabb92b54837e956f7a",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/fixtures/webkit.kt",
+            "bytes": 2100,
+            "sha256": "d5b3e6a63a292cf77836e7e916b2a214251242bfb4f99cabb92b54837e956f7a"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/run.ps1",
+          "expectedSha256": "a4d10d11a3bfdf160712becd43c1ec17d6cd73ffd06327eee6c106b38bdd0996",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/run.ps1",
+            "bytes": 7122,
+            "sha256": "a4d10d11a3bfdf160712becd43c1ec17d6cd73ffd06327eee6c106b38bdd0996"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/verify-event-order.cjs",
+          "expectedSha256": "5273c549bb10f1ceb8a2ee01692e286fecebd92519deb0c0fa9aeb92cca21771",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/verify-event-order.cjs",
+            "bytes": 2057,
+            "sha256": "5273c549bb10f1ceb8a2ee01692e286fecebd92519deb0c0fa9aeb92cca21771"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/verify.cjs",
+          "expectedSha256": "7d770e31eb66055f2b7fac907cd0562a25efc2ff286796254a303a648632dd0e",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/resources/webui-browser-jvm/verify.cjs",
+            "bytes": 9426,
+            "sha256": "7d770e31eb66055f2b7fac907cd0562a25efc2ff286796254a303a648632dd0e"
+          },
+          "matches": true
+        }
+      ]
+    },
+    {
+      "manifest": "WORKSPACE/.tmp/supervision-20261123-build-acceptance/source-repairs-current/kmi-implementation-20261124/final-installer-fix/FILES.json",
+      "rows": 7,
+      "allCurrent": true,
+      "rowsChecked": [
+        {
+          "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/util/KsuCli.kt",
+          "expectedSha256": "c8b114d1f215c5218d041b1e8e2961881f3a8b58d6ebe9bfc6389c198b8fd8cc",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/com/maplesu/core/ui/util/KsuCli.kt",
+            "bytes": 108601,
+            "sha256": "c8b114d1f215c5218d041b1e8e2961881f3a8b58d6ebe9bfc6389c198b8fd8cc"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer/NativeInstallTransaction.kt",
+          "expectedSha256": "b00c58501692539f331f78970b06e537e6c945f95493fb7f78d1b243f07d8f42",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer/NativeInstallTransaction.kt",
+            "bytes": 63969,
+            "sha256": "b00c58501692539f331f78970b06e537e6c945f95493fb7f78d1b243f07d8f42"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer/StockInstallFlow.kt",
+          "expectedSha256": "f34f3f1f9a00eeb2e179c1fc4ae5a683d0c037249db833e283b423f630bbaea1",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer/StockInstallFlow.kt",
+            "bytes": 12484,
+            "sha256": "f34f3f1f9a00eeb2e179c1fc4ae5a683d0c037249db833e283b423f630bbaea1"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer/UltraInitBootInstallTarget.kt",
+          "expectedSha256": "b4666fab6bb6618d0f4eafbfb8ff86d2177a1f3e93cf3b071f6fc69f998780d6",
+          "current": {
+            "path": "WORKSPACE/manager/src/main/java/dev/maplesu/manager/installer/UltraInitBootInstallTarget.kt",
+            "bytes": 848,
+            "sha256": "b4666fab6bb6618d0f4eafbfb8ff86d2177a1f3e93cf3b071f6fc69f998780d6"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/java/dev/maplesu/manager/installer/A2CarrierMigrationTest.kt",
+          "expectedSha256": "b6c6cd5c779c899a7b123681dc14480e6ab38816e340a8df7bd5c0ff93f7d7cd",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/java/dev/maplesu/manager/installer/A2CarrierMigrationTest.kt",
+            "bytes": 12397,
+            "sha256": "b6c6cd5c779c899a7b123681dc14480e6ab38816e340a8df7bd5c0ff93f7d7cd"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/java/dev/maplesu/manager/installer/DirectInstallSourceWiringTest.kt",
+          "expectedSha256": "f747c6dc711842aea6060ccc582838c76a71c57828bde63924af1eae3c026f05",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/java/dev/maplesu/manager/installer/DirectInstallSourceWiringTest.kt",
+            "bytes": 13850,
+            "sha256": "f747c6dc711842aea6060ccc582838c76a71c57828bde63924af1eae3c026f05"
+          },
+          "matches": true
+        },
+        {
+          "path": "WORKSPACE/manager/src/test/java/dev/maplesu/manager/installer/UltraInitBootInstallTargetTest.kt",
+          "expectedSha256": "f7f30992ac331a712a9e1e14c9ef6aab6b8cbbb87e352b4c89b84671678f6e42",
+          "current": {
+            "path": "WORKSPACE/manager/src/test/java/dev/maplesu/manager/installer/UltraInitBootInstallTargetTest.kt",
+            "bytes": 2817,
+            "sha256": "f7f30992ac331a712a9e1e14c9ef6aab6b8cbbb87e352b4c89b84671678f6e42"
+          },
+          "matches": true
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "SPEC-SOURCE-01",
+      "priority": 1,
+      "kind": "KNOWN_SOURCE_CONTRACT_GAP",
+      "path": "WORKSPACE/runtime/ultra/identity/kernel/manager_task_profile_runtime.c",
+      "lines": [
+        108,
+        141,
+        379
+      ],
+      "requirements": [
+        "LAY-06",
+        "LAY-07",
+        "SU-01",
+        "FINAL-09"
+      ],
+      "statement": "Native sys_enter callback still depends on emitted named peer symbols/BTF; KCFI with both lookup results absent returns -ENOENT before native register. Fixed KSU uses generated callback type checker. Prior owner proved actual DDK checker red/green but only evaluated migration; production replacement is not implemented.",
+      "currentCohortImpact": "Conditional on actual named peer symbol emission/lookup; this review has not loaded the target module.",
+      "action": "Root decides current-source completion scope; implement generated native callback type check while preserving real CFI/register errno, or explicitly retain this unclosed support condition. Do not delete CFI blindly."
+    },
+    {
+      "id": "SPEC-SOURCE-02",
+      "priority": 2,
+      "kind": "KNOWN_SUPPORT_LIMIT_REQUIRES_CONSUMER_FIX",
+      "path": "WORKSPACE/runtime/ultra/identity/kernel/manager_task_state.c",
+      "lines": [
+        458,
+        576
+      ],
+      "relatedPath": "WORKSPACE/runtime/ultra/identity/kernel/manager_task_profile_runtime.c",
+      "relatedLines": [
+        60,
+        64,
+        188
+      ],
+      "requirements": [
+        "LAY-07",
+        "QA-02",
+        "FINAL-09"
+      ],
+      "statement": "PREEMPT_RT is rejected by both runtime producer and marker_open. Existing marker_update acquires sleepable RT tasklist rwlock while raw_spinlock/probe atomic context is active; removing the two gates alone is wrong. Prior owner explicitly delivered analysis, not production synchronous RCU/consumer fix.",
+      "currentCohortImpact": "Non-RT release may be built without this branch; not evidence of RT/all-configuration support.",
+      "action": "Keep accurate support scope; a complete no-extra-gates closure needs actual consumer synchronization fix and regression before deleting RT veto."
+    }
+  ],
+  "issueStatus": {
+    "4": "END_TO_END_SOURCE_OWNER_HAS_SOURCE_READY_RECEIPT_FINAL_DELIVERY_PENDING",
+    "5": "15_POINTER_SITES_SOURCE_FIXED_HOST_VALIDATED_PENDING_SAME_GENERATION_RELEASE_DEVICE",
+    "6.1": "DDK_CONFIG_EXISTS_TRUE_LOADER_ERRNO_RETAINED_NO_CRC_BYPASS",
+    "6.2": "TASK_STATE_SOURCE_STAGE_CAPS_DISPATCH_FIXED_PENDING_RELEASE_DEVICE",
+    "6.3": "RAW_BOUND_KEYS_FIXED_WITH_ABI13_OWNER_FINAL_PENDING",
+    "6.4": "ENV_APPEND64_SOURCE_FIXED_ROOT_EXECMEM_INTEGRATION_APPLIED_PENDING_RELEASE_DEVICE",
+    "7": "RECOVERY_STATE_MACHINE_AND_INSTALL_ENTRY_HOST_VALIDATED_FIRST_STAGE_VENDOR_DEVICE_STILL_PENDING"
+  },
+  "prStatus": {
+    "8": "LOCALLY_ADAPTED_ALLOCATOR_AND_END_TO_END_OWNER_NOT_REMOTE_MERGED",
+    "9": "LOCALLY_ADAPTED_PLUS_TWO_NESTED_POINTERS_NOT_REMOTE_MERGED"
+  },
+  "claimCatalogContract": "schema1 exact native catalog for legacy claim route; schema2 generic component catalog for unpaired init_boot patching; overlapping sources same generation.",
+  "fullRequirementsAcceptedByThisReview": 0,
+  "fullCasesAcceptedByThisReview": 0,
+  "deviceCasesAcceptedByThisReview": 0,
+  "releaseBuiltByThisReview": false,
+  "conclusion": "Known TaskProfile native peer-symbol qualification and RT consumer support remain source limits. Other reviewed fixes have source/host receipts, not final release/device acceptance. Issue4 final delivery must be collected. This review does not assert universal support or a new release."
+}

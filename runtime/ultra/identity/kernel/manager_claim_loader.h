@@ -20,6 +20,7 @@ typedef uintptr_t msu_loader_uptr;
 
 #define MSU_LOADER_MAGIC 0x4355534dU
 #define MSU_LOADER_VERSION 3U
+#define MSU_LOADER_SOURCE_VERSION 4U
 #define MSU_LOADER_MAX_SECTIONS 32U
 #define MSU_LOADER_MAX_CHUNKS 256U
 #define MSU_LOADER_MAX_MEMORY_BYTES 1048576U
@@ -45,6 +46,12 @@ struct msu_loader_header {
     msu_loader_u32 section_count, chunk_count, import_count, reloc_count, payload_crc, kernel_memory_bytes;
     msu_loader_u32 chunk_table_offset;
 };
+/* In v4, only chunk.source is relative to the separately retained source.
+ * The descriptor, chunk table and imports keep their original kernel base. */
+struct msu_loader_source_header {
+    struct msu_loader_header base;
+    msu_loader_u32 source_bytes;
+};
 struct msu_loader_section {
     msu_loader_u32 offset, file_bytes, memory_bytes, flags;
 };
@@ -57,6 +64,9 @@ struct msu_loader_reloc {
 
 _Static_assert(sizeof(struct msu_loader_binding) == 24, "loader binding layout");
 _Static_assert(sizeof(struct msu_loader_header) == 52, "loader header layout");
+_Static_assert(sizeof(struct msu_loader_source_header) == 56, "loader source header layout");
+_Static_assert(__builtin_offsetof(struct msu_loader_source_header, source_bytes) == 52,
+               "loader source size offset");
 _Static_assert(sizeof(struct msu_loader_section) == 16, "loader section layout");
 _Static_assert(sizeof(struct msu_loader_chunk) == 8, "loader chunk layout");
 _Static_assert(sizeof(struct msu_loader_reloc) == 16, "loader relocation layout");
@@ -73,7 +83,16 @@ enum msu_loader_error {
     MSU_LOADER_INVALID_IMPORT = -8,
     MSU_LOADER_INVALID_RELOCATION = -9,
     MSU_LOADER_INVALID_CHUNK_TABLE = -10,
+    MSU_LOADER_INVALID_SOURCE = -11,
 };
+
+static inline msu_loader_u32 msu_loader_header_bytes(const struct msu_loader_header *h)
+{
+    if (!h) return 0;
+    if (h->version == MSU_LOADER_VERSION) return sizeof(*h);
+    if (h->version == MSU_LOADER_SOURCE_VERSION) return sizeof(struct msu_loader_source_header);
+    return 0;
+}
 
 /* Internal materializer: binding and image must be immutable, retained objects
  * supplied by the protected boot-owned anchor. CRC detects corruption and does
@@ -93,5 +112,13 @@ enum msu_loader_error {
 int msu_manager_claim_materialize(const struct msu_loader_binding *binding,
                                   const void *image, void *destination,
                                   msu_loader_u32 capacity);
+
+/* V4 only. The protected boot caller owns the retained RO/NX source mapping
+ * until return. This function validates source length, metadata and CRC before
+ * destination writes; it never reserves, maps or retains the source itself.
+ * No generated relocation can refer to source_base. V3 uses the original entry. */
+int msu_manager_claim_materialize_source(const struct msu_loader_binding *binding,
+    const void *kernel_base, const void *source_base, msu_loader_u32 source_bytes,
+    void *destination, msu_loader_u32 capacity);
 
 #endif

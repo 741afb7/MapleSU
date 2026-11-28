@@ -319,14 +319,15 @@ object LiteStartupStatusPolicy {
      * - 隐身 → 不动；
      * - 已判定为 KSU → 清（明确不是 Lite，别留过期种子）；
      * - 有证据 → 写（模式/六态/凭据/Ultra 任一确定即写，符合"结果确定时写入"）；
-     * - 判定已落定但什么证据都没有 → 清（真的没装，别让下次冷启动继续显示已安装）；
-     * - 判定中且无证据 → 不动（还轮不到它下结论）。
+     * - 确定不是 Lite 且没有安装证据 → 清；
+     * - 判定中或本轮仍未知 → 不动，已完成不等于已确认未安装。
      */
     fun hintUpdate(facts: LiteStartupFacts): HomeLiteHintUpdate = when {
         facts.stealthOn -> HomeLiteHintUpdate.NONE
         facts.ksuMode -> HomeLiteHintUpdate.CLEAR
         hintEvidence(facts) != null -> HomeLiteHintUpdate.WRITE
-        facts.modeSettled -> HomeLiteHintUpdate.CLEAR
+        facts.modeSettled && facts.detectedState != null &&
+            facts.detectedState != ModeState.INDETERMINATE -> HomeLiteHintUpdate.CLEAR
         else -> HomeLiteHintUpdate.NONE
     }
 

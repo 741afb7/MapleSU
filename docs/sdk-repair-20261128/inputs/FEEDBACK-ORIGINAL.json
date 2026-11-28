@@ -1,0 +1,556 @@
+{
+  "source": "D:\\Maple_Workflow\\MapleSU\\docs\\development\\ultra-keyless-20261124\\issue-regression-20261126\\feedback-all-issues-regression.md",
+  "sha256": "c2fd95238902d8bf75b71ce17f2aba7b45225cf638fc4dbdb2310b211487ee7a",
+  "userScope": {
+    "original": [
+      1,
+      79
+    ],
+    "additions": [
+      80,
+      90
+    ]
+  },
+  "items": [
+    {
+      "id": 30,
+      "sourceLine": 85,
+      "originalRow": "| #30 | 額際我 @SOSO | 未填 | 闪退 | `OutOfMemoryError: Failed to allocate a 67108880 byte allocation … growth limit 268435456`，栈经 `in1.c → s5.n → fs.i` |  |",
+      "summary": "闪退"
+    },
+    {
+      "id": 31,
+      "sourceLine": 86,
+      "originalRow": "| #31 | 額際我 @SOSO | 未填 | Ghostlock 能否自己填偏移；自己解析 boot.img 一直闪退 | 无日志（同 #30 提交者的关联提问） |  |",
+      "summary": "Ghostlock 能否自己填偏移；自己解析 boot.img 一直闪退"
+    },
+    {
+      "id": 62,
+      "sourceLine": 87,
+      "originalRow": "| #62 | 纪兔 @lyjjddd | Xiaomi 22127RK46C，Android 16，5.2.0 | 一解析 boot 就闪退 | `OutOfMemoryError: Failed to allocate a 65552 byte allocation … 279KB until OOM`，`HashMap.resize → in1.a → s5.n → fs.i` |  |",
+      "summary": "一解析 boot 就闪退"
+    },
+    {
+      "id": 74,
+      "sourceLine": 88,
+      "originalRow": "| #74 | 太午 @tw6860 | Xiaomi 22127RK46C，Android 16，5.2.0 | 修补 boot 时闪退 | `OutOfMemoryError: Failed to allocate a 14241376 byte allocation … 772KB until OOM`，`Arrays.copyOf → ArrayList.grow → d04.invoke` |  |",
+      "summary": "修补 boot 时闪退"
+    },
+    {
+      "id": 87,
+      "sourceLine": 89,
+      "originalRow": "| #87 | sunxc 487 @wszgsjzdddsg | 魅族 20 12.7A，Android 16，5.2.0 | Ghostlock 提权时提权不了 | `OutOfMemoryError: Failed to allocate a 46885388 byte allocation … 5839KB until OOM`，`Object.clone → … → KernelSUApplication.b(:576)` |  |",
+      "summary": "Ghostlock 提权时提权不了"
+    },
+    {
+      "id": 27,
+      "sourceLine": 126,
+      "originalRow": "| #27 | Karin @mcxiao10 | REDMI Turbo 4（附件日志内机型 Xiaomi 24129RT7CC rodin），Android 17，HyperOS 4，5.2.0 | 设置壁纸后打开任意模块的 WebUI，管理器闪退 | `IllegalStateException: LocalNavigator not provided`（附件 log.txt，2026-11-15 06:28:40，76 行完整） |  |",
+      "summary": "设置壁纸后打开任意模块的 WebUI，管理器闪退"
+    },
+    {
+      "id": 56,
+      "sourceLine": 127,
+      "originalRow": "| #56 | 爱 人 | Xiaomi 24117RK2CC，Android 16，5.2.0 | Zn 模块刷不进去 | `IllegalStateException: LocalNavigator not provided`，`c04.invoke(:174) → hn6.getValue(:21) → dv2.a(:3)` |  |",
+      "summary": "Zn 模块刷不进去"
+    },
+    {
+      "id": 76,
+      "sourceLine": 128,
+      "originalRow": "| #76 | 花开 @huakai6666 | 一加 Ace5 Ultra PLC110，Android 16，5.2.0 | 打开 WebUI 异常 | 同上（与 #56 仅时间、机型两行不同） |  |",
+      "summary": "打开 WebUI 异常"
+    },
+    {
+      "id": 80,
+      "sourceLine": 129,
+      "originalRow": "| #80 | 小叶 7 @weilairr | Xiaomi 22011211C，Android 14，5.2.0 | 崩溃报告（无文字描述） | 同上；触发操作未知 |  |",
+      "summary": "崩溃报告（无文字描述）"
+    },
+    {
+      "id": 81,
+      "sourceLine": 130,
+      "originalRow": "| #81 | 可口雪碧 @klappmk | Xiaomi M786BC，Android 17，5.2.0，Normal 模式 | Normal 模式打开 WebUI 崩溃 | 同上；`MapleSU_Normal 工作模式，打开 wedui 崩溃` |  |",
+      "summary": "Normal 模式打开 WebUI 崩溃"
+    },
+    {
+      "id": 89,
+      "sourceLine": 131,
+      "originalRow": "| #89 | 976936（无用户名） | realme RMX8899，Android 17，5.2.0 | 崩溃报告（无文字描述） | 同上（附件 bug.txt，67 帧完整）；触发操作未知 |  |",
+      "summary": "崩溃报告（无文字描述）"
+    },
+    {
+      "id": 84,
+      "sourceLine": 162,
+      "originalRow": "| #84 | Liu Ai @wangouguair | 一加 PLQ110，Android 16，内核 6.6.118，Manager 5.2.1 | 环境检查未完成，点重试也没用 | `code=ENV_UNKNOWN_TIMEOUT detail=PROBE_FAILED:ULTRA_RECOVERY_PROBE_UNKNOWN`（三次，elapsedMs 848/529/648）；`recovery=RECOVERY_ROOT_NOT_VERIFIED`；`result=NOT_OBSERVED` |  |",
+      "summary": "环境检查未完成，点重试也没用"
+    },
+    {
+      "id": 86,
+      "sourceLine": 187,
+      "originalRow": "| #86 | 图库 | 一加 13 PJZ110，Android 17，ColorOS 17.0.0.103，内核 6.6.118，Manager 5.2.1 | 修补后检测不到环境 | `code=ENV_NOT_INSTALLED detail=KSU_PROBE_NEGATIVE`（两次）；`sdkError=ERR_MODULE_OPEN_FILE code=-19934 phase=5 systemError=2`；`reason=SDK_ERROR_POLICY_BACKEND_PREPARATION_FAILED` |  |",
+      "summary": "修补后检测不到环境"
+    },
+    {
+      "id": 66,
+      "sourceLine": 221,
+      "originalRow": "| #66 | 小杨 @usgrnamk | 一加 ACE6T PLR110，Android 16，内核 6.12.69，5.2.0 | 越狱不了 | `patch: crash_dump64 verification failed` / `DEVICE NOT VULNERABLE` / `ERROR - failed to patch files`（3 次真实运行逐字节相同） |  |",
+      "summary": "越狱不了"
+    },
+    {
+      "id": 16,
+      "sourceLine": 249,
+      "originalRow": "| #16 | Charlotte Jaylinn | 红魔 7S Pro | 直接安装转面具后重启两遍，开机显示安全模式，去设置修复三四次无效 | 无日志（有 bugreport 附件，未深挖） |  |",
+      "summary": "直接安装转面具后重启两遍，开机显示安全模式，去设置修复三四次无效"
+    },
+    {
+      "id": 33,
+      "sourceLine": 250,
+      "originalRow": "| #33 | Eula Diana | 红魔七 | 转完面具后进入安全模式，不能给应用超级用户权限，也不能转面具 | 无日志（原镜像栏为一张 .jpg，非日志） |  |",
+      "summary": "转完面具后进入安全模式，不能给应用超级用户权限，也不能转面具"
+    },
+    {
+      "id": 67,
+      "sourceLine": 251,
+      "originalRow": "| #67 | 安 安 | 一加 PGP110，Android 15，内核 5.10.209，Ultra 5.2.0 | （问题栏仅填“1”，以 bugreport 为准） | `Ultra environment probe -> Fault kernelRootVerified=false (state=Fault reason=current_boot_protection)`；`SafeMode: true`；`boot_fail_protect: 1` |  |",
+      "summary": "（问题栏仅填“1”，以 bugreport 为准）"
+    },
+    {
+      "id": 77,
+      "sourceLine": 278,
+      "originalRow": "| #77 | 清风 拂过u | 红米 K50，澎湃 2.0.10，Android 14，内核 5.10.209，5.2.0 | 刷 MapleSU Ultra 没权限，给不了 root 也刷不了模块 | `[FATAL] autorun_bootstrap: NEVER EXECUTED`；`attempted=false installed=false reason=STATE_Unknown` |  |",
+      "summary": "刷 MapleSU Ultra 没权限，给不了 root 也刷不了模块"
+    },
+    {
+      "id": 70,
+      "sourceLine": 306,
+      "originalRow": "| #70 | 淡 墨 | REDMI Turbo 5 Max | 能否在 MapleSU 面具里加入月虹新出的 Ghostkey 模式 | 无日志（功能请求；与 #71 同提交者、2 分钟内重复提交） |  |",
+      "summary": "能否在 MapleSU 面具里加入月虹新出的 Ghostkey 模式"
+    },
+    {
+      "id": 71,
+      "sourceLine": 307,
+      "originalRow": "| #71 | 淡 墨 | REDMI Turbo 5 Max | 同 #70（措辞相同，再次提交） | 无日志（功能请求） |  |",
+      "summary": "同 #70（措辞相同，再次提交）"
+    },
+    {
+      "id": 73,
+      "sourceLine": 308,
+      "originalRow": "| #73 | 损解 @sjnb778 | 真我 GT8 Pro 17.0.0.105（内核未知） | CVE-2026-98260 可以提权，MapleSU 却不支持；解析 boot 一直卡住；第三方提权软件无法选 MapleSU | 无崩溃日志；APK 静态解包：`run.sh` / `yk_run.sh` 控制器列表无 MapleSU 包名；原 boot.img 因 20 MB 上限丢失 |  |",
+      "summary": "CVE-2026-98260 可以提权，MapleSU 却不支持；解析 boot 一直卡住；第三方提权软件无法选 MapleSU"
+    },
+    {
+      "id": 5,
+      "sourceLine": 341,
+      "originalRow": "| #5 | 鸡你太美 @shoiguo886 | pkv110，16.0.2.401 | 越狱模式手雷直接重启；用手雷软件可以成功提权，提取不到日志 | 无日志 |  |",
+      "summary": "越狱模式手雷直接重启；用手雷软件可以成功提权，提取不到日志"
+    },
+    {
+      "id": 7,
+      "sourceLine": 342,
+      "originalRow": "| #7 | 海豚 | 未填 | 提权不成功 | 无日志（有 bugreport 附件，未深挖） |  |",
+      "summary": "提权不成功"
+    },
+    {
+      "id": 9,
+      "sourceLine": 343,
+      "originalRow": "| #9 | 恋沐 K | 一加平板 Pro，系统 16 | 无法使用寄生 | 无日志（有 bugreport 附件，未深挖） |  |",
+      "summary": "无法使用寄生"
+    },
+    {
+      "id": 10,
+      "sourceLine": 344,
+      "originalRow": "| #10 | Newlife @Newha6 | 未填 | 提权越狱后授权超级用户，对应软件无法正常获取 root 权限 | 无日志 |  |",
+      "summary": "提权越狱后授权超级用户，对应软件无法正常获取 root 权限"
+    },
+    {
+      "id": 20,
+      "sourceLine": 345,
+      "originalRow": "| #20 | Blender @ICANNSKAUTERR | 努比亚 Z60 Ultra | 刷完后没有超级用户 | 无日志（有 bugreport 附件，未深挖） |  |",
+      "summary": "刷完后没有超级用户"
+    },
+    {
+      "id": 21,
+      "sourceLine": 346,
+      "originalRow": "| #21 | 往泽晓 @heyicaonima | K90 Max | 用自带 DirtyFrag 重启后卡重启 | 无日志（仅原镜像文件名 boot.img） |  |",
+      "summary": "用自带 DirtyFrag 重启后卡重启"
+    },
+    {
+      "id": 22,
+      "sourceLine": 347,
+      "originalRow": "| #22 | koi | iQOO Z9 Turbo，内核 6.1.145-android14 | 无法提权越狱 | 无日志 |  |",
+      "summary": "无法提权越狱"
+    },
+    {
+      "id": 24,
+      "sourceLine": 348,
+      "originalRow": "| #24 | Forever @mujinzz | K80 Pro 4.0.3 | 寄生失败，管理器丢权限，寄生应用也没有 | 无日志 |  |",
+      "summary": "寄生失败，管理器丢权限，寄生应用也没有"
+    },
+    {
+      "id": 28,
+      "sourceLine": 349,
+      "originalRow": "| #28 | —（无用户名） | 真我 GT7 RMX6688，内核 6.6.118-android15 | 不管 Ultra 无痕还是 Normal 兼容，执行自带越狱都会重启 | 无崩溃日志（`log_text` 仅为机型/版本/内核文字） |  |",
+      "summary": "不管 Ultra 无痕还是 Normal 兼容，执行自带越狱都会重启"
+    },
+    {
+      "id": 35,
+      "sourceLine": 350,
+      "originalRow": "| #35 | 我是哑巴 已被官方永久禁言 | 红米 K80 Pro，3.0.303 | 寄生后恢复几次，中间疑似寄生未成功就点恢复，一直弹恢复；再点寄生报错“状态校验失败 / 预检宿主” | 无日志（有 bugreport 附件，未深挖） |  |",
+      "summary": "寄生后恢复几次，中间疑似寄生未成功就点恢复，一直弹恢复；再点寄生报错“状态校验失败 / 预检宿主”"
+    },
+    {
+      "id": 44,
+      "sourceLine": 351,
+      "originalRow": "| #44 | 鸡你太美 @shoiguo886 | pkv110，16.0.2.401 | 内置手雷越狱重启 | DirtyFrag 日志：`verify: /vendor/lib64/libbinderdebug.so +0x0 match=0` / `readback=-1 errno=13`；libc++.so hook 校验 match=1；随后 `Triggering hook...` 后重启 |  |",
+      "summary": "内置手雷越狱重启"
+    },
+    {
+      "id": 47,
+      "sourceLine": 352,
+      "originalRow": "| #47 | xxkkjs | 未填 | 寄生无法恢复 | 无日志（有 1 张截图） |  |",
+      "summary": "寄生无法恢复"
+    },
+    {
+      "id": 50,
+      "sourceLine": 353,
+      "originalRow": "| #50 | 鸡你太美 @shoiguo886 | pkv110，16.0.2.401 | 越狱模式手雷重启 | 无日志（有 jailbreak 日志附件，未深挖） |  |",
+      "summary": "越狱模式手雷重启"
+    },
+    {
+      "id": 58,
+      "sourceLine": 354,
+      "originalRow": "| #58 | 寄星月 @yuejixing1 | iQOO Z10 Turbo+，OriginOS 5，内核 6.6.57-android15，5.2.0 | 用不了 DirtyFrag 提权 | 无日志 |  |",
+      "summary": "用不了 DirtyFrag 提权"
+    },
+    {
+      "id": 59,
+      "sourceLine": 355,
+      "originalRow": "| #59 | 寄星月 @yuejixing1 | 未填（同 #58 提交者） | 其他的 DirtyFrag 提权都能正常使用、100% 成功 | 无日志（#58 的对照补充） |  |",
+      "summary": "其他的 DirtyFrag 提权都能正常使用、100% 成功"
+    },
+    {
+      "id": 72,
+      "sourceLine": 356,
+      "originalRow": "| #72 | 萧炎 @UZPZL | 小米 13，澎湃 OS 3，内核 5.15 | 管理器内置的临时 root 工具一用就重启；用第三方提权工具只能开玩机模式，不能开极致隐藏的工作模式 | 无日志（有 1 张截图） |  |",
+      "summary": "管理器内置的临时 root 工具一用就重启；用第三方提权工具只能开玩机模式，不能开极致隐藏的工作模式"
+    },
+    {
+      "id": 75,
+      "sourceLine": 357,
+      "originalRow": "| #75 | Ксюша | 真我 GT5，真我 UI 5.0 | 越狱不管哪个模式都 100% 重启，但用其他工具可以正常提取 | 无日志 |  |",
+      "summary": "越狱不管哪个模式都 100% 重启，但用其他工具可以正常提取"
+    },
+    {
+      "id": 82,
+      "sourceLine": 358,
+      "originalRow": "| #82 | takagi karin @nishikatasan | PLM110 | 在 Maple 里越狱就会重启；用月虹临时 root 后 Maple 仍显示越狱不可用 | 无日志 |  |",
+      "summary": "在 Maple 里越狱就会重启；用月虹临时 root 后 Maple 仍显示越狱不可用"
+    },
+    {
+      "id": 90,
+      "sourceLine": 359,
+      "originalRow": "| #90 | 晴 川 @qc081123 | 红米 K90 Pro Max，澎湃 4.0.6.0 | 网页寄生功能无法正常使用，寄生软件不成功，且只能寄生一部分软件 | 无日志（无镜像、无截图；未填 MapleSU 版本） |  |",
+      "summary": "网页寄生功能无法正常使用，寄生软件不成功，且只能寄生一部分软件"
+    },
+    {
+      "id": 2,
+      "sourceLine": 386,
+      "originalRow": "| #2 | Gerry Farrah | 一加 Ace5 至尊，ColorOS 15 501 版本 | 手机异常发热，有时莫名重启；模块卸载后若未重启，等莫名重启时模块卸载不掉 | 无日志（附件只有文件名，文件未存下） |  |",
+      "summary": "手机异常发热，有时莫名重启；模块卸载后若未重启，等莫名重启时模块卸载不掉"
+    },
+    {
+      "id": 4,
+      "sourceLine": 387,
+      "originalRow": "| #4 | 铭 | K60，安卓 14 | 5.10 修补刷入后无限重启 | 无日志 |  |",
+      "summary": "5.10 修补刷入后无限重启"
+    },
+    {
+      "id": 17,
+      "sourceLine": 388,
+      "originalRow": "| #17 | 缥烬恬霞所由偿 | 一加 Ace5 竞速版，6.1 内核 | 一键安装、卸载原面具后打开 MapleSU 会崩溃重启 | 无日志 |  |",
+      "summary": "一键安装、卸载原面具后打开 MapleSU 会崩溃重启"
+    },
+    {
+      "id": 32,
+      "sourceLine": 389,
+      "originalRow": "| #32 | 大户困倦 | 未填 | 手机一直卡在重启界面，怎么救 | 无日志 |  |",
+      "summary": "手机一直卡在重启界面，怎么救"
+    },
+    {
+      "id": 36,
+      "sourceLine": 390,
+      "originalRow": "| #36 | 11111 11111 | 一加 Pad（没有 Pro） | 刷了修补的 boot 进不去面具，一点进去就卡死 | 无日志（仅原镜像文件名 boot.img） |  |",
+      "summary": "刷了修补的 boot 进不去面具，一点进去就卡死"
+    },
+    {
+      "id": 41,
+      "sourceLine": 391,
+      "originalRow": "| #41 | Xkxljc | 一加 Ace6，ColorOS 17.0.0.104，Ultra 模式，内核 6.6 | 突然死机，可长按电源关机并重启；关机时短暂闪黄，logo 界面启动时间过长 | 无日志 |  |",
+      "summary": "突然死机，可长按电源关机并重启；关机时短暂闪黄，logo 界面启动时间过长"
+    },
+    {
+      "id": 45,
+      "sourceLine": 392,
+      "originalRow": "| #45 | Ana Rodríguez | 一加 Ace5 竞速版 PLF110_16.0.10.501 | 用 KSU 给了 root 权限、点了直接安装，重启后一直卡死 | 无日志（有 2 张截图） |  |",
+      "summary": "用 KSU 给了 root 权限、点了直接安装，重启后一直卡死"
+    },
+    {
+      "id": 49,
+      "sourceLine": 393,
+      "originalRow": "| #49 | @nbhh666nb | 一加 2 Pro 改 OPPO Pad4 Pro C16 金标系统 | 给予 root 权限以刷模块的过程中有概率重启（无痕模式） | 无日志 |  |",
+      "summary": "给予 root 权限以刷模块的过程中有概率重启（无痕模式）"
+    },
+    {
+      "id": 52,
+      "sourceLine": 394,
+      "originalRow": "| #52 | 1 | iQOO 11 Pro（橘子 6） | 用久了会卡死无限重启，刷回原来的 boot 才正常 | 无日志 |  |",
+      "summary": "用久了会卡死无限重启，刷回原来的 boot 才正常"
+    },
+    {
+      "id": 55,
+      "sourceLine": 395,
+      "originalRow": "| #55 | 可是我爱你 @lying0021 | 一加 Ace2v PHP110_16.0.5.1301 | Ultra 模式下打开管理器会重启 | 无日志 |  |",
+      "summary": "Ultra 模式下打开管理器会重启"
+    },
+    {
+      "id": 64,
+      "sourceLine": 396,
+      "originalRow": "| #64 | 小熊 @xiong040304 | 一加 Ace6，安卓 16，内核 6.6.89 | 刷入后卡死重启两次，模块全炸 | 无日志 |  |",
+      "summary": "刷入后卡死重启两次，模块全炸"
+    },
+    {
+      "id": 88,
+      "sourceLine": 397,
+      "originalRow": "| #88 | 我是帅哥 @shr181317 | 一加 ACE6，17.0.104 版本 | 异常重启 | 无日志 |  |",
+      "summary": "异常重启"
+    },
+    {
+      "id": 6,
+      "sourceLine": 419,
+      "originalRow": "| #6 | Li MY @Lveuot | iQOO Z10 Turbo+，6.6.89，安卓 16 | 工作环境未知状态，点击修复无效，模块 WebUI 打不开 | 无崩溃日志；晨间分类记录原因 `PORT_NOT_LISTENING`，port=18427 关闭 |  |",
+      "summary": "工作环境未知状态，点击修复无效，模块 WebUI 打不开"
+    },
+    {
+      "id": 15,
+      "sourceLine": 420,
+      "originalRow": "| #15 | 爱意随风起 | 未填 | WebUI 打不开 | 无日志 |  |",
+      "summary": "WebUI 打不开"
+    },
+    {
+      "id": 18,
+      "sourceLine": 421,
+      "originalRow": "| #18 | Laine Ila | 红米 Turbo 3，4.0.0.31 beta（第三方官改包） | 点到模块里面正常，在外面看说任务脚本执行失败 | 无日志（有 bugreport 附件，未深挖） |  |",
+      "summary": "点到模块里面正常，在外面看说任务脚本执行失败"
+    },
+    {
+      "id": 43,
+      "sourceLine": 422,
+      "originalRow": "| #43 | Striptizer @striptizer_02 | 一加 Ace Pro，5.10.226 | 超级用户权限列表加载失败，安装工作环境也安装不了 | 无日志（有 2 张截图） |  |",
+      "summary": "超级用户权限列表加载失败，安装工作环境也安装不了"
+    },
+    {
+      "id": 53,
+      "sourceLine": 423,
+      "originalRow": "| #53 | 仁 | OPPO Reno12 | 有些模块打开的时候会闪退 | 无日志（仅修补后镜像一个附件） |  |",
+      "summary": "有些模块打开的时候会闪退"
+    },
+    {
+      "id": 54,
+      "sourceLine": 424,
+      "originalRow": "| #54 | 别让我流泪 | 红米 K70e，澎湃 3.0.4 | 工作环境修复不了、授权不了 root，寄生隐身好像也用不了 | 无日志 |  |",
+      "summary": "工作环境修复不了、授权不了 root，寄生隐身好像也用不了"
+    },
+    {
+      "id": 60,
+      "sourceLine": 425,
+      "originalRow": "| #60 | HR @NMLBBB | 红米 KPad2，已解锁，澎湃 3.0，6.12，安卓 16 | 工作环境未运行，进行修复、重启后依然如此 | 无日志（有 2 张截图） |  |",
+      "summary": "工作环境未运行，进行修复、重启后依然如此"
+    },
+    {
+      "id": 11,
+      "sourceLine": 463,
+      "originalRow": "| #11 | SingGO Game | 一加 13，17.0.0.103 | 刷模块时没有日志打印；需要音量键选择的模块装不进去 | 无日志 |  |",
+      "summary": "刷模块时没有日志打印；需要音量键选择的模块装不进去"
+    },
+    {
+      "id": 12,
+      "sourceLine": 464,
+      "originalRow": "| #12 | 簌雨辞风 | 小米 15，安卓 17，内核 6.6 | 依旧无法安装极致模式工作环境 | 无日志（有 bugreport 与双镜像附件） |  |",
+      "summary": "依旧无法安装极致模式工作环境"
+    },
+    {
+      "id": 13,
+      "sourceLine": 465,
+      "originalRow": "| #13 | SingGO Game | 未填 | App Profile 中没有“卸载模块”选项 | 无日志 |  |",
+      "summary": "App Profile 中没有“卸载模块”选项"
+    },
+    {
+      "id": 19,
+      "sourceLine": 466,
+      "originalRow": "| #19 | 我最喜欢 U 991 | 红米 K90 至尊 | 刷入修补 boot 后安装环境显示无法安装、请稍后再试 | 无日志 |  |",
+      "summary": "刷入修补 boot 后安装环境显示无法安装、请稍后再试"
+    },
+    {
+      "id": 29,
+      "sourceLine": 467,
+      "originalRow": "| #29 | xxkkjs | 一加 Ace5，安卓 16，6.1.141 | 无法刷入任何模块 | install_log 附件原文：`SDK admission timed out; this request was not submitted.`（两次） |  |",
+      "summary": "无法刷入任何模块"
+    },
+    {
+      "id": 37,
+      "sourceLine": 468,
+      "originalRow": "| #37 | P @CZXvtnb666 | 一加 ACE 6t，17.0.0.101 | 安装工作环境一直安装不了 | 无日志（有 bugreport 附件与 1 张截图） |  |",
+      "summary": "安装工作环境一直安装不了"
+    },
+    {
+      "id": 38,
+      "sourceLine": 469,
+      "originalRow": "| #38 | P @CZXvtnb666 | 一加 ACE 6t，17.0.0.101 | 安装模块失败 | 无日志（有 bugreport 附件与 1 张截图） |  |",
+      "summary": "安装模块失败"
+    },
+    {
+      "id": 39,
+      "sourceLine": 470,
+      "originalRow": "| #39 | xufeng | 一加 Ace5，安卓 16 | 用不了 Zygisk，刷不进去，刷进去了也用不了 | `!Unable to apply SELinux patches!` / `target type nsfs does not exist` / `Error code: 1.`（Zygisk Next 1.5.3 安装日志） |  |",
+      "summary": "用不了 Zygisk，刷不进去，刷进去了也用不了"
+    },
+    {
+      "id": 42,
+      "sourceLine": 471,
+      "originalRow": "| #42 | 小布 @xiao6skakaj | Y700 二代，系统 1.1.478 | 无法安装环境 | 无日志（原/修补镜像栏均填 boot.img，有 2 张截图） |  |",
+      "summary": "无法安装环境"
+    },
+    {
+      "id": 46,
+      "sourceLine": 472,
+      "originalRow": "| #46 | xxkkjs | 一加 Ace5，安卓 16，6.1.141 | 频道里面的 tees 模块无效果 | 无日志 |  |",
+      "summary": "频道里面的 tees 模块无效果"
+    },
+    {
+      "id": 57,
+      "sourceLine": 473,
+      "originalRow": "| #57 | yusheng cai @xiaohei2949 | 一加 16，17.0.1.201，内核 6.18.21-android17 | 修补 boot 镜像开机提示未安装 | 无日志（bugreport 已落盘；双镜像因 20 MB 未取回） |  |",
+      "summary": "修补 boot 镜像开机提示未安装"
+    },
+    {
+      "id": 68,
+      "sourceLine": 474,
+      "originalRow": "| #68 | T Z. @NqnpB | 一加 Ace 6，C17 系统 | 模块怎么删都删不掉 | 无日志（有 1 张截图） |  |",
+      "summary": "模块怎么删都删不掉"
+    },
+    {
+      "id": 3,
+      "sourceLine": 497,
+      "originalRow": "| #3 | Zero Arch | iQOO 15 Ultra PD2546，OriginOS 7，内核 6.12.58-android16 | 偏移量没有内置，希望作者内置方案支持 | 无日志 |  |",
+      "summary": "偏移量没有内置，希望作者内置方案支持"
+    },
+    {
+      "id": 8,
+      "sourceLine": 498,
+      "originalRow": "| #8 | 冰狱独宠 @YBC1738 | iQOO 15，橘子 7 | iQOO 15 版本适配申请 | 无日志（仅原镜像 boot_b.img） |  |",
+      "summary": "iQOO 15 版本适配申请"
+    },
+    {
+      "id": 14,
+      "sourceLine": 499,
+      "originalRow": "| #14 | 时光 | iQOO 13 / PD2408C_A_16.1.18.2 | （仅型号，无问题描述） | 无日志（有 jailbreak 日志附件） |  |",
+      "summary": "（仅型号，无问题描述）"
+    },
+    {
+      "id": 23,
+      "sourceLine": 500,
+      "originalRow": "| #23 | 蕾姆 @Remyyds | 一加 16 PYB110，ColorOS 17.0.1.201，内核 6.18.21 | 极致无痕模式修补完刷入 boot 不生效，有时弹出安装补丁、安装不了 | 无日志（有 bugreport 与原/修补镜像附件） |  |",
+      "summary": "极致无痕模式修补完刷入 boot 不生效，有时弹出安装补丁、安装不了"
+    },
+    {
+      "id": 25,
+      "sourceLine": 501,
+      "originalRow": "| #25 | lener E | iQOO 13 / PD2408C_A_17.2.11.8 | 免解越狱不适配 | 无日志（仅原镜像 Image.zip） |  |",
+      "summary": "免解越狱不适配"
+    },
+    {
+      "id": 40,
+      "sourceLine": 502,
+      "originalRow": "| #40 | 仙辞 | Y700 一代，4.19.157 | 以后会支持四系吗 | 无日志（咨询，非缺陷报告） |  |",
+      "summary": "以后会支持四系吗"
+    },
+    {
+      "id": 48,
+      "sourceLine": 503,
+      "originalRow": "| #48 | 爱 人 | K80，系统 3.9 | 无痕模式下只能刷 initboot 才能获取 root，MapleSU 只能刷 boot | 无日志（有 1 张截图） |  |",
+      "summary": "无痕模式下只能刷 initboot 才能获取 root，MapleSU 只能刷 boot"
+    },
+    {
+      "id": 63,
+      "sourceLine": 504,
+      "originalRow": "| #63 | 阿八 阿巴 | K90 Max，HyperOS 3，6.12 内核 | 请适配 6.12 内核的设备；Ultra 模式无法使用，另一模式可用 | 无日志（仅原镜像文件名 boot.img） |  |",
+      "summary": "请适配 6.12 内核的设备；Ultra 模式无法使用，另一模式可用"
+    },
+    {
+      "id": 34,
+      "sourceLine": 524,
+      "originalRow": "| #34 | 咸鱼翻身 @xianyubhfs | 真我（未填型号） | 没修补的情况下会卡出底栏 | 无日志（附件为一段 .mp4） |  |",
+      "summary": "没修补的情况下会卡出底栏"
+    },
+    {
+      "id": 51,
+      "sourceLine": 525,
+      "originalRow": "| #51 | @nbhh666nb | 一加 2 Pro 改 OPPO Pad4 Pro C16 金标系统 | CPU 温度与功耗忽然一瞬间变高，两三秒后恢复，重复；已排除模块，认为是管理器问题 | 无日志 |  |",
+      "summary": "CPU 温度与功耗忽然一瞬间变高，两三秒后恢复，重复；已排除模块，认为是管理器问题"
+    },
+    {
+      "id": 61,
+      "sourceLine": 526,
+      "originalRow": "| #61 | 骼骼 @GEIOSios | 未填（设备栏为“1”） | 侧信道问题使用的面具 maplesu | 无日志（信息不足） |  |",
+      "summary": "侧信道问题使用的面具 maplesu"
+    },
+    {
+      "id": 65,
+      "sourceLine": 527,
+      "originalRow": "| #65 | ACE反作弊 | 一加 13T，安卓 15，6.6 | 根本用不了，KSU 无法使用 root，直接移植 | 无日志（描述笼统） |  |",
+      "summary": "根本用不了，KSU 无法使用 root，直接移植"
+    },
+    {
+      "id": 78,
+      "sourceLine": 528,
+      "originalRow": "| #78 | 77 66 @shabiganjingun | 小米 17 | 刷入伪装华为 Mate90 模块后桌面一直闪退、关机，成软砖 | 无日志（汇总明确写无附件） |  |",
+      "summary": "刷入伪装华为 Mate90 模块后桌面一直闪退、关机，成软砖"
+    },
+    {
+      "id": 1,
+      "sourceLine": 538,
+      "originalRow": "| #1 | MapleAdm（用户本人） | — | 测试提交：公测须知全文（自愿参与、须备份、按“现状”提供、欢迎提 Issue / PR） | 无日志（附件栏填 `NoMachine Enterprise Desktop 试用许可.gz`，与反馈内容无关） |  |",
+      "summary": "测试提交：公测须知全文（自愿参与、须备份、按“现状”提供、欢迎提 Issue / PR）"
+    },
+    {
+      "id": 26,
+      "sourceLine": 539,
+      "originalRow": "| #26 | 小 方 | 未填 | 新版面具下载 | 无日志 |  |",
+      "summary": "新版面具下载"
+    },
+    {
+      "id": 69,
+      "sourceLine": 540,
+      "originalRow": "| #69 | User | 未填 | 下载 | 无日志 |  |",
+      "summary": "下载"
+    },
+    {
+      "id": 79,
+      "sourceLine": 541,
+      "originalRow": "| #79 | B L | 一加 Turbo 6，PLU110 | 功能建议：能否把默认改成极痕模式；另咨询自己的越狱直接到玩机模式、想搞无痕模式 | 无日志（有 1 张截图） |  |",
+      "summary": "功能建议：能否把默认改成极痕模式；另咨询自己的越狱直接到玩机模式、想搞无痕模式"
+    },
+    {
+      "id": 83,
+      "sourceLine": 542,
+      "originalRow": "| #83 | 凌霄 @fangjunhan | 未填 | 还没更新 | 无日志 |  |",
+      "summary": "还没更新"
+    },
+    {
+      "id": 85,
+      "sourceLine": 543,
+      "originalRow": "| #85 | mm j @xiaomumm | 未填 | 想要内测名额 | 无日志 |  |",
+      "summary": "想要内测名额"
+    }
+  ]
+}

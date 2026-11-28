@@ -41,7 +41,7 @@ object DetectionRules {
     /**
      * 主裁决。逐行对应 01 §2.7 的顺序表：
      * 1/2)B 内核认主；3/4)未认主；5/6/7)A 可用传输；8)A 磁盘强证据；
-     * 9)外来 root；10)A 弱痕迹无通道；11)新装窗口；12)保守兜底。
+     * 9)外来 root；10)A 弱痕迹无通道；12)证据不足兜底。
      */
     fun decide(facts: DetectionFacts): DetectionDecision {
         val ksu = facts.ksu
@@ -143,12 +143,6 @@ object DetectionRules {
                 state = ModeState.MODE_A_INSTALLED_UNBOUND
                 rule = Rule.R9_A_DISK_WEAK_UNBOUND
                 reasons = listOf(Reason.NO_ROOT_CHANNEL)
-            }
-
-            root == null && local.managerFirstInstallAgeMs <= local.freshInstallWindowMs -> {
-                state = ModeState.NOT_INSTALLED
-                rule = Rule.R11_FRESH_INSTALL
-                reasons = listOf(Reason.FRESH_INSTALL)
             }
 
             else -> {

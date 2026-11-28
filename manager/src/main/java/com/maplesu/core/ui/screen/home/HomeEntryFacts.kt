@@ -10,9 +10,11 @@ data class HomeHiddenFacts(
     val masking: Boolean,
     /** 隐藏/寄生仍在确认中（`HiddenStartupConfirm.current()`）。 */
     val confirming: Boolean,
+    /** A real hide/unhide transaction keeps all historical display hidden. */
+    val transitionPending: Boolean = false,
 ) {
     /** 隐藏生效或确认窗口内：任何管理器专属入口都不许出现。 */
-    val suppressEntries: Boolean get() = masking || confirming
+    val suppressEntries: Boolean get() = masking || confirming || transitionPending
 }
 
 /**

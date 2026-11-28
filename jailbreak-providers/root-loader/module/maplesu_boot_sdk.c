@@ -871,7 +871,9 @@ clear:
 static MSU_PH_NOCFI int configure(const struct msu_boot_sdk_layout *layout)
 {
     struct msu_sdk_vm vm;
+#ifndef MSU_BOOT_SDK_NATIVE
     unsigned char header[64];
+#endif
     unsigned int kallsyms;
     unsigned long image_bytes;
     uptr allocator, sampler, range, observe_range, cred;
@@ -903,11 +905,22 @@ static MSU_PH_NOCFI int configure(const struct msu_boot_sdk_layout *layout)
         (layout->allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_NOPROF ? "___vmalloc_node_range_noprof" : "___vmalloc_node_range") :
         (layout->allocator_noprof & MSU_BOOT_SDK_ALLOCATOR_NOPROF ? "__vmalloc_node_range_noprof" : "__vmalloc_node_range"));
     if (!allocator || !sampler || !range || !observe_range) return -95;
+#ifdef MSU_BOOT_SDK_NATIVE
+    /* The final ARM64 mapping can omit the boot header before _stext. Only
+     * the live image bounds are needed; neither boundary is a callable. */
+    sdk_config_stage = MSU_BS_CONFIG_IMAGE_HEADER;
+    {
+        uptr image_end = lookup_name("_end");
+        if (image_end <= kernel_base || image_end - kernel_base > (1UL << 32)) return -95;
+        image_bytes = image_end - kernel_base;
+    }
+#else
     sdk_config_stage = MSU_BS_CONFIG_IMAGE_READ;
     if (read_kernel(header, (const void *)kernel_base, sizeof header)) return -14;
     sdk_config_stage = MSU_BS_CONFIG_IMAGE_HEADER;
     image_bytes = msu_sdk_le(header + 16, 8);
     if (msu_sdk_le(header + 56, 4) != 0x644d5241u || !image_bytes || image_bytes > (1UL << 32)) return -95;
+#endif
     sdk_config_stage = MSU_BS_CONFIG_KALLSYMS;
     if (msu_sdk_metadata_offset(kernel_base, lookup_name("kallsyms_lookup_name"), &kallsyms)) return -95;
     /* ARM64 kernel pointers can carry a top-byte allocation tag. Classify by

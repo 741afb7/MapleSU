@@ -135,7 +135,8 @@ def run(args):
         rows.append({'case': label, 'facts': facts, 'binderReturn': binder_result})
 
     check('two-exact-aliases-local-defined-sha256-ordinary-crc-namespace-retained')
-    check('full-77-source-allowlist-binds-atomically', targets=direct.DIRECT_TARGETS_V2)
+    check('prepare-kernel-cred-uses-exact-typed-alias', targets=('prepare_creds', 'prepare_kernel_cred'))
+    check('full-source-allowlist-binds-atomically', targets=direct.DIRECT_TARGETS_V2)
     check('resolver-error-keeps-all-elf-bytes', resolver_error=-5)
     check('missing-last-target-keeps-all-elf-bytes', missing=True)
     check('marker-empty', marker=direct.DIRECT_V2_MAGIC + b'\0', expected_error='DIRECT_MARKER')

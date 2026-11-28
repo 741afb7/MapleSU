@@ -44,6 +44,7 @@ internal fun projectModeSwitchStatus(
         canResumeReboot = status.canResumeReboot,
         requiresExternalRecovery = recovery,
         verifyFailures = status.verifyFailures,
+        actionRunning = facadeExecuting,
         hasServiceRecord = true,
     )
 }

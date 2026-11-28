@@ -42,14 +42,13 @@ internal object UltraStartupWarmup {
         if (input.switchPending && !input.postBootUltraSwitchRecovery) return Result(false, false, "SWITCH_PENDING")
         if (input.conflictingRoot || input.ksuResponded == true) return Result(false, false, "ROOT_CONFLICT")
         if (input.liveEnvironmentReady) {
-            if (input.activeMode == null) retryDetection()
             val paired = pairEnvironment()
+            if (paired && input.activeMode == null) retryDetection()
             return Result(true, paired, if (paired) "RUNNING" else "MANAGER_SU_UNVERIFIED")
         }
         // Historical install evidence can belong to another kernel. Recover
         // the live identity before setup, including an already selected Ultra mode.
         val recovered = recoverIdentity()
-        if (recovered && input.activeMode == null) retryDetection()
         if (input.activeMode == null) {
             val localIdentity = input.pendingInstall || input.postBootUltraSwitchRecovery ||
                 input.verifiedUltraIdentity
@@ -59,7 +58,7 @@ internal object UltraStartupWarmup {
         }
         setupEnvironment()
         val paired = bootSessionReady() ?: pairEnvironment()
-        if (paired && !recovered && input.activeMode == null) retryDetection()
+        if (paired && input.activeMode == null) retryDetection()
         return Result(true, paired, if (paired) "RUNNING" else "NOT_RUNNING")
     }
 }

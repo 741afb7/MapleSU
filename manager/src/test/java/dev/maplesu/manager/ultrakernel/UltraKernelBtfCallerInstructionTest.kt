@@ -106,8 +106,10 @@ class UltraKernelBtfCallerInstructionTest {
     @Test fun `exclusive status W19 clobbers tracked X19`() {
         rejected(fixture(work = true, operation = 0x8813fd28.toInt()))
     }
-    @Test fun `exclusive load is not classified as exclusive store`() {
-        rejected(fixture(work = true, operation = 0x885ffd28.toInt()))
+    @Test fun `worker pointer survives unrelated exclusive load`() =
+        assertEquals(setOf(prefix), typeids(fixture(work = true, operation = 0x885ffd28.toInt())))
+    @Test fun `exclusive load W19 clobbers tracked X19`() {
+        rejected(fixture(work = true, operation = 0x885ffd33.toInt()))
     }
     @Test fun `CAS is not classified as exclusive store`() {
         rejected(fixture(work = true, operation = 0x88abfd28.toInt()))

@@ -244,7 +244,7 @@ class SuReadinessTest {
             assertEquals(EnvironmentVerdict.NOT_INSTALLED, outcome.verdict)
             assertNull(outcome.mode)
             assertNull(state.snapshot()?.mode)
-            assertEquals(listOf("su", "ultra", "ksu"), probes.calls)
+            assertEquals(listOf("ksu", "su", "ultra", "ksu"), probes.calls)
         }
     }
 
@@ -275,7 +275,7 @@ class SuReadinessTest {
             EnvironmentCheckDetail.KSU_PROBE_UNAVAILABLE, outcome.detail)
         assertEquals("UNKNOWN 不得覆盖上次状态", previous, state.snapshot())
         assertEquals(WorkMode.KSU, outcome.mode)
-        assertEquals(listOf("su", "ultra", "ksu"), probes.calls)
+        assertEquals(listOf("ksu", "su", "ultra", "ksu"), probes.calls)
     }
 
     @Test
@@ -310,7 +310,7 @@ class SuReadinessTest {
         assertEquals(EnvironmentVerdict.KSU_NORMAL, outcome.verdict)
         assertEquals(WorkMode.KSU, state.snapshot()?.mode)
         assertEquals(false, state.snapshot()?.suAvailable)
-        assertEquals(listOf("su", "ultra", "ksu"), probes.calls)
+        assertEquals(listOf("ksu"), probes.calls)
     }
 
     @Test
@@ -339,17 +339,18 @@ class SuReadinessTest {
     }
 
     @Test
-    fun inheritedInstalledStateSurvivesUnknownProbe() {
+    fun liveKsuIdentityReplacesHistoricalLiteBeforeUnknownSuProbe() {
         val previous = snapshot(WorkMode.LITE)
         val state = store(previous)
         val probes = FakeProbes(SuReadiness.UNKNOWN, ultra = "lite:credential", ksu = true)
 
         val outcome = resolver(probes, state).resolve(BOOT)
 
-        assertEquals(EnvironmentVerdict.INHERITED, outcome.verdict)
-        assertEquals(WorkMode.LITE, outcome.mode)
-        assertEquals("读不到 SU 不能推翻已有安装记录", previous, state.snapshot())
-        assertEquals(listOf("su", "ultra"), probes.calls)
+        assertEquals(EnvironmentVerdict.KSU_NORMAL, outcome.verdict)
+        assertEquals(WorkMode.KSU, outcome.mode)
+        assertEquals(EnvironmentCheckDetail.KSU_PROBE_CONFIRMED, outcome.detail)
+        assertEquals(snapshot(WorkMode.KSU).copy(checkedAtMillis = FixedClock.nowMillis()), state.snapshot())
+        assertEquals("实时 KSU 身份不等待普通 SU 或旧 Lite 凭据", listOf("ksu"), probes.calls)
     }
 
     @Test
@@ -373,7 +374,7 @@ class SuReadinessTest {
         val outcome = resolver(probes, state).resolve(BOOT)
 
         assertEquals(EnvironmentVerdict.NOT_INSTALLED, outcome.verdict)
-        assertEquals(listOf("su", "ksu", "ultra"), probes.calls)
+        assertEquals(listOf("ksu", "su", "ksu", "ultra"), probes.calls)
         assertNull(state.snapshot()?.mode)
     }
 
