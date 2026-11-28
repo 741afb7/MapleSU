@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools/specgen'))
 from specgen.product import cached_jar
+sys.path.insert(0,str(ROOT/'tools'))
+from native_toolchain import jdk_tool
 def block(source,marker):
  start=source.index(marker);opening=source.index('{',start);depth=0
  for token in re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{}]').finditer(source,opening):
@@ -79,7 +81,7 @@ class SuDecisionParserTest {
 ''')]
 deps=[cached_jar(*v) for v in [('org.jetbrains.kotlin','kotlin-stdlib','2.4.20'),('org.jetbrains','annotations','13.0'),('org.jetbrains.kotlinx','kotlinx-coroutines-core-jvm','1.11.0'),('org.json','json','20240303'),('junit','junit','4.13.2'),('org.hamcrest','hamcrest-core','1.3')]]
 compiler=cached_jar('org.jetbrains.kotlin','kotlin-compiler-embeddable','2.4.20')
-java=Path('C:/Program Files/Microsoft/jdk-21.0.12.101-hotspot/bin/java.exe')
+java=jdk_tool()
 classes=out/'classes';classes.mkdir();cp=os.pathsep.join(map(str,[classes,*deps]))
 commands=[[java,'-Xmx256m','-cp',os.pathsep.join(map(str,[compiler,*deps])),'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler','-no-stdlib','-no-reflect','-nowarn','-jvm-target','21','-classpath',cp,'-d',classes,*sources],[java,'-cp',cp,'org.junit.runner.JUnitCore','dev.maplesu.manager.runtime.ultra.SuDecisionParserTest']]
 jvm=[]

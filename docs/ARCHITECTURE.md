@@ -107,7 +107,7 @@ Imports run in both directions today, so treat the split as origin, not as layer
 | Package | Responsibility | Start reading at |
 | --- | --- | --- |
 | `workmode/` | Mode model, detection, routing and switching; per-mode settings storage; snapshots; work-mode screens | `workmode/detect/DetectionRules.kt`, `workmode/switch/ModeSwitchPreflight.kt`, `workmode/storage/ModePaths.kt` |
-| `runtime/` | Native SU execution, supervised sessions, the credential store and app authorization; `runtime/ultra/` is the Ultra Pro adapter | `runtime/NativeSu.kt`, `runtime/MapleSuCredentialStore.kt`, `runtime/ultra/UltraRuntimeClient.kt` |
+| `runtime/` | Native SU execution, supervised sessions and app authorization; `runtime/ultra/` is the Ultra Pro adapter | `runtime/NativeSu.kt`, `runtime/ultra/UltraRuntimeClient.kt` |
 | `installer/` | Root-side installer service, block-device access, baseline provisioning, stock backup resolution | `installer/BlockPartitionAccess.kt` |
 | `modules/` | Module routing, archive inspection and compatibility records | `modules/ModuleModeRouter.kt`, `modules/compat/UltraModuleCompatibilityRegistry.kt` |
 | `ultrakernel/` | Ultra kernel preparation | `ultrakernel/UltraKernelFlow.kt`, `ultrakernel/KernelSeries.kt` |

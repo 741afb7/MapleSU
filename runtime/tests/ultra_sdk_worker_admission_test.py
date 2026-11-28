@@ -2,13 +2,17 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--out', type=Path, required=True)
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(root / 'tools'))
+from native_toolchain import ndk_bin, ndk_home
 out = args.out.resolve()
 out.mkdir(parents=True, exist_ok=True)
 paths = ['runtime/tests/ultra_sdk_worker_admission_test.cpp',
@@ -36,7 +40,7 @@ commands = [('admission-compile', [*docker, 'g++', '-std=c++20', '-O1', '-g', '-
     '-DMAPLESU_KERNEL_READ_CANONICAL', '/repo/runtime/tests/ultra_sdk_worker_admission_test.cpp',
     '/repo/runtime/ultra/authorization/kernel_read.cpp', '-Wl,--wrap=syscall,--wrap=getuid,--wrap=geteuid',
     '-o', '/work/admission']), ('admission', [*docker, './admission']),
-    ('ndk-syntax', ['D:/Maple_Env/Android/Sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe',
+    ('ndk-syntax', [str(ndk_bin(ndk_home()) / ('clang++.exe' if os.name == 'nt' else 'clang++')),
     '--target=aarch64-linux-android21', '-std=c++20', '-fexceptions', '-fsyntax-only',
     '-Iruntime/maplesu-sdk/include', '-Iruntime/maplesu-sdk/sdk/include', paths[2]])]
 rows = []

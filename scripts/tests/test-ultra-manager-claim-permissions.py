@@ -21,7 +21,7 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn import UC_PROT_READ as R, UC_PROT_WRITE as W, UC_PROT_EXEC as X
 from unicorn import arm64_const as reg
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 IMAGE, DEST, SOURCE, STACK, STOP = (0x100000000, 0x200000000, 0x300000000,
                                     0x400000000, 0x500000000)
 SIZE, EXTENT, ANCHOR, DESC, TABLE, BIND, NAMESPACE = 0x20000, 0x24000, 0x400, 0x800, 0xa00, 0xb00, 0xc00

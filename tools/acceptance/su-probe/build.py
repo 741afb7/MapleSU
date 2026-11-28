@@ -5,22 +5,32 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import zipfile
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[1]))
+from native_toolchain import jdk_tool, sdk_dir
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sdk", type=Path, default=Path("D:/Maple_Env/Android/Sdk"))
+    parser.add_argument("--sdk", type=Path, default=sdk_dir())
     parser.add_argument("--ndk", default="26.1.10909125")
     parser.add_argument("--build-tools", default="37.0.0")
     parser.add_argument("--platform", default="android-37.0")
-    parser.add_argument("--jdk", type=Path, default=Path("C:/Program Files/Microsoft/jdk-21.0.12.101-hotspot"))
+    parser.add_argument("--jdk", type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--syntax-only", action="store_true")
     parser.add_argument("--gateway", action="store_true", help="build independent explicit gateway identities")
     args = parser.parse_args()
+    if args.sdk is None:
+        parser.error("Set ANDROID_HOME or ANDROID_SDK_ROOT, or pass --sdk")
+    if args.jdk is None:
+        javac = jdk_tool("javac")
+        if not javac.is_file():
+            parser.error("Set JAVA_HOME or pass --jdk")
+        args.jdk = javac.resolve().parent.parent
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     if args.gateway and any(out.glob("su-probe-*.apk")):

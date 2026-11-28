@@ -3,12 +3,12 @@
   "date": "2026-11-28",
   "files": [
     {
-      "path": "docs/development/SDK-COMPLETE-REPAIR-AGENT-PROMPT-20261128.md",
-      "bytes": 4400,
-      "sha256": "842f27c04e9ce9f646f436e4c4fdbb18b0237f8cbc27c0e5b6ae295a1633c8ed"
+      "path": "docs/sdk-repair-20261128/SDK-COMPLETE-REPAIR-AGENT-PROMPT-20261128.md",
+      "bytes": 4408,
+      "sha256": "09283f1e412b5b83f7ed1c487498227aa3b12b7dc680fdec0f22e54b38fed86f"
     },
     {
-      "path": "docs/development/SDK-COMPLETE-REPAIR-DEVELOPMENT-20261128.md",
+      "path": "docs/sdk-repair-20261128/SDK-COMPLETE-REPAIR-DEVELOPMENT-20261128.md",
       "bytes": 5616,
       "sha256": "afa59e61bd11fdd8d8220a9e54313dc61672d2eb07b9e12ef87afc933bc0310b"
     },
@@ -39,8 +39,8 @@
     },
     {
       "path": "docs/sdk-repair-20261128/INPUT-PROVENANCE.json",
-      "bytes": 7654,
-      "sha256": "6bab74ef1ab0728890827cf90afdd1b2d0ac4ce3a31fa8226c00ac435cafb1c5"
+      "bytes": 7655,
+      "sha256": "0a8f6e937661fd368e8daf1c1db8037c209f1e70d35b1093c148930075610f97"
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/ACCEPTANCE.csv",
@@ -69,8 +69,8 @@
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/FEEDBACK-ORIGINAL.json",
-      "bytes": 29454,
-      "sha256": "e8325983fd7b35daee2b7805c46cfd34cb690787c432d199dda7f6128d0c5530"
+      "bytes": 29436,
+      "sha256": "f2f60b80429660f72e9e3363d0dfbde168f445db86dce74d2c7f5994b517ba8c"
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/FINAL-REQUIREMENTS-REVIEW.json",
@@ -84,8 +84,8 @@
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/KEYLESS-DEVELOPMENT.md",
-      "bytes": 45878,
-      "sha256": "54a552436b4cdbf580ba61b44d8f11af5a9db86b40035b36e32d1a37c672a3f0"
+      "bytes": 45862,
+      "sha256": "eabd44ebb0e4b86bd4113614c3f41195d4d23f93e1882e89048a2cd642e07771"
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/KPATCH-NEXT-FUNCTION-MATRIX.json",
@@ -109,18 +109,18 @@
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/REQUIREMENT-SOURCE-AUDIT.json",
-      "bytes": 1248592,
-      "sha256": "ebcd80cbc755008719e368636d833f7209f0f7032f6d65d1af8cc18265bc6f0c"
+      "bytes": 1225480,
+      "sha256": "294d3067a712f0405bb1d8db0dbb3f0bbb7262a6e68e870dab8b731e0ad7f378"
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/REQUIREMENTS-LEDGER.jsonl",
-      "bytes": 1093082,
-      "sha256": "fceb181c514eeeb296560f4c9df5825ef202a6785eadbe60784f7e97d6228aad"
+      "bytes": 1092758,
+      "sha256": "9cf968f8767c86ef9d32abab2de998a30c313f5d54cccfe1d4abce13e6468ef8"
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/SDK-REFACTOR-PROGRESS.md",
-      "bytes": 262970,
-      "sha256": "cf7536515103e28cc22570faf78d01dd7f6f11faf31cdff02374bedacb6c7a3a"
+      "bytes": 263035,
+      "sha256": "bc9b643a60b6a37db02754534a2ca1b3317bcfbb85b3716363357a0b6cdfef46"
     },
     {
       "path": "docs/sdk-repair-20261128/inputs/SDK-REFACTOR-REQUIREMENTS.md",
@@ -129,8 +129,8 @@
     },
     {
       "path": "docs/sdk-repair-20261128/README.md",
-      "bytes": 2160,
-      "sha256": "ab87cb4545fd4cfbd726dab4fe53fca7b6d2832993599ab5ad2d00c0465927ba"
+      "bytes": 2130,
+      "sha256": "65a867802dd8352e6ecaa813e1826c7ac6d09101973e73f7f99202bac7e258b7"
     },
     {
       "path": "docs/sdk-repair-20261128/references/KernelSU/LICENSE",

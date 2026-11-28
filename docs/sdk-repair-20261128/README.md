@@ -8,7 +8,7 @@ cd MapleSU
 git pull --ff-only origin main
 ```
 
-把文档ZIP解压到仓库根即可合并 `docs/`；Git已包含同一套文档。先读[开发要求](../development/SDK-COMPLETE-REPAIR-DEVELOPMENT-20261128.md)，再将[交接提示词](../development/SDK-COMPLETE-REPAIR-AGENT-PROMPT-20261128.md)交给接手开发者。提交身份和包内文件只保留项目内容，不加工具署名或会话目录。
+把文档ZIP解压到仓库根即可合并 `docs/`；Git已包含同一套文档。先读[开发要求](SDK-COMPLETE-REPAIR-DEVELOPMENT-20261128.md)，再将[交接提示词](SDK-COMPLETE-REPAIR-AGENT-PROMPT-20261128.md)交给接手开发者。提交身份和包内文件只保留项目内容，不加工具署名或会话目录。
 
 - `CURRENT-STATUS.md`：本检查点的真实结果、已知根因和优先待修项。
 - `inputs/`：两份主文档、119/90/142/50完整原文、465行账本及64条持续/追加条件；原ID/顺序保持。

@@ -47,14 +47,14 @@ adb pull /sdcard/Android/data/dev.maplesu.acceptance.su.arm64/files/ OBSERVATION
 
 环境变更后以相同 APK、签名、fullUID 和位数再运行 `ordinary-after`，另存 `OBSERVATION_AFTER`。比较普通应用保存的原件、读取成功/拒绝分布及逐项多次耗时；PID、进程启停、fd 号码、ASLR 地址、属性自然变化等保留原始证据后单独解释，摘要不同本身不算环境泄漏。该样本记录观测事实，不自行裁定环境“不可检测”。ADB 仅触发与取回，不充当观测进程；应用权限读不到的项目保留错误，不通过 ADB Root 补齐，不加入网关主动探测或自动轮询。正式差分应固定 APK 哈希/签名、fullUID、位数和采样参数，并在相同设备/相同条件分别保存无环境、起点代、免Key代。
 
-2026-11-24 主线只读硬件清点：当前设备 `a261972a` 的 `abilist32` 为空；ARM32 实机项仍为 `NOT_RUN`。本目录不保存任何设备成功结论。
+2026-11-24 主线只读硬件清点：原设备（记为 `DEVICE_SERIAL`） 的 `abilist32` 为空；ARM32 实机项仍为 `NOT_RUN`。本目录不保存任何设备成功结论。
 
 ## 独立显式 gateway 样本
 
 主动网关差分使用新包 `dev.maplesu.acceptance.gateway.arm32` / `dev.maplesu.acceptance.gateway.arm64`。现有 passive APK、证书、包身份和观测目录保留；新包采用独立输出根和测试证书。新 manifest 仍无额外权限、服务、接收器或共享 UID。只有 Activity 收到显式 `operation=gateway` 才调用本应用 JNI 的 raw `syscall(__NR_execve, packet, NULL, NULL)`；不启动子进程，不经 SDK，不请求 OPEN/ROOT/READ 或安装变更。
 
 ```powershell
-C:/Python314/python.exe -B tools/acceptance/su-probe/build.py --gateway --syntax-only --out .tmp/ultra-keyless-20261124/a06/gateway-syntax-r1
+python -B tools/acceptance/su-probe/build.py --gateway --syntax-only --out .tmp/ultra-keyless-20261124/a06/gateway-syntax-r1
 # 冻结后由主线在新的独立输出根构建；脚本不安装应用或运行设备。
 python tools/acceptance/su-probe/build.py --gateway --out NEW_GATEWAY_OUTPUT
 ```

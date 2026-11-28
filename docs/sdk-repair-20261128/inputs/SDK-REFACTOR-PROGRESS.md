@@ -1,6 +1,6 @@
 ## 2026-11-22 MAIN12 repair后安全模式复发与原生首错（09:25:02 UTC）
 
-14-5保数据安装通过之后，唯一test_owner执行一次真实产品repair确认，产品自行重启；原机a261972a当前boot为 `dd521066-6fcf-4982-8b4f-132c340abb36`，仍安全模式。原生收据 `main10-tests/device-candidate14-5-ui-r1/NATIVE-FIRST-FAILURE.json` SHA256 `9659450eb1ea3d6cf8b731ba03bc992ee782a89ff708285380227690f8d70305`：首先报告 vendor-state=-19999、phase12/applied0；先前root/root-storage/root-environment/su-storage均0，首个阻断为su-redirect=-19980，真实保护保留。后续SU UID cleanup=-19999及ERR_MODULE_DUPLICATE另记。产品日志导出中的SDK Key Root返回0、UID0、Enforcing；Manager免Key SU为errno2，目标应用执行证明仍缺。safeModeFixed=false，根因尚未证明闭合；原APK封包/签名/保数据安装通过证据不撤销，也不代替安全模式/SU功能验收。
+14-5保数据安装通过之后，唯一test_owner执行一次真实产品repair确认，产品自行重启；原机DEVICE_SERIAL当前boot为 `dd521066-6fcf-4982-8b4f-132c340abb36`，仍安全模式。原生收据 `main10-tests/device-candidate14-5-ui-r1/NATIVE-FIRST-FAILURE.json` SHA256 `9659450eb1ea3d6cf8b731ba03bc992ee782a89ff708285380227690f8d70305`：首先报告 vendor-state=-19999、phase12/applied0；先前root/root-storage/root-environment/su-storage均0，首个阻断为su-redirect=-19980，真实保护保留。后续SU UID cleanup=-19999及ERR_MODULE_DUPLICATE另记。产品日志导出中的SDK Key Root返回0、UID0、Enforcing；Manager免Key SU为errno2，目标应用执行证明仍缺。safeModeFixed=false，根因尚未证明闭合；原APK封包/签名/保数据安装通过证据不撤销，也不代替安全模式/SU功能验收。
 
 claim17六族native exitCode均0，整体metadata/资格仍红；r4 strict provider VAR源采用、r5六族provider VAR再生与恢复脚本inspection整字典比较失败分开记账，r6恢复脚本修复准备中，不清资格。TaskProfile consumer rev3已review并采用（`main12-owner/task-profile-consumer-r3/ADOPTION.json`），采用动作未编测，不记新包/设备通过。安全模式根因候选尚未采用且继续最高优先；主线goal保持active，原截止逾期不重置。原119需求、30子项及全部约束/历史窄通过保留，新增完整项与设备功能通过均0。
 
@@ -8,7 +8,7 @@ claim17六族native exitCode均0，整体metadata/资格仍红；r4 strict provi
 
 ## 2026-11-22 MAIN12 原机保数据安装与后续源码增量（08:49:33 UTC）
 
-固定test_owner已于08:45:01 UTC完成14-5的 `install -r`，收据为 `main10-tests/device-candidate14-5-install-r1/RESULT.json`，状态 `CANDIDATE_INSTALLED_DATA_PRESERVED`。原机a261972a的实际base.apk SHA256为 `80f8f6c5022ee27b2f6c98c6a5daf559daee296f9c3d626f3def9ab5c8aba9d1`，fullUID10498保持；前后boot均为 `61b311c5-3d21-4d64-9a53-87e1bcc01ea1`，dataCleared=false、manualPartitionWrites=0。这里只结算实际保数据安装及身份回读；真实UI repair/SU正执行，尚无功能终态，不记安全模式恢复、SU或完整设备通过。
+固定test_owner已于08:45:01 UTC完成14-5的 `install -r`，收据为 `main10-tests/device-candidate14-5-install-r1/RESULT.json`，状态 `CANDIDATE_INSTALLED_DATA_PRESERVED`。原机DEVICE_SERIAL的实际base.apk SHA256为 `80f8f6c5022ee27b2f6c98c6a5daf559daee296f9c3d626f3def9ab5c8aba9d1`，fullUID10498保持；前后boot均为 `61b311c5-3d21-4d64-9a53-87e1bcc01ea1`，dataCleared=false、manualPartitionWrites=0。这里只结算实际保数据安装及身份回读；真实UI repair/SU正执行，尚无功能终态，不记安全模式恢复、SU或完整设备通过。
 
 host7实际配对目标夹具仍保留 `BTF_ABI_FUNCTION_TYPEID_ADDRESS_AMBIGUOUS:delayed_free` 红例。主线于08:46:11 UTC逐SHA采用Session rev2两份Manager源码（`UltraKernelBtf.kt`、`UltraKernelResidentAbi.kt`），收据为 `main12-owner/session-callers-rev2/ADOPTION.json`；状态 `ADOPTED_PENDING_FIXED_TEST_OWNER`。这次源码采用晚于已装14-5构建，未反记入该APK；受影响窄回归、后续签名包与设备绑定另待实际收据。
 
@@ -42,7 +42,7 @@ host7实际配对目标夹具仍保留 `BTF_ABI_FUNCTION_TYPEID_ADDRESS_AMBIGUOU
 
 ## 2026-11-22 原机身份复核与正式包验证门禁回归
 
-- 00:50 UTC，指定原机 PLQ110/a261972a 以 ADB UID 2000 只读复核：4 KiB、`_a`、boot ID `7ff19abb-1fa2-4552-b844-147eedef0e28` 前后一致；Manager 5.2.1 已装基础 APK 的 SHA-256 与留存 r23 诊断包完全一致。Android 开机完成不等于 Manager Ready；本轮未读保护标记、未执行 repair、未更换 APK。上次保全首错为 `root-environment=-19999 / filldir64: ERR_MODULE_TEST_CHANNEL`。
+- 00:50 UTC，指定原机 PLQ110/DEVICE_SERIAL 以 ADB UID 2000 只读复核：4 KiB、`_a`、boot ID `7ff19abb-1fa2-4552-b844-147eedef0e28` 前后一致；Manager 5.2.1 已装基础 APK 的 SHA-256 与留存 r23 诊断包完全一致。Android 开机完成不等于 Manager Ready；本轮未读保护标记、未执行 repair、未更换 APK。上次保全首错为 `root-environment=-19999 / filldir64: ERR_MODULE_TEST_CHANNEL`。
 - Manager 完整 `compileReleaseKotlin`、`compileReleaseJavaWithJavac` 于 2026-11-21 18:38:13 UTC 成功，仍绑定留存 r23 SDK。M03 两份生产源码和测试 SHA 与采用及编译记录一致；原机 UID 2000 源码回放 16/16、三个中文路径实际提取通过；已装 r23 的历史实际 parser 仍为 14/16。未重新运行已知失败，未验收实际模块生命周期。
 - `scripts/verify-release-apk.py` 将最终 APK 哈希与元数据复核放到清单复核之后、标记成功之前。新增负例证明旧门禁在末项清单读取期间遇到 APK 字节改变仍返回成功；修后全套 36/36 通过。仅核验门禁和测试变更，未构建 APK、签名或安装。
 - 历史 r25 四源已采用，manifest 260 成员无错；条件 KMI/stage 组合 49/49，未打开 RESIDENT/PUBLISH。上述结果不结算当前全源 clean、运行时资格或最终 APK。保留历史审核中断及部分产物。
@@ -168,7 +168,7 @@ r21续建114 tasks（21执行/93复用）成功，首次磁盘失败及损坏exe
 
 ## 2026-11-21 14:32 UTC 原机ART回归32/0
 
-恢复迁移相关32项测试已在原机a261972a的Android ART执行，32/0、UID10524、Root调用0；覆盖确切归档优先于旧嵌入inverse、额外kernel改动拒绝、未知镜像继续严格失败、元数据损坏拒绝、原输入不变及现有恢复/升级识别。此为当前生产源码编译的源测试APK，不冒充已安装Manager或完整内核写入/Ready验收。r20原生产恢复方法也在同机直接复现CURRENT_MISMATCH，设备红例保留。
+恢复迁移相关32项测试已在原机DEVICE_SERIAL的Android ART执行，32/0、UID10524、Root调用0；覆盖确切归档优先于旧嵌入inverse、额外kernel改动拒绝、未知镜像继续严格失败、元数据损坏拒绝、原输入不变及现有恢复/升级识别。此为当前生产源码编译的源测试APK，不冒充已安装Manager或完整内核写入/Ready验收。r20原生产恢复方法也在同机直接复现CURRENT_MISMATCH，设备红例保留。
 
 初轮r21 release在Gradle持久缓存写入遇D盘空间耗尽，原raw失败及wrapper收据写入errno28（空文件）保留；未通过产物不安装。空间已回升，复用已编译输出继续同源构建，内核更新将继续走生产事务。新JUnit用例首轮有目标输出预先存在的测试接线错误，已定向修正；独立当前源码主机32/0及旧排序红例通过。源绑定与首次失败均单独记账。
 
@@ -214,7 +214,7 @@ r20同代SDK/helper/backend/四payload/JNI/签名APK已构建并完成交付校�
 
 已采用最小源码修复：`__read_disk_blob`使用`std::filesystem::exists(path, error_code)`保留实际状态错误；只有确定的缺失才返回`ERR_MODULE_STORAGE_NOT_FOUND`，权限/IO等状态查询失败返回`ERR_MODULE_STORAGE_READ`。原二进制读取、打开错误、类型与发布行为保持，没有新建或改写受保护控制文件。
 
-- 原机a261972a/UID2000以真实生产函数体、真实Android filesystem/ifstream执行7项；仅路径选择为临时目录seam。旧版权限场景误报-19964，7项1失败；修复后7/0，二次当前源码重编重跑仍7/0。覆盖缺文件、缺父目录、父项非目录、二进制内容、stat权限失败、open权限失败、空文件。无Root调用、无内核执行触发、无分区写入，boot仍368b5b24。真实Android21整TU也编译成功。该局部红绿不等于完整SDK Refresh已经通过。
+- 原机DEVICE_SERIAL/UID2000以真实生产函数体、真实Android filesystem/ifstream执行7项；仅路径选择为临时目录seam。旧版权限场景误报-19964，7项1失败；修复后7/0，二次当前源码重编重跑仍7/0。覆盖缺文件、缺父目录、父项非目录、二进制内容、stat权限失败、open权限失败、空文件。无Root调用、无内核执行触发、无分区写入，boot仍368b5b24。真实Android21整TU也编译成功。该局部红绿不等于完整SDK Refresh已经通过。
 - 更正前轮定位：源码在存在性检查失败时返回-19964，ifstream打开失败返回-19962；此前仅有控制文件access(F_OK)=0的诊断，尚缺实际`filesystem::exists`错误码及授权事务首错phase。当前不把控制文件的ifstream失败或FSuid异常写成已证根因。
 - 新Panic离线：PID/TGID20774、任务年龄23.53ms、首次BTI取指失败；完整dump未覆盖故障页/父task/请求包。保存用户LR匹配r15/r16诊断桥`0b70280a…`的`0x4b5e14`，并验证BL到`__wrap_syscall`再尾跳`syscall`、LR保留。已查12份去重桥产物，本次当前安装桥不匹配；缺崩前maps，仍只结算调用点家族匹配，不宣称具体旧进程或NX根因已定。
 - r20同代SDK/helper/backend/四payload/JNI/APK构建进行中，实际选源相对r17仅1项SDK源变化，包含r19准备SDK-Key通道修复。输出放C盘；仅将已完成r19 unsigned/aligned两个中间APK逐文件校验搬移，正式/诊断签名包、dump和备份原样保留。尚未安装r20，Panic相关触发仍暂停。
@@ -348,7 +348,7 @@ Root accessor 与 caps 偏移复用已进入真实 r12 同代 SDK/helper/backend
 已按固定基线精确采用 Root accessor 候选，生产 resolver SHA256 `447cbc52384964b58945492c4a6ace8f6f8d2d021ab3d21e91ff709afaa5ca23`。受限 sysfs 的五字段 Root 入口不先搬运完整内核 BTF；可读 sysfs、已有有效内存 BTF 及通用消费者的权威/错误语义保留。当前生产源码重新编译的16场景 ASan/UBSan 通过，见 `.tmp/main-rootpanic-resume-20261121/generation-r11/direct-validation/RESULT.json`。
 
 - 源码/产品：resolver 已采用；r11 SDK `maplesu-ultra-source-cbff87f0b5ab5332` 已由完整 producer/review/stage 产出，helper/backend/payload 同代；APK 正在既有生产 Gradle release 构建。原 raw member 比较 exit7 与25 partial仍保原边界，未记成正式全部通过。
-- 设备：原机 a261972a/6.6.89/4KB/_a 保原数据。单成员隔离诊断首次仍302220us超时；定向共享函数计数一次297802us完整回读、UID/EUID0，READ高层请求29次/354B。该诊断有边界计数，不作为最终时延验收。
+- 设备：原机 DEVICE_SERIAL/6.6.89/4KB/_a 保原数据。单成员隔离诊断首次仍302220us超时；定向共享函数计数一次297802us完整回读、UID/EUID0，READ高层请求29次/354B。该诊断有边界计数，不作为最终时延验收。
 - 后继修复：定位到 `PatchCurrent::set_current_caps` 重复获取已由 PatchBase 携带的 cap_inheritable 偏移，重新进入通用BTF解析。隔离候选复用该输入，真实 m072 的35检查原像5失败/后像全过，NDK通过；两成员隔离无计数实测219556us完整回读1586520B、rootVerified/receiptComplete/streamEof为true、childStatus0。候选尚未进入r11 APK，不把隔离结果算Manager完整Ready或目标应用SU通过。
 - 现场/备份：六镜像位于 `HISTORICAL_EVIDENCE/maplesu-rootpanic-resume-product-20261121/device-pre-191c120f/`，压缩与解压摘要/长度均重验；原授权/设置备份沿 `device-r8/AUTH-BACKUP.json` 重新验证，未输出内容。此次boot仍30145d80，未发重启/分区写。旧9490完整dump与07:38仅日志现场分开，Panic未修复结算。
 
@@ -603,7 +603,7 @@ m086修复组合 `maplesu-pro-source-d03be84513360d93` 已完成一次规范 `--
 
 以下保留截至08:01Z及首次产品拒绝的历史记录；其中“继续核对/门槛保持”已由上述源码与当前准入事实更新。
 
-设备 a261972a 升级后出现 helper 父进程重复重入。故障及修复后的 boot_a 摘要均为 8e00f67e…；新源码 helper 交回 app_process64 前遗漏原 SKP 的父 comm→zygote64 操作，已恢复。旧源码回归真实失败、修复版 57 条断言通过；紧急 helper 80f37b36…（1489488B）原子发布后约 26 秒 sys.boot_completed=1，Activity/Package 服务正常。截至 2026-11-18T08:01:25Z，同一 boot 070e996d…uptime 9235.32 秒，已超过 2.5 小时；未刷分区、未清应用数据，safe_flag=3 与原失败材料保留。
+设备 DEVICE_SERIAL 升级后出现 helper 父进程重复重入。故障及修复后的 boot_a 摘要均为 8e00f67e…；新源码 helper 交回 app_process64 前遗漏原 SKP 的父 comm→zygote64 操作，已恢复。旧源码回归真实失败、修复版 57 条断言通过；紧急 helper 80f37b36…（1489488B）原子发布后约 26 秒 sys.boot_completed=1，Activity/Package 服务正常。截至 2026-11-18T08:01:25Z，同一 boot 070e996d…uptime 9235.32 秒，已超过 2.5 小时；未刷分区、未清应用数据，safe_flag=3 与原失败材料保留。
 
 另已完成两种不同布局的同名 ModuleBannerGuard 私有类型分名，跨 TU 红绿回归通过。包含两项修复及已接入增量的完整源码 SDK 688f3610…已实际构建并通过 260-member 门禁，同代 Manager 2e9e53e8…与测试 APK 593fdb72…完成签名、ZIP 来源核验和原位安装；设备 native identity 回读确认 688f3610…，新 SDK 单次 Root 探针 501ms 返回真实 UID0。随包完整 helper 为 7517c408…（1489456B，归一化 195abb10…，slot 135448），设备 helper 此时仍为紧急 80f37b36…，未把 APK 安装记成 helper 环境升级。
 
@@ -615,7 +615,7 @@ m086修复组合 `maplesu-pro-source-d03be84513360d93` 已完成一次规范 `--
 
 最终六 family native 编译及三份 support 构建成功；6.6/6.12 reference ABI、目标布局/函数及 KCFI 有相应证据，其他 family 的 BTF/ABI/legacy CFI/6.18 reference 缺口继续阻止资格提升。最终组合使用 resident v2 专用 bootstrap1452B、permissions788B、materializer1968B；旧正式 v1 assets 与 Key/v2 wire 保留。15/15 受影响镜像实际通过生成、独立完整 kernel 回读、同版幂等、自有记录恢复及 BlockDeviceTransaction commit→readback→restore（14 个 Boot_Research boot 加 1 个匹配设备历史 base）。26 行总账中的 11 个前置失败明确复用上一轮收据：4 个 reference 不完整、6 个独立 init_boot 缺 bridge producer、1 个 NGKI family 缺 producer；不是本次新增通过。源码与全部输入前后相同。
 
-设备 a261972a 重连后的固定只读采集成功，Manager 摘要前后一致、独立 probe 已恢复；该机未提供 kernel_page_tables/PTDUMP，未刷入或启动新 resident kernel。本机基线候选已生成不等于 OEM 原厂真实性、AVB 启动资格或硬件救援已证。完整发布还需页权限/生命周期/安装撤销实机证据、同代 SDK/helper/APK、三模式真实 SU 和 150ms/300ms 验收；PMS 内存提交早于 VFS 事件的撤销窗口及资格迁移仍留账。当前正式 Pro assets 未提升，TRUST-02 不新增完整勾选。用户已撤销旧停止记录作为本轮停止依据；历史事件保留，本轮没有新增工具拒绝。
+设备 DEVICE_SERIAL 重连后的固定只读采集成功，Manager 摘要前后一致、独立 probe 已恢复；该机未提供 kernel_page_tables/PTDUMP，未刷入或启动新 resident kernel。本机基线候选已生成不等于 OEM 原厂真实性、AVB 启动资格或硬件救援已证。完整发布还需页权限/生命周期/安装撤销实机证据、同代 SDK/helper/APK、三模式真实 SU 和 150ms/300ms 验收；PMS 内存提交早于 VFS 事件的撤销窗口及资格迁移仍留账。当前正式 Pro assets 未提升，TRUST-02 不新增完整勾选。用户已撤销旧停止记录作为本轮停止依据；历史事件保留，本轮没有新增工具拒绝。
 
 本轮精确源码、实际选源及验证收据见 [持久交付账](parallel/2026-11-17/evidence/mainline-integration/trust02-p2-resident-20261118/DELIVERY.json)；P5–P7 据此继续消费者、完整免 Key 和兼容资格迁移。以下各时点记录保留其原范围。
 
@@ -627,7 +627,7 @@ P2最新交付已接收核对（2026-11-18T01:25Z）：真实host/slot/producer�
 
 
 
-当前源码 Manager 已在 PLQ110（`a261972a`）原位更新：APK `d27655f5…`，native archive `06f39b84…`，均已实读核对。生产生成的 boot_a 候选已在 fastbootd 实际发送/写入成功；恢复 ADB 后设备报告 `sys.boot_completed=1`、slot `_a`、boot_id `d2b67826-a2fb-4904-84a3-50042ec80cdf`。固定后台 Root 探针首次复验 767ms 返回 UID0；policy requested/effective/capabilities 均为3。此范围不等于完整应用 SU、零模块首次冷启动或全部模式已验。刷写前 pipe-read 挂起失败继续保留。
+当前源码 Manager 已在 PLQ110（`DEVICE_SERIAL`）原位更新：APK `d27655f5…`，native archive `06f39b84…`，均已实读核对。生产生成的 boot_a 候选已在 fastbootd 实际发送/写入成功；恢复 ADB 后设备报告 `sys.boot_completed=1`、slot `_a`、boot_id `d2b67826-a2fb-4904-84a3-50042ec80cdf`。固定后台 Root 探针首次复验 767ms 返回 UID0；policy requested/effective/capabilities 均为3。此范围不等于完整应用 SU、零模块首次冷启动或全部模式已验。刷写前 pipe-read 挂起失败继续保留。
 
 
 
@@ -903,7 +903,7 @@ R8已追加独立结果：49场景257检查、block22检查及8个Android TU通�
 
 | P1实机 | 本台6.6.89/arm64的身份、Root、版本、环境、模块和fixed single已验收 | 不扩大为全功能、32位应用、冷启动或多机型通过 |
 
-| 2026-11-16只读复核 | PLQ110，序列号a261972a，6.6.89，槽位_a，bootCompleted=1；已装APK摘要与P1验收r9一致 | 未部署本批新源码，未新增SDK调用、安装、刷写或重启验证 |
+| 2026-11-16只读复核 | PLQ110，序列号DEVICE_SERIAL，6.6.89，槽位_a，bootCompleted=1；已装APK摘要与P1验收r9一致 | 未部署本批新源码，未新增SDK调用、安装、刷写或重启验证 |
 
 | 指定故障设备 | Y700四代、iQOO 15等案例仍完整保留 | 尚缺对应新包/同次故障/冷启动实证，不写已根治 |
 
@@ -1183,7 +1183,7 @@ LSPosed实际自有adapter0777与可信gate冲突最小修复已采用zygisk4源
 Release17首轮产品自动Boot新boot5e6d/helper同代/corefinishedsafe2/SUuid0Enforcing真实通过；二次复发/PTY信号退出/模块和identity原产品回读待补。用户明确先交源码开源Agent，已发独立线程且实际SOURCE-HANDOFF-ACK确认；source-candidate-001在独立准备目录，不动原主库/Git/Key，最终源码/APK/原签名/设备证据冻结未完成。原截止逾期保持。
 
 ## MAIN15 current actual 2026-11-22 14:40 UTC
-threadId 01a2029e-9c2b-7403-ae53-a870c6592ce0; /root sole production adoption/full build/original signing/release/device scheduling, implementation sole alltests/performance/ADB PLQ110 a261972a. Existinggoal active; originaldeadlinesexpirednotreset.
+threadId 01a2029e-9c2b-7403-ae53-a870c6592ce0; /root sole production adoption/full build/original signing/release/device scheduling, implementation sole alltests/performance/ADB PLQ110 DEVICE_SERIAL. Existinggoal active; originaldeadlinesexpirednotreset.
 - SDK7 actual stage complete14:22:15 maplesu-ultra-source-cd97e6c0fe124e4c archivecd97e6c0fe124e4c1b99c2807e4bf801f1cfdd9af041d1bbcb7e3b4537c1eba7. True idleexactfit+compact240 source fixes selected; notdeviceaccepted.
 - Zygisk SDK7 actual freshdualABI native/sdk7-3 BUILT_PACKAGED_STRUCTURE_VERIFIED_NOT_DEVICE_ACCEPTED14:34, exactsource/tool/archiveprepost stable. sdk7-1 falsewholevendorcleanprecondition andsdk7-2 stalegeneratedoverlayfirsterrorspreserved; main used pinnedpatch_upstream actualderiveafterbackingupoldoverlay, notresetvendor. Newownadapteraccepted-install0755/0644 root/linktrust preserved; CLIr6 fullpolicysemantic/negative actualgreen, fourthsharedfilter/fifthrulekept. Notyetacceptedondevice.
 - reference61 memchrlinkage7d378eb0 andlegacyR6strictoperand2f1137c0/12b002f4 adoptedactualnarrowgreens. Freshmetadata20 all4modernreferenceComplete trueincl6.1; 5.10/5.15oldrawreference/CFIfalsekept, natives19exactSO reused dualprovenance nofakecompile. bridge17actualtarget/probe/Kbuild/handoff/session/TaskProfile/package0 BUNDLE_COMPLETE, catalog20oneactualmodernvariant0, notallimages. package20realexecutehitACTUAL_ELF_METADATA_DIFFERS:android12-5.10, sourceauthorr2ACK+GOisolate freshsuffix, originalfailurekept.
@@ -1193,7 +1193,7 @@ threadId 01a2029e-9c2b-7403-ae53-a870c6592ce0; /root sole production adoption/fu
 - Sourcealreadydeliveredindependentopen-sourceAgentactualACK; finalsource/APKsamegenformalfreezeandallP0-119/corpus/sidechannel/devicequalstillpending. Noformalcompletionclaimed.
 
 ## MAIN15 actual continuation 2026-11-22T15:12:45.0647396Z — BUSY source paired adoption / fresh SDK8 running
-threadId01a2029e-9c2b-7403-ae53-a870c6592ce0; /root soleproductionadoption/fullbuild/originalsign/release/devicescheduling; implementation solealltests/performance/ADB PLQ110a261972a. Goalactive; original06:50:50/07:32UTCdeadlinesexpirednotreset.
+threadId01a2029e-9c2b-7403-ae53-a870c6592ce0; /root soleproductionadoption/fullbuild/originalsign/release/devicescheduling; implementation solealltests/performance/ADB PLQ110DEVICE_SERIAL. Goalactive; original06:50:50/07:32UTCdeadlinesexpirednotreset.
 - Exactlive17sameboot5e6d stack actual child31344 fflush_all+116 -> fork_pipe_child_process/get_root/run_root_cmd, parent27218 read_full/receive_result proves inheritedFILElockdeadlock. Kotlin-1001entrybeforeJNI notnative-1005; bottomSUuid0/Enforcing/safe2/currentcompletedactualhealthy. Firstfailureandprocesspreserved; no refresh/reboot/marker/cacheclear.
 - Selectedstdio3sourcesr1actualadopted ADOPTIONe922960b176a340f981d87a1f65cedf1e3eb614b9299e0eb4029dcee2543f2f0, actualhost2oldred2newgreen. Newstandardstdout/stderr4narrowboundary actualtransport2green/redirect2redworker124; NOTproductpass, r2onlyisolatedvendorworkerprivateFILEcandidateinprogress, no in-flightproductionchange.
 - ActualnativeR1oldstalledred42+6newscope/5m023sessiongreen, Kotlinactualold6busy/new6admitted+deadline/identity/errorgreen; mainpaired3sourceadopted ADOPTION036dddfa4878503b59bbb444d87d429ad016543fc41d18925de28b7cba8a7803. Nativeoneactualresourceconflictowner, noJavaRWLock/2slot, requestprivateKey/auth/FD/forkcleanup preserved. DirectaffectedKotlin7testsactualgreenand2testfileadopted006487a3181c9ed2fe24b3efd0bd806507a869dea24329a28bd6a806cc4f02b4. R2nativeParasitemutableparserdomain/keyalias3onlyaffectedGOqueued; noR1rerun.
@@ -1203,7 +1203,7 @@ threadId01a2029e-9c2b-7403-ae53-a870c6592ce0; /root soleproductionadoption/fullb
 - FinalstandardRelease18preparationowneractualACK+GOexclusive main15-release-plan; rootwillusefinalSDKfreshJNI+Kotlin/native resources+actualclaim20r2/bridge17. NoactualnewAPKyet; testerkeeps17failureuntilnewexactSHA/certGO. Sourcepreparedopen-threadactualACKunchanged; userwantsactualtestthenfreeze5.2.1/50201. FullP0-P8/119/allcorpus/sidechannel/ABIandlifecycle finalqualificationsremainseparateandunpassedwhereevidencemissing.
 
 ## MAIN15 actual continuation 2026-11-22T15:27:05.1633868+00:00 — final BUSY candidate integration
-- threadId 01a2029e-9c2b-7403-ae53-a870c6592ce0; /root sole production adoption/full build/original signing/release/device scheduling; implementation sole tests/performance/ADB PLQ110 a261972a. Existing active goal and expired original deadlines retained.
+- threadId 01a2029e-9c2b-7403-ae53-a870c6592ce0; /root sole production adoption/full build/original signing/release/device scheduling; implementation sole tests/performance/ADB PLQ110 DEVICE_SERIAL. Existing active goal and expired original deadlines retained.
 - SDK8 producer raw7 completed 15:11:56; independent review FAILED 15:12:03 at SOURCE_SDK_FILE for exact reused SDK7 kernel dependency path. Original report and error retained; SDK8 not staged and not final. Exact per-file closure verifier candidate frozen, sole tester GO pending; no directory-wide exemption.
 - Native resource R2 and isolated worker stdio R2 actually adopted after affected host regressions; ADOPTION hashes c89d1c3dc6804f7f1eb15901f8733337f62bb46ea0c25059706e19277e7d7478 and eb5285ab772b256652a6118780e4043d38b504cff2dcd0b93017d5b99837ea9d. No arbitrary SDK-consumer concurrency claim; current bridge uses private request context and native resource conflicts.
 - Final SDK9/standard Release18 preparation supplement1 ea32154f4acce9ecb32243af9d1550dfe84dc01c2adc9edce0e39db76a826221 reviewed. Fresh 260-member/helper/backend/payload build next, unchanged SDK7 kernel closure reused explicitly. No new APK/device acceptance yet; current Release17 failure and user data preserved.

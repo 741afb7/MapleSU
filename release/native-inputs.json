@@ -13637,8 +13637,8 @@
     },
     {
       "path": "runtime/maplesu-sdk/sdk/manifest.jsonl",
-      "bytes": 324017,
-      "sha256": "706f6ce1f47f85ed3a1d3271669bdeb3787b2f10b43559f71095cc96eb239147"
+      "bytes": 323999,
+      "sha256": "34eda001d506cb5508a6bd58baf3aa06efc3353904487f5e1f7ba4fa7d974be4"
     },
     {
       "path": "runtime/maplesu-sdk/sdk/manifest/0000_cred.o.json",

@@ -3,6 +3,8 @@ import argparse,datetime,hashlib,json,os,subprocess,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'tools/specgen'))
 from specgen.product import cached_jar
+sys.path.insert(0,str(ROOT/'tools'))
+from native_toolchain import jdk_tool
 p=argparse.ArgumentParser();p.add_argument('--out',required=True,type=Path);a=p.parse_args();out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
 base=ROOT/'manager/src/main/java/dev/maplesu/manager/runtime/ultra';files=[base/'UltraAutoPair.kt',base/'UltraAuthorization.kt',ROOT/'runtime/tests/ultra_protocol_scope_test.kt',Path(__file__)]
 files.append(base/'UltraPairingMaintenance.kt')
@@ -75,7 +77,7 @@ object UltraSelfWhitelist {
 """}
 for n,s in fixtures.items():(out/n).write_text(s,encoding='utf-8')
 deps=[cached_jar(*v) for v in [('org.jetbrains.kotlin','kotlin-stdlib','2.4.20'),('org.jetbrains','annotations','13.0'),('org.jetbrains.kotlinx','kotlinx-coroutines-core-jvm','1.11.0'),('junit','junit','4.13.2'),('org.hamcrest','hamcrest-core','1.3')]]
-compiler=cached_jar('org.jetbrains.kotlin','kotlin-compiler-embeddable','2.4.20');java='C:/Program Files/Microsoft/jdk-21.0.12.101-hotspot/bin/java.exe';classes=out/'classes';classes.mkdir(exist_ok=True);cp=os.pathsep.join(map(str,[classes,*deps]));commands=[]
+compiler=cached_jar('org.jetbrains.kotlin','kotlin-compiler-embeddable','2.4.20');java=str(jdk_tool());classes=out/'classes';classes.mkdir(exist_ok=True);cp=os.pathsep.join(map(str,[classes,*deps]));commands=[]
 for label,argv in [('compile',[java,'-Xmx256m','-cp',os.pathsep.join(map(str,[compiler,*deps])),'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler','-no-stdlib','-no-reflect','-nowarn','-jvm-target','21','-classpath',cp,'-d',str(classes),*map(str,out.glob('*.kt'))]),('run',[java,'-cp',cp,'org.junit.runner.JUnitCore','dev.maplesu.manager.runtime.ultra.UltraProtocolScopeTest'])]:
  q=subprocess.run(argv,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=55);log=q.stdout+q.stderr;(out/(label+'.log')).write_text(log,encoding='utf-8');commands.append(dict(label=label,argv=argv,exitCode=q.returncode));print(label,q.returncode,log,flush=True)
  if q.returncode:break

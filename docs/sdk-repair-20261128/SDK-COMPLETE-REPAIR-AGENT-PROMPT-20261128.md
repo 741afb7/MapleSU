@@ -2,7 +2,7 @@
 
 在从 Git 拉取的 MapleSU `main` 仓库根直接开展修复。先读：
 
-1. `docs/development/SDK-COMPLETE-REPAIR-DEVELOPMENT-20261128.md`
+1. `docs/sdk-repair-20261128/SDK-COMPLETE-REPAIR-DEVELOPMENT-20261128.md`
 2. `docs/sdk-repair-20261128/README.md`、`CURRENT-STATUS.md`
 3. `docs/sdk-repair-20261128/inputs/SDK-REFACTOR-REQUIREMENTS.md`、`SDK-REFACTOR-PROGRESS.md`
 4. 同目录 `DEVELOPMENT-MATRIX.json`、`REQUIREMENTS-LEDGER.jsonl` 及其列出的完整原文。

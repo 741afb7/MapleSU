@@ -1,6 +1,6 @@
 # Ultra 免 Key：10 路开发入口
 
-状态：开发任务已拆分；尚未据此修改生产源码或执行验收。工作区：`D:/Maple_Workflow/MapleSU`。固定 KSU 对照：`WORKSPACE/.research/KernelSU` 的 `f4603d14bd7f3bf21206d6f7c622ddf1c049ade3`。
+状态：开发任务已拆分；尚未据此修改生产源码或执行验收。工作区：`WORKSPACE`。固定 KSU 对照：`WORKSPACE/.research/KernelSU` 的 `f4603d14bd7f3bf21206d6f7c622ddf1c049ade3`。
 
 每个子 Agent 只必读本页和自己的任务卡。先修改真实选源的生产源码，附带必要的局部验证；10 路源码全部闭合，再统一构建、打包、上机回归。SDK 与所有调用端同批修改。
 

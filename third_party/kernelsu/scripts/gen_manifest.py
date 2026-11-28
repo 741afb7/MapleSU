@@ -176,7 +176,7 @@ def build_manifest(root: Path) -> dict:
             "uapiVersion": C.MAPLESU_UAPI,
             "managerMinGen": C.MAPLESU_MANAGER_MIN_GEN,
             "managerGenAsset": "assets/ksu_manager_gen2",
-            "managerGenAssetStatus": "todo: 由 W18/集成轮加入（本子代理写权限不含 manager/src/main/assets）",
+            "managerGenAssetStatus": "源码文件位于 manager/src/main/assets/ksu_manager_gen2；最终打包状态以对应产物核验为准",
             "ksuVersionPin": C.MAPLESU_KSU_VERSION_PIN,
             "isPrBuild": 0,
             "expectedSize": 772,
